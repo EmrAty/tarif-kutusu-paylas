@@ -43,6 +43,17 @@
     const link =
       found.find((u) => /tiktok\.com|youtu\.be|youtube\.com/i.test(u)) || found[0] || "";
 
+    function gotoArtifact(url) {
+      const isAndroid = /Android/i.test(navigator.userAgent);
+      if (isAndroid) {
+        const noScheme = url.replace(/^https?:\/\//, "");
+        window.location.href =
+          "intent://" + noScheme + "#Intent;scheme=https;package=com.android.chrome;end";
+      } else {
+        window.location.replace(url);
+      }
+    }
+
     async function goNow() {
       if (link) {
         try {
@@ -54,7 +65,7 @@
           document.getElementById("status").textContent = "Tarif Kutusu'na yönlendiriliyor";
         }
         setTimeout(function () {
-          window.location.replace(ARTIFACT_URL);
+          gotoArtifact(ARTIFACT_URL);
         }, 900);
       } else {
         document.getElementById("status").textContent = "Link bulunamadı";
