@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Tarif Kutusu</title>
+  <title>Tarif Kutusu'na Gönder</title>
   <link rel="manifest" href="manifest.json" />
   <link rel="icon" href="icon.svg" type="image/svg+xml" />
   <style>
@@ -12,7 +12,7 @@
       min-height: 100vh;
       display: flex;
       align-items: center;
-      justify-content: center;    
+      justify-content: center;
       background: #F3EFE6;
       font-family: -apple-system, 'Segoe UI', Roboto, sans-serif;
       color: #2A2620;
@@ -22,36 +22,19 @@
     }
     .card { max-width: 380px; }
     img { width: 64px; height: 64px; margin-bottom: 16px; }
-    h1 { font-size: 18px; margin: 0 0 8px; }
-    p { font-size: 14px; color: #5C564A; }
-    a { color: #2F4A3D; font-weight: 600; }
+    h1 { font-size: 20px; margin: 0 0 8px; }
+    p { font-size: 14px; color: #5C564A; line-height: 1.5; }
   </style>
 </head>
 <body>
   <div class="card">
     <img src="icon.svg" alt="" />
-    <h1 id="status">Tarif Kutusu açılıyor…</h1>
-    <p id="detail">
-      Otomatik yönlendirmiyorsa <a id="fallback" href="#">buraya dokun</a>.
+    <h1>Tarif Kutusu'na Gönder</h1>
+    <p>
+      Bu, ayrı bir uygulama değil — TikTok/YouTube'da bir video paylaşırken
+      "Tarif Kutusu'na Gönder"i seçmene yarayan küçük bir yönlendirici.
+      Bu sayfayı ana ekranına ekledikten sonra artık paylaşım menüsünde görünecek.
     </p>
   </div>
-
-  <script>
-    const ARTIFACT_URL = "https://claude.ai/public/artifacts/ac4f5590-30d9-4b15-89c3-e97b16b258da";
-    document.getElementById("fallback").href = ARTIFACT_URL;
-
-    function gotoArtifact(url) {
-      const isAndroid = /Android/i.test(navigator.userAgent);
-      if (isAndroid) {
-        const noScheme = url.replace(/^https?:\/\//, "");
-        window.location.href =
-          "intent://" + noScheme + "#Intent;scheme=https;package=com.android.chrome;end";
-      } else {
-        window.location.replace(url);
-      }
-    }
-
-    gotoArtifact(ARTIFACT_URL);
-  </script>
 </body>
 </html>
