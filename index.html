@@ -1,29 +1,45 @@
 <!DOCTYPE html>
 <html lang="tr">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Tarif Kutusuna Gonder</title>
-<link rel="manifest" href="manifest.json" />
-<link rel="icon" href="icon.svg" type="image/svg+xml" />
-<style>
-body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #F3EFE6; font-family: sans-serif; color: #2A2620; text-align: center; padding: 24px; box-sizing: border-box; }
-.card { max-width: 380px; }
-img { width: 64px; height: 64px; margin-bottom: 16px; }
-h1 { font-size: 20px; margin: 0 0 8px; }
-p { font-size: 14px; color: #5C564A; line-height: 1.5; }
-</style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tarif Kutusu</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #F3EFE6;
+      font-family: -apple-system, 'Segoe UI', Roboto, sans-serif;
+      color: #2A2620;
+      text-align: center;
+      padding: 24px;
+      box-sizing: border-box;
+    }
+    .card { max-width: 380px; }
+    img { width: 64px; height: 64px; margin-bottom: 16px; }
+    h1 { font-size: 18px; margin: 0 0 8px; }
+    p { font-size: 14px; color: #5C564A; }
+    a { color: #2F4A3D; font-weight: 600; }
+  </style>
 </head>
 <body>
-<div class="card">
-<img src="icon.svg" alt="" />
-<h1>Tarif Kutusuna Gonder</h1>
-<p>
-Bu, ayri bir uygulama degil, TikTok/YouTube'da bir video paylasirken
-"Tarif Kutusuna Gonder"i secmene yarayan kucuk bir yonlendirici.
-Bu sayfayi ana ekranina ekledikten sonra artik paylasim menusunde gorunecek.
-</p>
-</div>
+  <div class="card">
+    <img src="icon.svg" alt="" />
+    <h1 id="status">Tarif Kutusu açılıyor…</h1>
+    <p id="detail">
+      Otomatik yönlendirmiyorsa <a id="fallback" href="#">buraya dokun</a>.
+    </p>
+  </div>
+
+  <script>
+    const ARTIFACT_URL = "https://claude.ai/public/artifacts/ac4f5590-30d9-4b15-89c3-e97b16b258da";
+    document.getElementById("fallback").href = ARTIFACT_URL;
+    window.location.replace(ARTIFACT_URL);
+  </script>
 </body>
 </html>
-
