@@ -2,7 +2,7 @@
     "name": "Tarif Kutusu'na Gönder",
     "short_name": "Tarif Kutusu",
     "start_url": "./index.html",
-    "display": "standalone",
+    "display": "browser",
     "background_color": "#F3EFE6",
     "theme_color": "#2F4A3D",
     "icons": [
