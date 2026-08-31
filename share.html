@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+  <html lang="tr">
+  <head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tarif Kutusu'na Gonderiliyor</title>
+  <style>
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #F3EFE6; font-family: sans-serif; color: #2A2620; text-align: center; padding: 24px; box-sizing: border-box; }
+.card { max-width: 360px; }
+</style>
+  </head>
+  <body>
+  <div class="card">
+  <h1 id="status">Tarif Kutusuna yonlendiriliyor</h1>
+<p id="detail">Bir saniye</p>
+</div>
+  <script>
+  const ARTIFACT_URL = "https://claude.ai/public/artifacts/61b482b5-785d-4018-8884-46cb5e19cae9";
+const params = new URLSearchParams(window.location.search);
+const combined = [params.get("url"), params.get("text"), params.get("title")].filter(Boolean).join(" ");
+const found = combined.match(/https?:\/\/[^\s]+/g) || [];
+const link = found.find((u) => /tiktok\.com|youtu\.be|youtube\.com/i.test(u)) || found[0] || "";
+if (link) {
+const sep = ARTIFACT_URL.indexOf("?") === -1 ? "?" : "&";
+window.location.replace(ARTIFACT_URL + sep + "link=" + encodeURIComponent(link));
+} else {
+document.getElementById("status").textContent = "Link bulunamadi";
+document.getElementById("detail").innerHTML = 'Otomatik yakalayamadim. <a href="' + ARTIFACT_URL + '">Tarif Kutusunu ac</a> ve linki elle yapistir.';
+}
+</script>
+  </body>
+  </html>
+  
