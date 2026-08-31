@@ -39,7 +39,19 @@
   <script>
     const ARTIFACT_URL = "https://claude.ai/public/artifacts/ac4f5590-30d9-4b15-89c3-e97b16b258da";
     document.getElementById("fallback").href = ARTIFACT_URL;
-    window.location.replace(ARTIFACT_URL);
+
+    function gotoArtifact(url) {
+      const isAndroid = /Android/i.test(navigator.userAgent);
+      if (isAndroid) {
+        const noScheme = url.replace(/^https?:\/\//, "");
+        window.location.href =
+          "intent://" + noScheme + "#Intent;scheme=https;package=com.android.chrome;end";
+      } else {
+        window.location.replace(url);
+      }
+    }
+
+    gotoArtifact(ARTIFACT_URL);
   </script>
 </body>
 </html>
