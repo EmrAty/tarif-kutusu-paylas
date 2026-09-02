@@ -1112,6 +1112,37 @@ function EmptyState({ onAdd }) {
 }
 
 function AddForm({ link, caption, notes, images, category, busy, error, setLink, setCaption, setNotes, setImages, setCategory, onSubmit, onCancel }) {
+  const [fetchingCaption, setFetchingCaption] = useState(false);
+  const [captionFetchError, setCaptionFetchError] = useState("");
+  const fetchedForLinkRef = React.useRef("");
+
+  const tryAutoFetchCaption = useCallback(async (rawLink) => {
+    const trimmed = (rawLink || "").trim();
+    if (!trimmed || !/^https?:\/\//i.test(trimmed) || !/tiktok\.com|youtu\.be|youtube\.com/i.test(trimmed)) return;
+    if (fetchedForLinkRef.current === trimmed) return;
+    fetchedForLinkRef.current = trimmed;
+    setFetchingCaption(true);
+    setCaptionFetchError("");
+    try {
+      const res = await fetch("/api/fetch-caption?url=" + encodeURIComponent(trimmed));
+      const data = await res.json();
+      if (res.ok && data.caption) {
+        setCaption((prev) => (prev && prev.trim() ? prev : data.caption));
+      } else if (!res.ok) {
+        setCaptionFetchError("Açıklama otomatik alınamadı, elle yapıştırabilirsin.");
+      }
+    } catch (e) {
+      setCaptionFetchError("Açıklama otomatik alınamadı, elle yapıştırabilirsin.");
+    } finally {
+      setFetchingCaption(false);
+    }
+  }, [setCaption]);
+
+  useEffect(() => {
+    if (link && link.trim()) tryAutoFetchCaption(link);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const labelStyle = {
     display: "block",
     fontSize: "11px",
@@ -1178,6 +1209,7 @@ function AddForm({ link, caption, notes, images, category, busy, error, setLink,
           type="text"
           value={link}
           onChange={(e) => setLink(e.target.value)}
+          onBlur={(e) => tryAutoFetchCaption(e.target.value)}
           placeholder="https://www.tiktok.com/... veya youtube.com/..."
           style={{ flex: 1, background: "transparent", border: "none", outline: "none", fontSize: "14px", color: COLORS.ink }}
         />
@@ -1237,7 +1269,17 @@ function AddForm({ link, caption, notes, images, category, busy, error, setLink,
         </label>
       </div>
 
-      <label style={labelStyle}>Açıklama / altyazı metni (opsiyonel)</label>
+      <label style={labelStyle}>
+        Açıklama / altyazı metni (opsiyonel)
+        {fetchingCaption && (
+          <span style={{ marginLeft: "8px", fontWeight: 400, textTransform: "none", color: COLORS.mustardDark }}>
+            Otomatik getiriliyor…
+          </span>
+        )}
+      </label>
+      {captionFetchError && (
+        <div style={{ fontSize: "12px", color: COLORS.inkSoft, marginBottom: "6px" }}>{captionFetchError}</div>
+      )}
       <textarea
         value={caption}
         onChange={(e) => setCaption(e.target.value)}
