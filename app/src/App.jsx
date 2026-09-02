@@ -49,6 +49,28 @@ function storageSet(key, value) {
   window.localStorage.setItem(STORAGE_PREFIX + key, value);
 }
 
+// recipes / shopping-list / pantry-items ailenin tamamı arasında paylaşılır
+// (sunucudaki ortak veritabanına gider); person-name ise yukarıdaki gibi
+// sadece bu cihaza özel kalır.
+async function sharedGet(key) {
+  try {
+    const res = await fetch("/api/store?key=" + encodeURIComponent(key));
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.value == null ? null : { value: data.value };
+  } catch (e) {
+    return null;
+  }
+}
+
+async function sharedSet(key, value) {
+  await fetch("/api/store", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key, value }),
+  });
+}
+
 
 async function extractRecipe({ link, caption, notes, images }) {
   const system = `Sen bir yemek tarifi çıkarma asistanısın. Sana bir sosyal medya (TikTok/YouTube) yemek videosuna dair bilgi verilecek — bu, videonun tam açıklama/altyazı metni olabilir, kullanıcının videoyu izlerken gördüğü malzemeler hakkında yazdığı kısa bir not olabilir, ve/veya videodan alınmış ekran görüntüleri olabilir (görüntülerde video açıklaması, altyazı, ya da ekranda görünen malzeme/tarif yazıları olabilir — görsellerdeki TÜM metni dikkatlice oku). Hangisi verilirse verilsin, bundan yapılandırılmış tarif bilgisi çıkar.
@@ -189,7 +211,7 @@ export default function TarifKutusu() {
     let cancelled = false;
     (async () => {
       try {
-        const res = storageGet("recipes");
+        const res = await sharedGet("recipes");
         if (!cancelled && res && res.value) {
           const parsed = JSON.parse(res.value);
           let migrated = false;
@@ -203,7 +225,7 @@ export default function TarifKutusu() {
           setRecipes(next);
           if (migrated) {
             try {
-              storageSet("recipes", JSON.stringify(next));
+              await sharedSet("recipes", JSON.stringify(next));
             } catch (e) {
               // geçiş kaydedilemese de mevcut oturumda güncel görünüm kalsın
             }
@@ -223,7 +245,7 @@ export default function TarifKutusu() {
   const persist = useCallback(async (updated) => {
     setRecipes(updated);
     try {
-      storageSet("recipes", JSON.stringify(updated));
+      await sharedSet("recipes", JSON.stringify(updated));
     } catch (e) {
       // yazma başarısız olsa da yerel görünüm güncel kalsın
     }
@@ -1652,7 +1674,7 @@ function ShoppingList({ recipes }) {
     let cancelled = false;
     (async () => {
       try {
-        const res = storageGet("shopping-list");
+        const res = await sharedGet("shopping-list");
         if (!cancelled && res && res.value) {
           const data = JSON.parse(res.value);
           setSelected(data.selected || []);
@@ -1673,7 +1695,7 @@ function ShoppingList({ recipes }) {
     setSelected(nextSelected);
     setChecked(nextChecked);
     try {
-      storageSet("shopping-list", JSON.stringify({ selected: nextSelected, checked: nextChecked }));
+      await sharedSet("shopping-list", JSON.stringify({ selected: nextSelected, checked: nextChecked }));
     } catch (e) {
       // yazma başarısız olsa da yerel görünüm güncel kalsın
     }
@@ -2332,7 +2354,7 @@ function PantryFinder({ recipes, onSelectRecipe }) {
     let cancelled = false;
     (async () => {
       try {
-        const res = storageGet("pantry-items");
+        const res = await sharedGet("pantry-items");
         if (!cancelled && res && res.value) setItems(JSON.parse(res.value));
       } catch (e) {
         // henüz kayıtlı malzeme yok
@@ -2348,7 +2370,7 @@ function PantryFinder({ recipes, onSelectRecipe }) {
   const persistItems = useCallback(async (next) => {
     setItems(next);
     try {
-      storageSet("pantry-items", JSON.stringify(next));
+      await sharedSet("pantry-items", JSON.stringify(next));
     } catch (e) {
       // yazma başarısız olsa da yerel görünüm güncel kalsın
     }
