@@ -104,7 +104,7 @@ ${images && images.length > 0 ? `(Ayrıca ${images.length} adet ekran görüntü
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model: "claude-sonnet-4-6",
-      max_tokens: 1000,
+      max_tokens: 4096,
       system,
       messages: [{ role: "user", content: contentBlocks }],
     }),
