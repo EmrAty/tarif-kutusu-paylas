@@ -33,7 +33,7 @@
   </div>
 
   <script>
-    const ARTIFACT_URL = "https://claude.ai/public/artifacts/ac4f5590-30d9-4b15-89c3-e97b16b258da";
+    const APP_URL = "https://tarif-kutusu-paylas.vercel.app/";
 
     const params = new URLSearchParams(window.location.search);
     const combined = [params.get("url"), params.get("text"), params.get("title")]
@@ -43,7 +43,7 @@
     const link =
       found.find((u) => /tiktok\.com|youtu\.be|youtube\.com/i.test(u)) || found[0] || "";
 
-    function gotoArtifact(url) {
+    function gotoApp(url) {
       const isAndroid = /Android/i.test(navigator.userAgent);
       if (isAndroid) {
         const noScheme = url.replace(/^https?:\/\//, "");
@@ -56,21 +56,18 @@
 
     async function goNow() {
       if (link) {
-        try {
-          await navigator.clipboard.writeText(link);
-          document.getElementById("status").textContent = "Link kopyalandı";
-          document.getElementById("detail").textContent =
-            "Tarif Kutusu'na yönlendiriliyor, link kutusuna yapıştırman yeterli.";
-        } catch (e) {
-          document.getElementById("status").textContent = "Tarif Kutusu'na yönlendiriliyor";
-        }
+        // Uygulama artık kendimizin olduğu için linki panoya kopyalamaya gerek yok:
+        // doğrudan ?link= parametresiyle gönderip "Yeni Tarif Çıkar" ekranını
+        // link dolu şekilde açtırıyoruz.
+        document.getElementById("status").textContent = "Tarif Kutusu'na yönlendiriliyor…";
+        const target = APP_URL + "?link=" + encodeURIComponent(link);
         setTimeout(function () {
-          gotoArtifact(ARTIFACT_URL);
-        }, 900);
+          gotoApp(target);
+        }, 400);
       } else {
         document.getElementById("status").textContent = "Link bulunamadı";
         document.getElementById("detail").innerHTML =
-          'Otomatik yakalayamadım. <a href="' + ARTIFACT_URL + '">Tarif Kutusu\'nu aç</a> ve linki elle yapıştır.';
+          'Otomatik yakalayamadım. <a href="' + APP_URL + '">Tarif Kutusu\'nu aç</a> ve linki elle yapıştır.';
       }
     }
 
