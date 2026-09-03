@@ -197,10 +197,26 @@ export default function TarifKutusu() {
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
-      const sharedLink = params.get("link");
-      if (sharedLink && sharedLink.trim()) {
-        setLink(sharedLink.trim());
+      const directLink = params.get("link");
+      if (directLink && directLink.trim()) {
+        setLink(directLink.trim());
         setView("add");
+        return;
+      }
+
+      // Android paylaşım hedefi (manifest.json share_target) buraya
+      // ?title=&text=&url= ile GET yapıyor; TikTok/YouTube linkini ayıklıyoruz.
+      const combined = [params.get("url"), params.get("text"), params.get("title")]
+        .filter(Boolean)
+        .join(" ");
+      if (combined) {
+        const found = combined.match(/https?:\/\/[^\s]+/g) || [];
+        const sharedLink =
+          found.find((u) => /tiktok\.com|youtu\.be|youtube\.com/i.test(u)) || found[0];
+        if (sharedLink) {
+          setLink(sharedLink);
+          setView("add");
+        }
       }
     } catch (e) {
       // URL okunamazsa sessizce geç
