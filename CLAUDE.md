@@ -13,6 +13,18 @@ Kullanıcı TikTok/YouTube'da gördüğü yemek videolarının linkini/açıklam
 - **GitHub repo:** https://github.com/EmrAty/tarif-kutusu-paylas (kullanıcı adı: EmrAty)
 - **Vercel proje/takım:** "EMRE" (emre-c391), proje adı `tarif-kutusu-paylas`
 
+## Android uygulaması (TWA)
+
+Kullanıcının isteği üzerine `tarif-kutusu-paylas.vercel.app` sitesi, Google'ın **Trusted Web Activity (TWA)** tekniğiyle gerçek bir Android uygulamasına (APK/AAB) çevrildi — Play Store'a hiç yüklenmedi, kullanıcının telefonuna doğrudan APK olarak (sideload) kuruldu.
+
+- **Proje klasörü:** `android-twa/` (bu repoya dahil değil — sadece bu makinede, kullanıcının Downloads klasöründeki proje kopyasında duruyor; Android Studio projesi + Gradle wrapper içeriyor).
+- **Package ID:** `com.tarifkutusu.app`.
+- **Nasıl oluşturuldu:** Google'ın resmi `@bubblewrap/cli` aracıyla (`app/public/manifest.json`'dan otomatik üretildi — isim, ikonlar, tema rengi, `share_target` hepsi oradan geldi). Bubblewrap'in interaktif kurulum sihirbazı bu makinede (stdin olmadığı için) çalışmadığından, `@bubblewrap/core` kütüphanesi doğrudan bir Node script'i ile programatik olarak çağrıldı; JDK 17 ve Android SDK cmdline-tools da elle indirilip `C:\Users\<kullanıcı>\.bubblewrap\` altına yerleştirildi.
+- **İmzalama anahtarı (keystore):** `android-twa/android.keystore`, alias `android`. Şifre bu makinede `C:\Users\emrea\.bubblewrap\keystore-password.txt` dosyasında duruyor — **bu dosya asla GitHub'a yüklenmemeli**, kaybolursa uygulamanın imzası değişir ve mevcut kurulumun üzerine güncelleme yapılamaz (yeniden kurmak gerekir).
+- **Digital Asset Links doğrulaması:** TWA'nın adres çubuğu göstermeden tam ekran çalışması için `app/public/.well-known/assetlinks.json` dosyası eklendi (bu dosya repoya dahil, canlıda). İçinde keystore'un SHA256 imza parmak izi var — keystore değişirse bu dosyanın da güncellenmesi gerekir.
+- **Native paylaşım desteği:** TWA'nın `AndroidManifest.xml`'i `android.intent.action.SEND` intent-filter'ı ve `METADATA_SHARE_TARGET` içeriyor — yani ayrı bir GitHub Pages shim'ine gerek kalmadan, uygulama kurulduğunda TikTok/YouTube paylaşım menüsünde doğrudan "Tarif Kutusu" olarak çıkıyor ve linki doğrudan ana uygulamanın `share_target` (`app/public/manifest.json` → `/` adresine `?url=&text=&title=` ile GET) mekanizmasına yönlendiriyor.
+- **Build çıktıları:** `android-twa/app-release-signed.apk` (kullanıcıya gönderildi, telefona kurulacak) ve `android-twa/app-release-bundle-signed.aab` (ileride Play Store'a yüklemek istenirse hazır).
+
 ## Klasör yapısı
 
 - `app/` — gerçek Vite + React + Tailwind uygulaması. Vercel'de **Root Directory = `app`**, **Framework Preset = Vite** olarak ayarlı (bu ayar "Other" kalırsa çıktı klasörünü (`dist`) bulamayıp 404 verir — bir kere başımıza geldi).
@@ -32,4 +44,5 @@ Kullanıcı TikTok/YouTube'da gördüğü yemek videolarının linkini/açıklam
 ## Bilinen eksik / yapılacaklar
 
 1. **iPhone paylaşım entegrasyonu:** iOS Safari, Web Share Target API'yi desteklemiyor (Apple kısıtlaması, düzeltilemez). Android'de uygulama zaten yüklenince paylaşım menüsünde çıkabiliyor. iPhone için plan: kullanıcının telefonunda bir kere kuracağı bir **Kısayollar (Shortcuts) app** kısayolu — TikTok'ta paylaşırken "Tarif Kutusu" olarak çıkıp linki `?link=...` ile uygulamaya atacak. Henüz kurulmadı, kullanıcıyla adım adım yapılacak.
+3. **Android APK'nın telefonda test edilmesi bekleniyor:** Kullanıcıya `android-twa/app-release-signed.apk` gönderildi ama telefona kurulup TikTok paylaşım menüsünde "Tarif Kutusu" olarak çıktığı ve tam ekran (adres çubuğusuz) açıldığı henüz doğrulanmadı. Adres çubuğu görünüyorsa `assetlinks.json`/imza uyuşmazlığı olabilir — `android-twa`'daki keystore'dan tekrar fingerprint çıkarıp `app/public/.well-known/assetlinks.json`'daki değerle karşılaştır.
 2. **Android paylaşım menüsü testi bekleniyor:** Kullanıcı "ana ekrana ekle" yapmasına rağmen TikTok paylaşım menüsünde uygulama görünmüyordu. Kök neden: Chrome, gerçek bir "WebAPK" (sistem seviyesinde paylaşım hedefi) ancak site tam installability kriterlerini karşılarsa üretiyor; `manifest.json`'da yalnızca tek bir SVG ikon vardı ve hiç service worker kayıtlı değildi — bu yüzden muhtemelen sadece düz bir yer imi (bookmark) oluşmuş, gerçek kurulum tetiklenmemişti. Düzeltme yapıldı (commit `dfa8f2e`, 3 Eylül 2026): `icon-192.png` / `icon-512.png` eklendi, manifest bunlara güncellendi, kök dizine `sw.js` (minimal service worker) eklendi ve `index.html` + `share.html` içinde register edildi. **Kullanıcının hâlâ yapması gereken:** telefonundaki eski "Tarif Kutusu'na Gönder" kısayolunu silip, `emraty.github.io/tarif-kutusu-paylas/` adresini Chrome'da tekrar açıp yeniden "Ana ekrana ekle / Yükle" yapması (menüde "Add to Home screen" değil "Install app" yazısını görmesi gerekiyor), sonra TikTok paylaşım menüsünü test etmesi. Hâlâ çıkmazsa telefonu yeniden başlatmak gerekebilir (Android'in paylaşım listesi cache'leniyor).
