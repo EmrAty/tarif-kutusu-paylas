@@ -2,7 +2,16 @@ import React, { useState, useEffect, useCallback } from "react";
 import {
   ChefHat, Plus, Minus, Link2, ExternalLink, Trash2, Loader2, ArrowLeft, AlertCircle,
   FileText, Pencil, Check, ChevronDown, Star, Search, ShoppingCart, Clock, Gauge, Undo2, X, Package, Download,
+  Mail, LogOut,
 } from "lucide-react";
+import { auth, googleProvider } from "./firebase.js";
+import {
+  onAuthStateChanged,
+  signInWithPopup,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut,
+} from "firebase/auth";
 
 const COLORS = {
   paper: "#F3EFE6",
@@ -148,6 +157,28 @@ ${images && images.length > 0 ? `(Ayrıca ${images.length} adet ekran görüntü
   return parsed;
 }
 
+const AUTH_MODE_KEY = "auth-mode";
+
+function mapAuthError(code) {
+  switch (code) {
+    case "auth/invalid-email":
+      return "E-posta adresi geçersiz görünüyor.";
+    case "auth/user-not-found":
+    case "auth/wrong-password":
+    case "auth/invalid-credential":
+      return "E-posta veya şifre hatalı.";
+    case "auth/email-already-in-use":
+      return "Bu e-posta ile zaten bir hesap var, giriş yapmayı dene.";
+    case "auth/weak-password":
+      return "Şifre en az 6 karakter olmalı.";
+    case "auth/popup-closed-by-user":
+    case "auth/cancelled-popup-request":
+      return "";
+    default:
+      return "Bir şeyler ters gitti, tekrar dener misin?";
+  }
+}
+
 export default function TarifKutusu() {
   const [recipes, setRecipes] = useState([]);
   const [loaded, setLoaded] = useState(false);
@@ -165,6 +196,37 @@ export default function TarifKutusu() {
   const [personName, setPersonName] = useState("");
   const [nameLoaded, setNameLoaded] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
+  const [authChecked, setAuthChecked] = useState(false);
+  const [authUser, setAuthUser] = useState(null);
+  const [guestMode, setGuestMode] = useState(false);
+
+  useEffect(() => {
+    const stored = storageGet(AUTH_MODE_KEY);
+    if (stored && stored.value === "guest") setGuestMode(true);
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setAuthUser(user);
+      setAuthChecked(true);
+      if (user) storageSet(AUTH_MODE_KEY, "account");
+    });
+    return unsubscribe;
+  }, []);
+
+  const handleGuestEntry = () => {
+    storageSet(AUTH_MODE_KEY, "guest");
+    setGuestMode(true);
+  };
+
+  const handleSignOut = () => {
+    signOut(auth);
+    try {
+      window.localStorage.removeItem(STORAGE_PREFIX + AUTH_MODE_KEY);
+    } catch (e) {
+      // yoksayılabilir
+    }
+    setGuestMode(false);
+  };
+
+  const showAuthGate = authChecked && !authUser && !guestMode;
 
   useEffect(() => {
     let cancelled = false;
@@ -360,6 +422,28 @@ export default function TarifKutusu() {
 
   const active = recipes.find((r) => r.id === activeId);
 
+  if (!authChecked) {
+    return (
+      <div
+        style={{
+          width: "100%",
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: COLORS.paper,
+        }}
+      >
+        <Loader2 size={28} color={COLORS.forest} className="spin" />
+        <style>{`.spin { animation: spin 1s linear infinite; } @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
+
+  if (showAuthGate) {
+    return <AuthGate onGuest={handleGuestEntry} />;
+  }
+
   return (
     <div
       style={{
@@ -372,7 +456,7 @@ export default function TarifKutusu() {
         fontFamily: BODY,
       }}
     >
-      <Header view={view} onBack={() => setView("list")} />
+      <Header view={view} onBack={() => setView("list")} authUser={authUser} onSignOut={handleSignOut} />
 
       <div
         style={{
@@ -605,9 +689,9 @@ export default function TarifKutusu() {
   );
 }
 
-function Header({ view, onBack }) {
+function Header({ view, onBack, authUser, onSignOut }) {
   return (
-    <header style={{ width: "100%", background: COLORS.forest }}>
+    <header style={{ width: "100%", background: COLORS.forest, position: "relative" }}>
       <div
         style={{
           maxWidth: "1100px",
@@ -619,6 +703,30 @@ function Header({ view, onBack }) {
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
+          {authUser && (
+            <button
+              onClick={onSignOut}
+              aria-label="Çıkış yap"
+              title={authUser.email ? `${authUser.email} · Çıkış yap` : "Çıkış yap"}
+              style={{
+                position: "absolute",
+                top: "16px",
+                right: "16px",
+                display: "flex",
+                alignItems: "center",
+                gap: "4px",
+                padding: "6px 10px",
+                borderRadius: "9999px",
+                background: "rgba(243,239,230,0.12)",
+                border: "none",
+                color: "#F3EFE6",
+                fontSize: "12px",
+                cursor: "pointer",
+              }}
+            >
+              <LogOut size={13} />
+            </button>
+          )}
           {view !== "list" ? (
             <button
               onClick={onBack}
@@ -669,6 +777,252 @@ function Header({ view, onBack }) {
       </div>
       <div style={{ height: "3px", background: `linear-gradient(90deg, ${COLORS.mustard}, ${COLORS.mustard} 60%, transparent)` }} />
     </header>
+  );
+}
+
+function AuthGate({ onGuest }) {
+  const [mode, setMode] = useState("login"); // "login" | "signup"
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const inputStyle = {
+    width: "100%",
+    borderRadius: "8px",
+    border: `1px solid ${COLORS.line}`,
+    background: COLORS.paper,
+    color: COLORS.ink,
+    padding: "10px 12px",
+    fontSize: "14px",
+    outline: "none",
+    boxSizing: "border-box",
+    marginBottom: "10px",
+  };
+
+  const handleGoogle = async () => {
+    setError("");
+    setBusy(true);
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (e) {
+      setError(mapAuthError(e.code));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleEmailSubmit = async (e) => {
+    e.preventDefault();
+    setError("");
+    if (!email.trim() || !password) {
+      setError("E-posta ve şifreni gir.");
+      return;
+    }
+    setBusy(true);
+    try {
+      if (mode === "signup") {
+        await createUserWithEmailAndPassword(auth, email.trim(), password);
+      } else {
+        await signInWithEmailAndPassword(auth, email.trim(), password);
+      }
+    } catch (e) {
+      setError(mapAuthError(e.code));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      style={{
+        width: "100%",
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: COLORS.paper,
+        padding: "20px",
+        boxSizing: "border-box",
+      }}
+    >
+      <div
+        style={{
+          width: "100%",
+          maxWidth: "360px",
+          background: COLORS.panel,
+          borderRadius: "16px",
+          padding: "32px 28px",
+          boxShadow: CARD_SHADOW,
+          textAlign: "center",
+        }}
+      >
+        <div
+          style={{
+            width: "48px",
+            height: "48px",
+            borderRadius: "9999px",
+            background: COLORS.mustard,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            margin: "0 auto 14px",
+          }}
+        >
+          <ChefHat size={22} color={COLORS.forestDark} />
+        </div>
+        <h1 style={{ fontFamily: SERIF, fontSize: "22px", color: COLORS.ink, margin: "0 0 6px" }}>
+          Tarif Kutusu
+        </h1>
+        <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: "0 0 22px" }}>
+          {mode === "login" ? "Hesabınla giriş yap." : "Google ile ya da e-postayla hemen bir hesap aç."}
+        </p>
+
+        {mode === "signup" && (
+          <>
+            <button
+              type="button"
+              onClick={handleGoogle}
+              disabled={busy}
+              style={{
+                width: "100%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "8px",
+                padding: "10px 16px",
+                borderRadius: "8px",
+                fontSize: "14px",
+                fontWeight: 600,
+                background: COLORS.panel,
+                color: COLORS.ink,
+                border: `1px solid ${COLORS.line}`,
+                cursor: busy ? "default" : "pointer",
+                opacity: busy ? 0.6 : 1,
+                marginBottom: "14px",
+              }}
+            >
+              <svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true">
+                <path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3c-1.6 4.7-6.1 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.6 6.1 29.6 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.7-.4-3.5z"/>
+                <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.6 15.9 18.9 13 24 13c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.6 6.1 29.6 4 24 4 16.2 4 9.5 8.4 6.3 14.7z"/>
+                <path fill="#4CAF50" d="M24 44c5.5 0 10.4-1.9 14.3-5.1l-6.6-5.4C29.6 35.4 26.9 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.6 5.1C9.4 39.6 16.1 44 24 44z"/>
+                <path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.2 4.2-4 5.5l6.6 5.4C41.5 36 44 30.5 44 24c0-1.3-.1-2.7-.4-3.5z"/>
+              </svg>
+              Google ile Kaydol
+            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px", margin: "0 0 14px" }}>
+              <div style={{ flex: 1, height: "1px", background: COLORS.line }} />
+              <span style={{ fontSize: "11px", color: COLORS.inkSoft }}>veya e-postayla</span>
+              <div style={{ flex: 1, height: "1px", background: COLORS.line }} />
+            </div>
+          </>
+        )}
+
+        <form onSubmit={handleEmailSubmit}>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="E-posta"
+            autoComplete="email"
+            style={inputStyle}
+          />
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Şifre"
+            autoComplete={mode === "signup" ? "new-password" : "current-password"}
+            style={inputStyle}
+          />
+
+          {error && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: "6px",
+                fontSize: "13px",
+                padding: "8px 10px",
+                borderRadius: "8px",
+                background: "#F5E4E0",
+                color: COLORS.danger,
+                marginBottom: "12px",
+                textAlign: "left",
+              }}
+            >
+              <AlertCircle size={14} style={{ marginTop: "2px", flexShrink: 0 }} />
+              <span>{error}</span>
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={busy}
+            style={{
+              width: "100%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "8px",
+              padding: "10px 16px",
+              borderRadius: "8px",
+              fontSize: "14px",
+              fontWeight: 600,
+              background: COLORS.mustard,
+              color: COLORS.forestDark,
+              border: "none",
+              cursor: busy ? "default" : "pointer",
+              opacity: busy ? 0.6 : 1,
+            }}
+          >
+            {busy ? <Loader2 size={16} className="spin" /> : <Mail size={15} />}
+            {mode === "signup" ? "E-posta ile Kaydol" : "Giriş Yap"}
+          </button>
+        </form>
+
+        <button
+          type="button"
+          onClick={() => {
+            setError("");
+            setMode((m) => (m === "login" ? "signup" : "login"));
+          }}
+          style={{
+            marginTop: "16px",
+            background: "transparent",
+            border: "none",
+            color: COLORS.forest,
+            fontSize: "13px",
+            fontWeight: 600,
+            cursor: "pointer",
+            textDecoration: "underline",
+          }}
+        >
+          {mode === "login" ? "Hesabın yok mu? Kaydol" : "Zaten hesabın var mı? Giriş yap"}
+        </button>
+
+        <div style={{ height: "1px", background: COLORS.line, margin: "20px 0 14px" }} />
+
+        <button
+          type="button"
+          onClick={onGuest}
+          style={{
+            width: "100%",
+            padding: "10px 16px",
+            borderRadius: "8px",
+            fontSize: "13px",
+            fontWeight: 600,
+            background: "transparent",
+            color: COLORS.inkSoft,
+            border: `1px solid ${COLORS.line}`,
+            cursor: "pointer",
+          }}
+        >
+          Misafir Olarak Gir
+        </button>
+      </div>
+      <style>{`.spin { animation: spin 1s linear infinite; } @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+    </div>
   );
 }
 
