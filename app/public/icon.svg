@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#2F4A3D"/>
+  <circle cx="256" cy="256" r="150" fill="none" stroke="#C9911F" stroke-width="16"/>
+  <path d="M180 230 C180 180 220 150 256 150 C292 150 332 180 332 230" fill="none" stroke="#F3EFE6" stroke-width="18" stroke-linecap="round"/>
+  <rect x="170" y="230" width="172" height="130" rx="18" fill="#F3EFE6"/>
+  <text x="256" y="320" font-family="Georgia, serif" font-size="48" fill="#2F4A3D" text-anchor="middle">TK</text>
+</svg>
