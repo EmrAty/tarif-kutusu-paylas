@@ -1,0 +1,8 @@
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "com.tarifkutusu.app",
+    "sha256_cert_fingerprints": ["C1:AA:4F:2F:C3:97:57:CD:65:C4:2A:64:8D:63:6A:11:93:76:88:F1:63:36:37:BA:C3:92:22:1C:9B:48:82:E1"]
+  }
+}]
