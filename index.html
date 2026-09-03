@@ -36,5 +36,10 @@
       Bu sayfayı ana ekranına ekledikten sonra artık paylaşım menüsünde görünecek.
     </p>
   </div>
+  <script>
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("sw.js");
+    }
+  </script>
 </body>
 </html>

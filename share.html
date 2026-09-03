@@ -33,6 +33,10 @@
   </div>
 
   <script>
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("sw.js");
+    }
+
     const APP_URL = "https://tarif-kutusu-paylas.vercel.app/";
 
     const params = new URLSearchParams(window.location.search);
