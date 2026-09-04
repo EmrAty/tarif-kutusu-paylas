@@ -179,6 +179,83 @@ function mapAuthError(code) {
   }
 }
 
+function useUpdateAvailable() {
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const check = async () => {
+      try {
+        const res = await fetch(`/version.json?t=${Date.now()}`, { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled && data.version && data.version !== __APP_VERSION__) {
+          setUpdateAvailable(true);
+        }
+      } catch (e) {
+        // sürüm kontrolü başarısız olursa sessizce geç, bir sonraki denemede tekrar bakılır
+      }
+    };
+
+    check();
+    const intervalId = setInterval(check, 5 * 60 * 1000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") check();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
+
+  return updateAvailable;
+}
+
+function UpdateBanner({ onUpdate }) {
+  return (
+    <div
+      style={{
+        width: "100%",
+        background: COLORS.mustard,
+        color: COLORS.forestDark,
+        padding: "10px 16px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: "12px",
+        fontSize: "13px",
+        fontWeight: 600,
+        flexWrap: "wrap",
+      }}
+    >
+      <span>Yeni bir güncelleme mevcut.</span>
+      <button
+        onClick={onUpdate}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "6px",
+          background: COLORS.forestDark,
+          color: "#F8F5EC",
+          border: "none",
+          borderRadius: "9999px",
+          padding: "6px 14px",
+          fontSize: "13px",
+          fontWeight: 700,
+          cursor: "pointer",
+        }}
+      >
+        <Download size={14} />
+        Şimdi Güncelle
+      </button>
+    </div>
+  );
+}
+
 export default function TarifKutusu() {
   const [recipes, setRecipes] = useState([]);
   const [loaded, setLoaded] = useState(false);
@@ -199,6 +276,7 @@ export default function TarifKutusu() {
   const [authChecked, setAuthChecked] = useState(false);
   const [authUser, setAuthUser] = useState(null);
   const [guestMode, setGuestMode] = useState(false);
+  const updateAvailable = useUpdateAvailable();
 
   useEffect(() => {
     const stored = storageGet(AUTH_MODE_KEY);
@@ -456,6 +534,7 @@ export default function TarifKutusu() {
         fontFamily: BODY,
       }}
     >
+      {updateAvailable && <UpdateBanner onUpdate={() => window.location.reload()} />}
       <Header view={view} onBack={() => setView("list")} authUser={authUser} onSignOut={handleSignOut} />
 
       <div

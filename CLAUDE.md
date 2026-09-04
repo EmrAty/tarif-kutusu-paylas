@@ -46,6 +46,46 @@ Kullanıcının verdiği logo görseli (`C:\Users\emrea\Downloads\ikon.jpeg` —
 - **Telefonlarda zaten "Ana ekrana eklenmiş" PWA kısayolları eski ikonu göstermeye devam eder** — yeni ikonun görünmesi için o kısayolun silinip sitenin tekrar "Install app" ile eklenmesi gerekir (tarayıcı/OS ikon önbelleği).
 - **Android APK güncellemesi kullanıcı tarafından test edildi, yeni ikon telefonda görünüyor (4 Eylül 2026).** İlk denemede kullanıcı yanlışlıkla telefonunda zaten duran **eski** `app-release-signed.apk` dosyasını açıp kurmuştu (Ayarlar'da sürüm hâlâ "1" görünüyordu) — dosya adı eskisiyle aynı olduğu için karışmıştı. Claude'un bu sohbette gönderdiği güncel dosyayı (tarihine bakarak en yeni olanı) bulup kurunca sürüm "2" oldu ve yeni logo çıktı. **Ders:** ileride yeni bir APK gönderilecekse dosya adına sürüm eklemek (örn. `app-release-signed-v2.apk`) kullanıcının telefonundaki eski kopyayla karışmasını önler.
 
+### İkinci ikon revizyonu — "pin" ederken zoom/kırpma sorunu düzeltildi (4 Eylül 2026, v3)
+
+Kullanıcı ilk ikonu (kenara kadar dolu, boşluksuz) telefona "pin" edince (ana ekrana ekleme / launcher ikonu) Android'in kendi adaptive-icon maskesinin (daire/squircle) görseli otomatik büyütüp kenarları (altın çerçeve + "Tarif Kutusu" yazısı) kırptığını fark etti. Kullanıcı yeni bir kaynak görseli Gemini'de kendisi ürettirdi (aynı tasarım, ama logo artık karenin ortasında küçük, etrafında aynı koyu yeşil kumaş dokusuyla dolu bolca boşluk bırakılmış — `C:\Users\emrea\Downloads\Gemini_Generated_Image_ju8rqsju8rqsju8r.jpg`, 1024×1024) ve "her iki işi de (web ikonları + APK ikonları) aynı anda yap" dedi:
+
+- **Görsel işleme aracı bulundu:** Önceki notların aksine ("bu makinede ImageMagick/sharp/PIL yok"), `npm install sharp` **scratchpad'de** sorunsuz kuruldu (Windows için önceden derlenmiş ikili indiriyor, derleyici gerekmiyor) — artık kare kırpma/yeniden boyutlandırma/köşe yuvarlama için tarayıcı canvas yerine bunu kullanabiliriz.
+- **Web ikonları:** Kaynak görsel zaten kare ve güvenli boşluklu olduğu için doğrudan 512×512 ve 192×192'ye küçültülüp hem kök dizindeki hem `app/public/` altındaki `icon-512.png`, `icon-192.png`, `icon.svg` (512 PNG'yi saran wrapper) dosyaları değiştirildi. Her iki `manifest.json`'da icon `purpose` alanı tekrar **`"any maskable"`** yapıldı (artık görsel gerçekten maskeye uygun olduğu için).
+- **Android APK ikonları:** Her yoğunlukta (mdpi 48px / hdpi 72px / xhdpi 96px / xxhdpi 144px / xxxhdpi 192px) `ic_maskable.png` (tam kare, kırpmasız — adaptive icon XML zaten kendi 8.5dp iç boşluğunu ekliyor) ve `ic_launcher.png` (legacy launcher için, eski dosyalardan ölçülen ~%6 köşe yarıçapıyla yuvarlatılmış) yeniden üretildi; `store_icon.png` (512×512) da güncellendi.
+- **Sürüm artırıldı:** `android-twa/app/build.gradle` (`versionCode`/`versionName`) ve `android-twa/twa-manifest.json` (`appVersionCode`/`appVersionName`/`appVersion`) `2`'den `3`'e çıkarıldı.
+- **Build + imzalama:** `./gradlew assembleRelease` → `zipalign` → `apksigner sign` (aynı `android.keystore`, alias `android`) ile önceki oturumdaki yöntem tekrar kullanıldı. **Yeni bir tuzak bulundu ve çözüldü:** `keystore-password.txt` dosyasının başında bir UTF-8 BOM (`EF BB BF`) var — dosyayı düz `cat`/`$(cat ...)` ile okuyup `apksigner`'a vermek "Password is not ASCII" hatası veriyordu; çözüm dosyayı `tail -c +4` ile (ilk 3 baytı atlayarak) okumaktı. İleride bu şifre dosyası okunacaksa bu BOM'a dikkat edilmeli.
+- **İmza doğrulandı:** Yeni APK'nın sertifika SHA-256'sı (`c1aa4f2f...b4882e1`) öncekiyle birebir aynı — yani telefondaki mevcut kurulumun üzerine güncelleme olarak kurulabilir.
+- **Çıktı dosyası, geçmişteki "dosya adı karışıklığı" dersine uyularak `app-release-signed-v3.apk` olarak adlandırıldı** (`android-twa/` altında). Eski `v2` dosyası `app-release-signed-v2.OLD.apk.bak` olarak yedeklendi, silinmedi.
+- **Henüz kullanıcıya gönderilip telefonda test edilmedi ve GitHub'a yüklenmedi.**
+
+### Üçüncü ikon revizyonu — çerçeve/yazı/ışık kaldırıldı, sade logo (4 Eylül 2026, v4)
+
+Kullanıcı v3'ü de beğenmedi: hâlâ soldan bir ışık/parlama vardı, altın ikon tek tonda değildi (gölgeli görünüyordu) ve ikon tam ortalanmamıştı. Ayrıca bu turda tasarımı da sadeleştirmeye karar verdi — **altın kare çerçeve ve alttaki "Tarif Kutusu" yazısı tamamen kaldırıldı**, sadece tencere kapağı + kitap/ayraç ikonu kaldı. Kullanıcı Gemini'de görseli birkaç kez daha revize ettirdi (Claude'un yazdığı promptlarla: önce çerçeve+yazı+genel ışıklandırma kaldırıldı, sonra kalan sol üst köşedeki parlama da kaldırılıp ikon tek tonda + ortalı hale getirildi) ve son hâlini onayladı: `Gemini_Generated_Image_a8tntsa8tntsa8tn.jpg` — düz koyu yeşil kumaş dokusu, ortada tek tonlu altın ikon, çerçevesiz, yazısız, ışıksız.
+
+- Aynı script (`sharp` ile resize + `ic_launcher.png` için ~%6 köşe yuvarlama) bu yeni kaynak görsele karşı tekrar çalıştırıldı — hem web ikonları (`icon-512.png`, `icon-192.png`, `icon.svg`, kök + `app/public/`) hem Android launcher ikonları (`ic_launcher`/`ic_maskable` her yoğunlukta, `store_icon.png`) güncellendi.
+- Sürüm `3`'ten `4`'e çıkarıldı (`build.gradle`, `twa-manifest.json`), APK yeniden derlenip aynı keystore ile imzalandı; sertifika SHA-256 yine `c1aa4f2f...b4882e1` — üzerine güncelleme olarak kurulabilir. Çıktı: `android-twa/app-release-signed-v4.apk`. Eski `v3` dosyası `app-release-signed-v3.OLD.apk.bak` olarak yedeklendi.
+- **Henüz kullanıcıya gönderilip telefonda test edilmedi ve GitHub'a yüklenmedi.** (v3 de hiç test edilmeden v4 ile değiştirildi.)
+
+### Dördüncü ikon revizyonu (4 Eylül 2026, v5)
+
+Kullanıcı aynı görseli tekrar gönderdi (`Gemini_Generated_Image_a8tntsa8tntsa8tn (1).jpg`) — piksel karşılaştırmasında ikonun kendisi v4'teki ile birebir aynı konumdaydı, sadece kanvas 1024×1024'ten 894×899'a kırpılmış/küçültülmüştü (dolayısıyla kenar boşluğu oranı biraz azalmıştı — yine de güvenli, ~%19-23 aralığında). Claude bunu fark edip kullanıcıya sordu; kullanıcı "bu biraz daha farklı" diyerek bu görselin gerçekten kullanılmasını istedi, o yüzden **bu daha dar kırpılmış versiyon** v5 için kaynak olarak kullanıldı.
+
+- Aynı üretim script'i bu kaynakla tekrar çalıştırıldı (web ikonları + Android launcher ikonları + `store_icon.png`).
+- Sürüm `4`'ten `5`'e çıkarıldı, APK yeniden derlenip imzalandı; sertifika yine aynı (`c1aa4f2f...b4882e1`). Çıktı: `android-twa/app-release-signed-v5.apk`. Eski `v4` dosyası `app-release-signed-v4.OLD.apk.bak` olarak yedeklendi.
+- **Henüz kullanıcıya gönderilip telefonda test edilmedi ve GitHub'a yüklenmedi.**
+- **Not:** v2'den beri (icon değişikliği + güncelleme bandı özelliği) hiçbir şey GitHub'a yüklenmedi — hepsi bu makinede birikti. Bir sonraki adımda muhtemelen hepsini tek seferde yüklemek gerekecek.
+
+## Uygulama içi güncelleme bildirimi (4 Eylül 2026)
+
+Yeni bir deploy yayına çıktığında, uygulamayı zaten açık/kurulu tutan kullanıcılara (özellikle Android TWA'da, sekme hiç kapanmadığı için) "Güncelleme mevcut" bandı çıkıp tek tıkla güncelleme yapabilsinler diye eklendi. Servis worker'a değil, basit bir sürüm-karşılaştırma yöntemine dayanıyor:
+
+- `app/vite.config.js` her `vite build` çalıştığında `Date.now()` ile bir `buildVersion` üretiyor; bunu hem JS bundle'ının içine `__APP_VERSION__` global sabiti olarak gömüyor (Vite `define`), hem de build çıktısına ayrı bir `dist/version.json` (`{"version": "..."}`) dosyası olarak yazıyor (`closeBundle` hook'u). Yani her deploy'da ikisi de aynı, yeni bir değer alıyor.
+- `app/src/App.jsx` içindeki `useUpdateAvailable()` hook'u sayfa açıldığında ve her 5 dakikada bir (+ sekme/uygulama tekrar görünür olduğunda `visibilitychange`) `/version.json`'ı `cache: "no-store"` ile çekip bundle'daki `__APP_VERSION__` ile karşılaştırıyor. Farklıysa `updateAvailable` true oluyor.
+- Farklıysa ana ekranda `Header`'ın hemen üstünde sarı `UpdateBanner` çıkıyor ("Yeni bir güncelleme mevcut" + "Şimdi Güncelle" butonu); butona basınca `window.location.reload()` çalışıyor — servis worker/cache katmanı olmadığı için düz bir reload yeni `index.html` + yeni hash'li JS/CSS dosyalarını indirmeye yetiyor.
+- **Henüz canlıda test edilmedi** — yerelde `npm run build` ile `dist/version.json`'ın doğru üretildiği ve `__APP_VERSION__`'ın bundle'a gömüldüğü doğrulandı, ama gerçek bir "eski sürüm açıkken yeni deploy yapılınca banner çıkıyor mu" testi kullanıcı tarafından canlıda yapılmalı.
+- Bu değişiklik henüz GitHub'a yüklenmedi (`app/vite.config.js`, `app/src/App.jsx`).
+
 ## Önemli iş akışı notları
 
 - **Bu makinede git kurulu değil, `.git` klasörü yok.** Kullanıcı GitHub'a değişiklik göndermeyi git kurmak yerine **web arayüzünden sürükle-bırak** ("Add file → Upload files" / "Create new file") ile yapmayı tercih ediyor — bu tercih kayıtlı, farklı istenmedikçe böyle devam.
@@ -73,8 +113,8 @@ Kullanıcının isteği üzerine uygulamaya bir **giriş kapısı** eklendi (3 E
 ## Bilinen eksik / yapılacaklar
 
 1. **iPhone paylaşım entegrasyonu:** iOS Safari, Web Share Target API'yi desteklemiyor (Apple kısıtlaması, düzeltilemez). Android'de uygulama zaten yüklenince paylaşım menüsünde çıkabiliyor. iPhone için plan: kullanıcının telefonunda bir kere kuracağı bir **Kısayollar (Shortcuts) app** kısayolu — TikTok'ta paylaşırken "Tarif Kutusu" olarak çıkıp linki `?link=...` ile uygulamaya atacak. Henüz kurulmadı, kullanıcıyla adım adım yapılacak.
-2. **Google ile canlı girişin gerçek bir hesapla test edilmesi bekleniyor:** Kurulum ve deploy tamamlandı (bkz. yukarısı), e-posta ile kayıt/giriş ve misafir girişi gerçek Firebase'e karşı test edildi; sadece Google butonu canlıda henüz gerçek bir hesapla denenmedi (kalıcı kullanıcı oluşturmamak için bilerek atlandı).
 
-### Test edilip kapatılan maddeler (3 Eylül 2026)
-- Android APK'nın telefonda TikTok paylaşım menüsünde "Tarif Kutusu" olarak çıkıp tam ekran açılması — kullanıcı tarafından test edildi, çalışıyor.
-- Android PWA (GitHub Pages shim) paylaşım menüsü testi (icon-192/512 + `sw.js` düzeltmesi sonrası) — kullanıcı tarafından test edildi, çalışıyor.
+### Test edilip kapatılan maddeler
+- Android APK'nın telefonda TikTok paylaşım menüsünde "Tarif Kutusu" olarak çıkıp tam ekran açılması — kullanıcı tarafından test edildi, çalışıyor (3 Eylül 2026).
+- Android PWA (GitHub Pages shim) paylaşım menüsü testi (icon-192/512 + `sw.js` düzeltmesi sonrası) — kullanıcı tarafından test edildi, çalışıyor (3 Eylül 2026).
+- Google ile canlı giriş — kullanıcı kendi Google hesabıyla `tarif-kutusu-paylas.vercel.app` üzerinde test etti, çalışıyor (4 Eylül 2026).
