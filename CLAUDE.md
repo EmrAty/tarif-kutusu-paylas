@@ -73,8 +73,9 @@ Kullanıcı aynı görseli tekrar gönderdi (`Gemini_Generated_Image_a8tntsa8tnt
 
 - Aynı üretim script'i bu kaynakla tekrar çalıştırıldı (web ikonları + Android launcher ikonları + `store_icon.png`).
 - Sürüm `4`'ten `5`'e çıkarıldı, APK yeniden derlenip imzalandı; sertifika yine aynı (`c1aa4f2f...b4882e1`). Çıktı: `android-twa/app-release-signed-v5.apk`. Eski `v4` dosyası `app-release-signed-v4.OLD.apk.bak` olarak yedeklendi.
-- **Henüz kullanıcıya gönderilip telefonda test edilmedi ve GitHub'a yüklenmedi.**
-- **Not:** v2'den beri (icon değişikliği + güncelleme bandı özelliği) hiçbir şey GitHub'a yüklenmedi — hepsi bu makinede birikti. Bir sonraki adımda muhtemelen hepsini tek seferde yüklemek gerekecek.
+- **GitHub'a yüklendi ve canlıda doğrulandı (4 Eylül 2026).** Bu makineye artık **git kurulu** (daha önceki not — "git kurulu değil" — artık geçersiz, kullanıcı sonradan kurmuş). Web dosyaları (ikonlar + `App.jsx`/`vite.config.js`'teki güncelleme bandı özelliği + bu dosya) klasik sürükle-bırak yerine ilk kez **git ile** yüklendi: gerçek repo `C:\Users\emrea\tk-clone`'a klonlandı (bu proje klasörünün kendisi bir git deposu değil, GitHub'ın "Download ZIP" çıktısı olduğu için doğrudan onun üzerinde git kullanılamadı), değişen dosyalar oraya kopyalanıp tek commit'te push edildi. Vercel otomatik deploy etti; canlıda hem yeni ikon hem `/version.json` doğrulandı (tarayıcıdan kontrol edildi). Android APK (`v5`) ayrıca **hâlâ telefonda test edilmedi** — sadece web tarafı doğrulandı.
+- **Not:** `android-twa/` klasörü hâlâ bu repoya dahil değil (bilerek), push'a dahil edilmedi.
+- **Git push ile ilgili not:** `credential.helper=manager` (Git Credential Manager) sistemde kurulu olduğu için `git push` ilk denemede commit satırı takılıp 60sn'de zaman aşımına uğradı (muhtemelen arka planda bir GitHub giriş penceresi bekliyordu) — arka planda (`run_in_background`) tekrar çalıştırılınca sorunsuz tamamlandı. İleride push gerekirse aynı şekilde arka planda çalıştırıp tamamlanmasını beklemek gerekebilir.
 
 ## Uygulama içi güncelleme bildirimi (4 Eylül 2026)
 
@@ -88,7 +89,7 @@ Yeni bir deploy yayına çıktığında, uygulamayı zaten açık/kurulu tutan k
 
 ## Önemli iş akışı notları
 
-- **Bu makinede git kurulu değil, `.git` klasörü yok.** Kullanıcı GitHub'a değişiklik göndermeyi git kurmak yerine **web arayüzünden sürükle-bırak** ("Add file → Upload files" / "Create new file") ile yapmayı tercih ediyor — bu tercih kayıtlı, farklı istenmedikçe böyle devam.
+- **Git artık bu makinede kurulu (4 Eylül 2026'dan itibaren)** — önceki not ("git kurulu değil, web arayüzünden sürükle-bırak tercih ediliyor") artık geçersiz. Kullanıcıya sorulduğunda **git ile commit + push** yöntemini tercih etti. Ama bu proje klasörünün kendisi (`tarif-kutusu-paylas-main (3)/tarif-kutusu-paylas-main`) bir git deposu değil — GitHub'ın "Download ZIP" çıktısı, `.git` yok. Bu yüzden push gerektiğinde: gerçek repo **kısa bir yola** klonlanıyor (`C:\Users\emrea\tk-clone` — uzun/parantezli proje yolunda `git clone` "Filename too long" hatası veriyordu), değişen dosyalar oraya kopyalanıp orada commit+push yapılıyor. Push, kimlik doğrulama (Git Credential Manager) yüzünden takılabiliyor — **arka planda (`run_in_background`) çalıştırmak** gerekiyor (bkz. Firebase bölümündeki not).
 - GitHub'a dosya yükledikten sonra **"Commit changes"e bastıktan sonra mutlaka sonucu doğrula** (ekran görüntüsü al / `/commits/main` sayfasına bak). Bir kere hızlı art arda iki dosya yüklerken ilk commit sessizce gitmemişti, fark edilmeden Vercel eski koddan deploy etmişti.
 - Vercel, `main` branch'e her push'ta otomatik yeniden deploy ediyor (GitHub App bağlı). Yeni deploy'un bitmesini birkaç saniye bekleyip `vercel.com/emre-c391/tarif-kutusu-paylas/deployments`'tan kontrol etmek gerekiyor.
 - Anthropic API anahtarı gibi gizli bilgileri tarayıcı formlarına Claude asla giremez — o adımı hep kullanıcı kendisi yapıyor.
