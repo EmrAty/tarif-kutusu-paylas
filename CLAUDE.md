@@ -34,6 +34,16 @@ Kullanıcının isteği üzerine `tarif-kutusu-paylas.vercel.app` sitesi, Google
   - `app/api/store.js` — paylaşımlı anahtar-değer deposu proxy'si (Upstash Redis, "Free" plan — Vercel Storage → Upstash for Redis entegrasyonu ile bağlandı). `KV_REST_API_URL`/`KV_REST_API_TOKEN` env variable'ları Vercel'de otomatik tanımlandı. Sadece üç anahtara izin veriyor (`recipes`, `shopping-list`, `pantry-items`) — whitelist var ama gerçek bir kimlik doğrulama/giriş sistemi yok, yani linki bilen herkes teorik olarak okuyup yazabilir (aile içi kullanım için kabul edilebilir risk, ama unutulmamalı).
 - Kök dizin (`index.html`, `share.html`, `manifest.json`, `icon.svg`) — ayrı, GitHub Pages'te barınan küçük bir PWA. Paylaşım menüsünden linki yakalayıp `?link=...` parametresiyle yukarıdaki Vercel uygulamasına yönlendiriyor.
 
+## Uygulama ikonu (4 Eylül 2026)
+
+Kullanıcının verdiği logo görseli (`C:\Users\emrea\Downloads\ikon.jpeg` — koyu yeşil zemin, altın çerçeve, tencere kapağı + kutu + ayraç sembolü, "Tarif Kutusu" yazısı) artık uygulamanın gerçek ikonu:
+
+- Kaynak görsel ortadan kare kırpılıp (887×887) 512×512 ve 192×192 PNG'ler üretildi (tarayıcı canvas ile — bu makinede ImageMagick/sharp/PIL gibi bir görsel işleme aracı kurulu değil, bulunursa iş kolaylaşır).
+- Hem kök dizindeki hem `app/public/` altındaki `icon-192.png`, `icon-512.png` ve `icon.svg` (artık 512'lik PNG'yi saran bir SVG sarmalayıcı, orijinal vektör değil) bu yeni görselle değiştirildi.
+- Her iki `manifest.json`'da icon `purpose` alanı `"any maskable"` yerine `"any"` yapıldı — orijinal tasarımda çerçeve ve yazı kenara çok yakın durduğu için Android'in maskable güvenli alan kırpması (`daire/squircle` maskesi) bunları keserdi.
+- **Android APK'nın ikonu bu değişiklikten etkilenmedi:** `android-twa/` projesindeki mipmap ikonlar build sırasında ayrıca gömülüyor; telefona zaten kurulu olan `app-release-signed.apk`'nın ikonu güncellemek için o projeyi yeniden build edip yeniden imzalamak (mevcut keystore ile) ve kullanıcının tekrar kurması gerekir — istenirse ayrı bir adım olarak yapılabilir, şimdilik yapılmadı.
+- **Telefonlarda zaten "Ana ekrana eklenmiş" PWA kısayolları eski ikonu göstermeye devam eder** — yeni ikonun görünmesi için o kısayolun silinip sitenin tekrar "Install app" ile eklenmesi gerekir (tarayıcı/OS ikon önbelleği).
+
 ## Önemli iş akışı notları
 
 - **Bu makinede git kurulu değil, `.git` klasörü yok.** Kullanıcı GitHub'a değişiklik göndermeyi git kurmak yerine **web arayüzünden sürükle-bırak** ("Add file → Upload files" / "Create new file") ile yapmayı tercih ediyor — bu tercih kayıtlı, farklı istenmedikçe böyle devam.
