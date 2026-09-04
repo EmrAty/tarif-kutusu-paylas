@@ -352,7 +352,7 @@ export default function TarifKutusu() {
       if (combined) {
         const found = combined.match(/https?:\/\/[^\s]+/g) || [];
         const sharedLink =
-          found.find((u) => /tiktok\.com|youtu\.be|youtube\.com/i.test(u)) || found[0];
+          found.find((u) => /tiktok\.com|youtu\.be|youtube\.com|instagram\.com/i.test(u)) || found[0];
         if (sharedLink) {
           setLink(sharedLink);
           setView("add");
@@ -1589,7 +1589,7 @@ function AddForm({ link, caption, notes, images, category, busy, error, setLink,
 
   const tryAutoFetchCaption = useCallback(async (rawLink) => {
     const trimmed = (rawLink || "").trim();
-    if (!trimmed || !/^https?:\/\//i.test(trimmed) || !/tiktok\.com|youtu\.be|youtube\.com/i.test(trimmed)) return;
+    if (!trimmed || !/^https?:\/\//i.test(trimmed) || !/tiktok\.com|youtu\.be|youtube\.com|instagram\.com/i.test(trimmed)) return;
     if (fetchedForLinkRef.current === trimmed) return;
     fetchedForLinkRef.current = trimmed;
     setFetchingCaption(true);
@@ -1681,7 +1681,7 @@ function AddForm({ link, caption, notes, images, category, busy, error, setLink,
           value={link}
           onChange={(e) => setLink(e.target.value)}
           onBlur={(e) => tryAutoFetchCaption(e.target.value)}
-          placeholder="https://www.tiktok.com/... veya youtube.com/..."
+          placeholder="https://www.tiktok.com/... veya instagram.com/... veya youtube.com/..."
           style={{ flex: 1, background: "transparent", border: "none", outline: "none", fontSize: "14px", color: COLORS.ink }}
         />
       </div>
