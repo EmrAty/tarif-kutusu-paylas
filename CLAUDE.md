@@ -2,6 +2,31 @@
 
 Bu dosyayı her oturum başında otomatik okuyorum. Buradaki bilgiler güncel tutulmalı; büyük bir değişiklik yaptığımda bu dosyayı da güncellerim.
 
+## 🔖 KALDIĞIMIZ YER (10 Eylül 2026, oturum sonu)
+
+Capacitor geçişi tamamlandı ve çalışıyor. Son durum ve açık kalan işler:
+
+**Kullanıcının telefonda test edip ONAYLADIĞI:**
+- Uygulama Chrome açmadan kendi WebView'inde çalışıyor (asıl amaç ✅)
+- TikTok/Instagram/YouTube paylaş → Tarif Kutusu → link "Yeni Tarif Çıkar"a düşüyor ✅
+- Google ile giriş/bağlama (native Google Sign-In üzerinden) ✅
+
+**Bekleyen tek şey — v12 telefonda test edilmedi:**
+`android-capacitor-builds/tarif-kutusu-capacitor-v12.apk` kullanıcıya gönderildi ama kurulup bakılmadan oturum kapandı. İçindeki değişiklik: tam ekran açılış (splash) görseli MainActivity'de kendi ImageView'imizle geri getirildi (bkz. aşağıdaki v12 bölümü). **Sonraki oturumda ilk iş: kullanıcıya v12'yi kurup açılış ekranının artık TWA'daki gibi tam ekran kumaş dokulu marka görselini gösterip göstermediğini sormak.** Göstermiyorsa alternatif: `windowSplashScreenBackground` yerine doğrudan `android:windowBackground`'a bitmap koymak ya da overlay'i `getWindow().addContentView` yerine `bridge.getWebView()`'in parent'ına eklemek denenebilir.
+
+**Hiç test edilmemiş / doğrulanmamış diğer maddeler** (kullanıcı sadece yukarıdaki üçünü denedi):
+- Android geri tuşu davranışı (modal → drawer → liste → arka plana alma)
+- Klavye açılınca input'ların kapanmaması
+- Alışveriş listesi / Kiler / AI önerileri / aile-kişisel ayrımı gibi mevcut özelliklerin Capacitor içinde sorunsuz çalışması
+- Hesabım ekranına yeni eklenen "Hesap Oluştur" / "Giriş Yap" (e-posta+şifre) butonları — sadece yerel `npm run dev` ile smoke test edildi, ne canlı webde ne telefonda denendi
+- **"Canı çekti" push bildirimi** — Capacitor'ın düz WebView'inde arka plan push'unun çalışıp çalışmadığı hâlâ belirsiz (TWA gerçek Chrome olduğu için çalışıyordu). Gerekirse çözüm `@capacitor/push-notifications` (native FCM) — `google-services.json` zaten projede mevcut olduğu için artık kurulumun yarısı hazır.
+
+**⚠️ Önemli risk — `app/android/` klasörü git'te DEĞİL:**
+Eski `android-twa/` bubblewrap'ten yeniden üretilebildiği için git'e alınmamıştı ve aynı alışkanlıkla `app/android/` de alınmadı. Ama bu klasör artık **elle yazılmış ve başka hiçbir yerde bulunmayan** kod içeriyor: `ShareReceiverPlugin.java`, `NativeSplashPlugin.java`, özelleştirilmiş `MainActivity.java`, `AndroidManifest.xml`'deki share intent-filter, `values/styles.xml` + `colors.xml` splash teması, ikon/splash kaynakları, `google-services.json`. **Bu klasör silinirse bu iş baştan yazılır.** Sonraki oturumda kullanıcıya sorulup git'e eklenmesi önerilmeli (`local.properties` ve `android.keystore` hariç — onlar zaten `.gitignore`'da).
+
+**Hatırlatma — hangi düzeltme için yeni APK gerekir:**
+WebView canlı `tarif-kutusu-paylas.vercel.app`'i yüklediği için **JS/React değişiklikleri APK'sız, sadece Vercel'e push ile telefona ulaşıyor** (uygulamayı kapatıp açmak yeterli). Ama **native taraf değişince (yeni Capacitor plugin, `capacitor.config.json`, Android tema/kaynak/Java kodu) mutlaka yeni APK gerekiyor.** Bu ayrım bu oturumda birkaç kez kafa karışıklığı yarattı.
+
 ## TWA'dan Capacitor'a geçiş yapıldı (10 Eylül 2026)
 
 Android uygulaması **TWA**'dan (Chrome'u arka planda kullanan yöntem) **Capacitor**'a (kendi gömülü WebView'i) geçirildi — kullanıcı telefonda "Chrome'da çalıştırılıyor" bildirimini gördüğü için istemişti. Mevcut React/Vite kodu (`app/src/App.jsx`) sıfırdan yazılmadı, sadece yeni bir native kabuk eklendi.
@@ -25,6 +50,51 @@ Android uygulaması **TWA**'dan (Chrome'u arka planda kullanan yöntem) **Capaci
 - **Build çıktısı:** `android-capacitor-builds/tarif-kutusu-capacitor-v7.apk` (imzalı, kuruluma hazır).
 - **Değiştirilen/eklenen web dosyaları (sadece Capacitor-only kod eklendi, mevcut hiçbir satır silinmedi):** `app/package.json`/`package-lock.json` (Capacitor bağımlılıkları), `app/src/App.jsx` (üç yeni `useEffect` + importlar), `app/src/capacitorShare.js` (yeni). Bunlar hâlâ GitHub'a/Vercel'e yüklenmedi — web sürümü şu an hâlâ önceki (Capacitor'dan habersiz) koddan deploy edilmiş durumda; istenirse bir sonraki oturumda/istekte push edilebilir (web davranışını bozmuyor, sadece native platformda ek kod çalıştırıyor).
 - **Bu makinede emulator/bağlı Android cihaz yok** — build/derleme doğrulandı ama share intent, Google girişi, geri tuşu hissi, klavye davranışı gibi cihaz-bağımlı testler kullanıcı tarafından telefonda yapılmalı.
+
+### v7'yi telefonda test edince çıkan iki hata, ikisi de düzeltildi (10 Eylül 2026, v8)
+
+Kullanıcı v7 APK'yı kurup denedi, iki şey bozuktu — yukarıdaki "belirsiz/riskli" notlar gerçek hata olarak doğrulandı:
+
+1. **Paylaşım sadece uygulamayı açıyordu, link/açıklama gelmiyordu.** Kök neden: bir önceki oturumda `capacitorShare.js` + `App.jsx`'teki share-alma `useEffect`'i yazılmıştı ama **GitHub'a/Vercel'e hiç push edilmemişti** — uygulama canlı `tarif-kutusu-paylas.vercel.app`'i yüklediği için, telefondaki APK hâlâ bu koddan habersiz eski bundle'ı çalıştırıyordu. **Çözüm: sadece push etmek** (`app/package.json`, `app/capacitor.config.json`, `app/src/App.jsx`, `app/src/capacitorShare.js` → GitHub commit `28d7b9a`) — Vercel otomatik deploy etti. **Yeni APK'ya gerek yoktu**, uygulamayı kapatıp yeniden açmak yeterli (her açılışta canlı siteyi taze çekiyor). Bu, mimari kararın (dist gömmek yerine canlı URL yüklemek) bir sonucu: web tarafındaki düzeltmeler APK'yı güncellemeden anında telefona ulaşıyor.
+2. **Google ile giriş "yükleniyor" ekranında asılı kalıyordu.** Kök neden zaten öngörülmüştü: Google, `signInWithPopup`'ın açtığı popup'ı gömülü WebView User-Agent'ında tamamen engelliyor, promise hiç resolve/reject olmadan sonsuza kadar bekliyor. **Çözüm: native Google Sign-In.** `@capacitor-firebase/authentication` paketi eklendi; `App.jsx`'e `googleSignIn()`/`googleLink()` sarmalayıcı fonksiyonları eklendi — native Android'de cihazın kendi Google hesap seçici arayüzünü açıp dönen id token'ı `GoogleAuthProvider.credential()` + `signInWithCredential`/`linkWithCredential` ile mevcut Firebase JS SDK oturumuna bağlıyor (yani `auth` nesnesi, `onAuthStateChanged`, `authedFetch` hiç değişmedi — sadece Google kimlik bilgisini ALMA yöntemi native'e taşındı). Web'de (`Capacitor.isNativePlatform()` false) davranış aynen `signInWithPopup` olarak kalıyor, değişmedi.
+   - **Firebase konsolunda yeni bir Android app kaydı gerekti** (elle kurulum adımı, Claude in Chrome ile kullanıcının izniyle yapıldı): `tarif-kutusu` projesine `com.tarifkutusu.app` paket adıyla bir Android app eklendi, release keystore'un SHA-1 fingerprint'i (`66:4C:55:4E:D0:62:60:0B:BB:CC:5C:61:C7:B1:16:61:D6:A0:DA:7C`) kaydedildi, `google-services.json` indirilip `app/android/app/google-services.json`'a kondu (bu dosya gizli değil — Android public client config'i, `firebase.js`'teki web config gibi git'e girebilir, gizli tutulmuyor). `app/android/app/build.gradle`'daki `com.google.gms.google-services` plugin'i (Capacitor'ın hazır şablonunda zaten koşullu olarak duruyordu) bu dosya var olduğu için artık gerçekten devreye giriyor.
+   - **Yeni bir OAuth client oluşturmaya gerek kalmadı** — `google-services.json`'daki mevcut `client_type: 3` (web) OAuth client'ı, native Google Sign-In SDK'sının id token istemek için ihtiyaç duyduğu `default_web_client_id` olarak zaten yeterli.
+   - **Henüz gerçek cihazda test edilmedi** — bu da bir sonraki telefon testinde doğrulanmalı.
+   - `app/package.json`/`package-lock.json`/`App.jsx`'teki bu değişiklik de GitHub'a push edildi (commit `d0937f8`) — web sürümünde davranış değişmiyor (hâlâ `signInWithPopup`), sadece native platformda ek kod çalışıyor.
+- **Yeni build çıktısı:** `android-capacitor-builds/tarif-kutusu-capacitor-v8.apk` (`versionCode 8`, aynı imza/sertifika — v7'nin/TWA'nın üzerine güncelleme olarak kurulabilir). Kullanıcıya gönderildi, telefonda test edilmesi bekleniyor.
+
+### v8 telefonda denenince çıkan üç ek sorun, hepsi düzeltildi (10 Eylül 2026, v9 → v10)
+
+1. **Google bağlama hâlâ "Bağlanamadı" veriyordu.** Firebase konsolunda kullanıcı listesine bakılınca kök neden bulundu: `emreatay2006@gmail.com` zaten 4 Eylül'den beri ayrı bir hesap olarak kayıtlı (o gün Google girişi test edilirken oluşmuş) — misafir hesabına "bağlamaya" çalışınca Firebase `auth/credential-already-in-use` ile reddediyordu (beklenen davranış, hata değil). **Çözüm:** `googleLink()`'te bu hata koduna özel bir fallback eklendi - bağlamak başarısız olursa aynı credential'la doğrudan o mevcut hesaba `signInWithCredential` ile geçiliyor (misafirdeki veri otomatik taşınmıyor, Firebase'in birleştirme desteği yok). Ayrıca `handleLinkGoogle`/`handleGoogle`'daki sabit "Bağlanamadı, tekrar dener misin?" mesajı kaldırılıp gerçek hata koduna/mesajına göre gösterilmeye başlandı (`e.message || mapAuthError(e.code)`) — bir sonraki teşhis bunun sayesinde çok hızlı oldu (bkz. madde 3).
+2. **Kullanıcı isteği: Hesabım ekranına misafirler için "Hesap Oluştur"/"Giriş Yap", hesaplılar için çıkış butonu.** "Çıkış Yap" zaten vardı (`!authUser?.isAnonymous` bloğunda). Misafir bloğuna e-posta/şifre ile küçük bir inline form eklendi: **"Hesap Oluştur"** `linkWithCredential(authUser, EmailAuthProvider.credential(...))` ile misafirin uid'ini koruyarak kalıcı hesaba çeviriyor (e-posta zaten kullanılıyorsa `auth/email-already-in-use` yakalanıp o hesaba `signInWithEmailAndPassword` ile geçiliyor); **"Giriş Yap"** düz `signInWithEmailAndPassword` ile var olan bir hesaba geçiyor (misafir verisi taşınmıyor, kullanıcıya bu formda ayrıca belirtiliyor).
+3. **Telefonda gerçek hata görüldü (yeni hata mesajı sayesinde): "FirebaseAuthentication plugin is not implemented on android".** Kök neden basitti - kullanıcı hâlâ v7'yi kullanıyordu, `@capacitor-firebase/authentication`'ın native tarafı sadece v8+'ta var; web kodu her zaman canlıdan geldiği için (server.url mimarisi) JS bir native eklentiyi çağırıyordu ama o eklenti o APK'da hiç gömülü değildi. **Ders: JS-only düzeltmeler APK'sız telefona ulaşıyor ama yeni bir native plugin/kütüphane eklendiğinde mutlaka yeni APK kurulması gerekiyor** - önceki notlarda bu ayrım yeterince net vurgulanmamıştı. v9 kurulunca gerçek hata ortaya çıktı: **"Google Sign-In: Google sign-in provider is not enabled. Make sure to add the provider to the 'providers' list in the Capacitor configuration."** — `@capacitor-firebase/authentication`, `capacitor.config.json`'da `plugins.FirebaseAuthentication.providers` listesinde `"google.com"` açıkça belirtilmediği sürece Google sağlayıcısını native tarafta hiç etkinleştirmiyor (Firebase projesinin kendisinde Google sign-in açık olması yetmiyor). **Çözüm:** `app/capacitor.config.json`'a eklendi:
+   ```json
+   "FirebaseAuthentication": { "skipNativeAuth": true, "providers": ["google.com"] }
+   ```
+   `skipNativeAuth: true` - çünkü uygulama oturumu native plugin'in kendi auth state'i üzerinden değil, JS Firebase SDK'sı (`signInWithCredential`) üzerinden tamamlıyor; plugin'in kendi native sign-in'ini de tetiklemesine gerek yok. **Bu ayar native tarafa derleme zamanında gömüldüğü için (assets/capacitor.config.json, `cap sync` ile üretiliyor) salt web push yetmiyor, yeni APK gerekti.**
+- **Yeni build çıktısı:** `android-capacitor-builds/tarif-kutusu-capacitor-v10.apk` (`versionCode 10`, aynı imza). **Kullanıcı v10'u kurdu ve Google girişinin çalıştığını doğruladı (10 Eylül 2026).**
+
+### Açılış (splash) ekranı Android 12+ API'sine göre yeniden yapılandırıldı (10 Eylül 2026, v11)
+
+Kullanıcı v10'da Google girişinin çalıştığını doğruladı ama "ilk başta yükleme ekranında çıkan görsel gitmiş" dedi — TWA'daki tam ekran koyu yeşil kumaş dokulu splash görseli artık hiç görünmüyordu.
+
+- **Kök neden:** `@capacitor/splash-screen`, açılış splash'ı için her Android sürümünde `androidx.core:core-splashscreen`'i (Android 12 Splash Screen API'si) kullanıyor (`SplashScreen.java` → `installSplashScreen(...)`). Bu API **tam ekran bir görsel gösteremiyor**; sadece bir *arka plan rengi* + *ortada dairesel maskelenen bir ikon* gösteriyor. Eklentinin kendi `androidSplashResourceName`/`androidScaleType`/`backgroundColor`/`useDialog` ayarlarının hepsi dokümantasyonda "Doesn't work on launch when using the Android 12 API" notunu taşıyor — yani bizim kopyaladığımız `drawable-port-*/splash.png` dosyaları açılışta hiç kullanılmıyordu (yalnızca JS'ten `SplashScreen.show()` çağrılırsa devreye girerler, ki uygulama bunu yapmıyor). Capacitor'ın şablonundaki `AppTheme.NoActionBarLaunch` teması da splash attribute'larının hiçbirini set etmediği için sistem varsayılanlarına (beyaz/sistem zemini + launcher ikonu) düşüyordu.
+- **Çözüm — tema üzerinden marka görünümü** (`app/android/app/src/main/res/values/styles.xml`): `windowSplashScreenBackground` = `@color/splashBackground` (yeni `values/colors.xml`, `#27442D` — TWA splash'ının kendi koyu yeşili), `windowSplashScreenAnimatedIcon` = `@mipmap/ic_maskable` (koyu yeşil zeminli + altın ikonlu kare görsel; dairesel maskelenince zeminle kaynaşıyor, ortada altın ikon kalıyor), `postSplashScreenTheme` = `@style/AppTheme.NoActionBar` (androidx'in beklediği doğru kullanım, Capacitor şablonunda eksikti). Sonuç TWA'daki splash'a çok yakın: tam ekran koyu yeşil + ortada altın ikon (tek kayıp, zeminin kumaş dokusu — bu API renk dışında bir zemin kabul etmiyor).
+- **`launchAutoHide` `false`'tan `true`'ya (10 sn) çevrildi** (`capacitor.config.json`): `false` iken splash, JS `SplashScreen.hide()` çağırana kadar ekranda kalıyordu — ama içerik uzak sunucudan (Vercel) geldiği için **internet yokken o JS hiç çalışmıyor ve uygulama sonsuza kadar splash'ta donuyordu.** Artık React mount olunca yine hemen kapanıyor (normal akış değişmedi), 10 sn ise yalnızca en kötü durum tavanı.
+- **Not:** Bu değişikliklerin ikisi de (tema + capacitor.config.json) native tarafa derleme zamanında giriyor → **yeni APK şart, web push yetmiyor.** Çıktı: `android-capacitor-builds/tarif-kutusu-capacitor-v11.apk` (`versionCode 11`, aynı imza).
+- **⚠️ Kullanıcı v11'i beğenmedi:** "yanlış yapmışsın, yükleme ekranı bu fotoğraf olması lazımdı" deyip TWA'daki tam ekran kumaş dokulu görseli gönderdi. Yani "renk + ortada ikon" yaklaşımı yeterli değil, tam ekran görselin kendisi isteniyor → **v12 ile çözüldü (aşağıda).** v11'deki tema ayarları yine de yerinde duruyor ve işe yarıyor: Android 12+ sisteminin v12'deki kendi görselimizden ÖNCE gösterdiği kısa sistem splash'ı artık beyaz değil, koyu yeşil + altın ikon olduğu için geçiş kaynaşıyor.
+
+### Tam ekran açılış görseli MainActivity'de kendi ImageView'imizle geri getirildi (10 Eylül 2026, v12)
+
+Android 12+ splash API'si tam ekran görsel gösteremediği için (v11 notlarına bkz.), TWA'nın yaptığının aynısı yapıldı: görsel WebView'in üzerine elle çiziliyor. (TWA'da bu, `androidbrowserhelper`'ın `LauncherActivity`'sinde `getSplashImageScaleType()` override edilerek yapılmıştı.)
+
+- **`MainActivity.showSplashOverlay()`** — `onCreate`'te `super.onCreate()`'ten sonra, `R.drawable.splash`'i `CENTER_CROP` ile gösteren tam ekran bir `ImageView`, `addContentView()` ile WebView'in üstüne ekleniyor. Yani `drawable-port-*dpi/splash.png` dosyaları artık gerçekten kullanılıyor (v11 notundaki "kullanılmıyor" ifadesi geçersiz).
+- **`MainActivity.hideSplashOverlay()`** — 250 ms fade-out ile katmanı kaldırıyor. İki yerden tetikleniyor: (1) JS hazır olunca (aşağıdaki plugin), (2) `onCreate`'teki 10 saniyelik `Handler.postDelayed` güvenlik tavanı — **internet yokken JS hiç çalışmadığı için bu tavan olmazsa uygulama sonsuza kadar splash'ta donardı.**
+- **`NativeSplashPlugin.java`** (yeni, `@CapacitorPlugin(name = "NativeSplash")`) — tek bir `hide()` metodu; `MainActivity`'de `registerPlugin()` ile kaydediliyor. JS köprüsü: `app/src/capacitorSplash.js`.
+- **`App.jsx`**'teki mevcut splash `useEffect`'i artık ikisini birden kapatıyor: `SplashScreen.hide()` (sistemin kısa splash'ı) + `NativeSplash.hide()` (bizim tam ekran görselimiz).
+- **`capacitor.config.json` → `SplashScreen.launchShowDuration` `0` yapıldı** (autoHide `true` kaldı): sistemin splash'ı hemen kapansın ki altındaki kendi tam ekran görselimiz görünsün. Aksi hâlde sistem splash'ı bizimkini örtüyordu.
+- **Açılış sırası artık:** sistem splash'ı (koyu yeşil + altın ikon, çok kısa) → tam ekran kumaş dokulu marka görseli (React mount olana ya da 10 sn dolana kadar) → uygulama.
+- Çıktı: `android-capacitor-builds/tarif-kutusu-capacitor-v12.apk` (`versionCode 12`, aynı imza). **Kullanıcıya gönderildi ama HENÜZ TELEFONDA TEST EDİLMEDİ** — oturum burada kapandı.
 
 ## Ne bu proje
 
@@ -224,7 +294,11 @@ Kullanıcının isteğiyle, bir aile tarifi ekranında (RecipeDetail) artık bir
 4. **Plus için gerçek ödeme entegrasyonu yok** — kullanıcının kendi isteğiyle şimdilik "Plus" ekranındaki bir test bayrağıyla açılıp kapatılıyor (bkz. aynı bölüm). Gerçek ödeme (muhtemelen Stripe) istenirse ayrı bir iş.
 5. **Hesap/aile/Plus sistemi canlıda gerçek (throwaway) hesaplarla API üzerinden uçtan uca test edildi (10 Eylül 2026)** — kişisel/aile veri izolasyonu, 2 aile sınırı, Plus kapanınca aileden çıkma + veri korunması, Plus tekrar açılınca otomatik geri dönmeme, 50 tarif sınırı + Plus'ta kalkması, aile silme, ve bir tarifin birden fazla yere kaydedilip listede tekrarlamaması — hepsi doğrulandı (test script'leri bu makinede `scratchpad` altında, kalıcı değil). Test için oluşturulan tüm sahte hesaplar sonunda silindi; sadece test sırasında oluşan birkaç "ZZZ_TEST_..." adlı aile kaydı (üyesiz, erişilemez, zararsız) Redis'te kalıntı olarak durabilir — aile silme özelliği eklendiğinden beri yeni testler kendi kendini temizliyor. **Henüz test edilmeyen tek şey:** gerçek kullanıcı hesaplarıyla (anonim değil, iki farklı gerçek kişi/cihaz) tarayıcı üzerinden uçtan uca kullanım.
 
+6. **"Canı çekti" push bildirimi Capacitor'da çalışıyor mu bilinmiyor** (bkz. yukarıdaki "KALDIĞIMIZ YER"). TWA gerçek Chrome olduğu için Chrome'un PWA push altyapısını kullanıyordu; Capacitor'ın düz WebView'inde arka plan Service Worker push'u güvenilir değil. Çözüm gerekirse `@capacitor/push-notifications` (native FCM) — `google-services.json` artık projede olduğu için kurulumun bir kısmı hazır.
+7. **`app/android/` klasörü git'te değil** — elle yazılmış native kod içerdiği için riskli, bkz. "KALDIĞIMIZ YER".
+
 ### Test edilip kapatılan maddeler
+- **Capacitor sürümü (v10) — Chrome açılmadan kendi WebView'inde çalışıyor, TikTok/Instagram/YouTube paylaşımı "Yeni Tarif Çıkar" ekranına link düşürüyor, Google ile giriş/bağlama çalışıyor** — kullanıcı tarafından telefonda test edildi (10 Eylül 2026). Asıl amaç ("Chrome'da çalıştırılıyor" bildiriminden kurtulmak) gerçekleşti.
 - Android APK'nın telefonda TikTok paylaşım menüsünde "Tarif Kutusu" olarak çıkıp tam ekran açılması — kullanıcı tarafından test edildi, çalışıyor (3 Eylül 2026).
 - Android PWA (GitHub Pages shim) paylaşım menüsü testi (icon-192/512 + `sw.js` düzeltmesi sonrası) — kullanıcı tarafından test edildi, çalışıyor (3 Eylül 2026).
 - Google ile canlı giriş — kullanıcı kendi Google hesabıyla `tarif-kutusu-paylas.vercel.app` üzerinde test etti, çalışıyor (4 Eylül 2026).
