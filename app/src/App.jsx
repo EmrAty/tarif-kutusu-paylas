@@ -41,15 +41,36 @@ async function googleSignIn() {
   return signInWithPopup(auth, googleProvider);
 }
 
+// Bu Google hesabı daha önce (misafirden bağımsız) gerçek bir hesap olarak
+// kullanılmışsa, Firebase "credential-already-in-use" hatasıyla bağlamayı
+// reddediyor - bu durumda amaç zaten "bu Google hesabıyla devam et" olduğu
+// için, bağlamak yerine doğrudan o mevcut hesaba geçiş yapıyoruz (misafirin
+// üzerindeki veri, gerçek hesaba otomatik taşınmıyor - Firebase'in birleştirme
+// desteği yok).
 async function googleLink(user) {
   if (Capacitor.isNativePlatform()) {
     const result = await FirebaseAuthentication.signInWithGoogle();
     const idToken = result.credential?.idToken;
     if (!idToken) throw new Error("Google girişi iptal edildi.");
     const credential = GoogleAuthProvider.credential(idToken);
-    return linkWithCredential(user, credential);
+    try {
+      return await linkWithCredential(user, credential);
+    } catch (e) {
+      if (e.code === "auth/credential-already-in-use") {
+        return signInWithCredential(auth, credential);
+      }
+      throw e;
+    }
   }
-  return linkWithPopup(user, googleProvider);
+  try {
+    return await linkWithPopup(user, googleProvider);
+  } catch (e) {
+    if (e.code === "auth/credential-already-in-use") {
+      const credential = GoogleAuthProvider.credentialFromError(e);
+      if (credential) return signInWithCredential(auth, credential);
+    }
+    throw e;
+  }
 }
 
 const COLORS = {
