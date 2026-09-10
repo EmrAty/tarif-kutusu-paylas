@@ -104,16 +104,17 @@ async function bucketSet(bucket, scopeKey, value) {
   await authedFetch("/api/data", { method: "POST", body: { bucket, scope, familyId, value } });
 }
 
-async function fetchFamilies() {
-  return authedFetch("/api/families");
+async function fetchFamilies(memberName) {
+  const qs = memberName ? `?name=${encodeURIComponent(memberName)}` : "";
+  return authedFetch(`/api/families${qs}`);
 }
 
-async function createFamily(name) {
-  return authedFetch("/api/families", { method: "POST", body: { action: "create", name } });
+async function createFamily(name, memberName) {
+  return authedFetch("/api/families", { method: "POST", body: { action: "create", name, memberName } });
 }
 
-async function joinFamily(code) {
-  return authedFetch("/api/families", { method: "POST", body: { action: "join", code } });
+async function joinFamily(code, memberName) {
+  return authedFetch("/api/families", { method: "POST", body: { action: "join", code, memberName } });
 }
 
 async function leaveFamily(familyId) {
@@ -354,6 +355,7 @@ export default function TarifKutusu() {
   const [families, setFamilies] = useState([]); // [{ id, name, inviteCode, members:[{uid,email,isAnonymous}] }]
   const [familiesLoaded, setFamiliesLoaded] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [modalView, setModalView] = useState(null); // "account" | "families" | "plus" | "settings" | null
   const [manualPrefill, setManualPrefill] = useState(null);
   const updateAvailable = useUpdateAvailable();
 
@@ -376,7 +378,7 @@ export default function TarifKutusu() {
 
   const loadFamiliesState = useCallback(async () => {
     try {
-      const data = await fetchFamilies();
+      const data = await fetchFamilies(personName);
       setIsPlus(!!data.isPlus);
       setFamilies(data.families || []);
     } catch (e) {
@@ -384,7 +386,7 @@ export default function TarifKutusu() {
     } finally {
       setFamiliesLoaded(true);
     }
-  }, []);
+  }, [personName]);
 
   useEffect(() => {
     if (authUser) loadFamiliesState();
@@ -680,7 +682,11 @@ export default function TarifKutusu() {
         onClose={() => setMenuOpen(false)}
         isPlus={isPlus}
         onNavigate={(target) => {
-          setView(target);
+          if (target === "favorites") {
+            setView(target);
+          } else {
+            setModalView(target);
+          }
           setMenuOpen(false);
         }}
       />
@@ -712,6 +718,7 @@ export default function TarifKutusu() {
             recipes={recipes}
             loaded={loaded}
             activeId={activeId}
+            isPlus={isPlus}
             familyNameById={familyNameById}
             onSelect={(id) => {
               setActiveId(id);
@@ -837,41 +844,50 @@ export default function TarifKutusu() {
               }}
             />
           )}
-
-          {view === "families" && (
-            <FamiliesView
-              isPlus={isPlus}
-              families={families}
-              onReload={loadFamiliesState}
-              onOpenPlus={() => setView("plus")}
-              onImportFamily={(familyId) => loadRecipeBucket(familyId)}
-            />
-          )}
-
-          {view === "plus" && (
-            <PlusView
-              isPlus={isPlus}
-              onToggle={async (next) => {
-                await setPlusFlag(next);
-                await loadFamiliesState();
-              }}
-            />
-          )}
-
-          {view === "account" && (
-            <AccountView
-              authUser={authUser}
-              personName={personName}
-              onSignOut={handleSignOut}
-              onImportPersonal={() => loadRecipeBucket(PERSONAL)}
-            />
-          )}
-
-          {view === "settings" && (
-            <SettingsView personName={personName} nameDraft={nameDraft} setNameDraft={setNameDraft} onSaveName={handleSaveName} />
-          )}
         </main>
       </div>
+
+      {modalView === "families" && (
+        <ModalSheet title="Aileler" onClose={() => setModalView(null)}>
+          <FamiliesView
+            isPlus={isPlus}
+            families={families}
+            personName={personName}
+            onReload={loadFamiliesState}
+            onOpenPlus={() => setModalView("plus")}
+            onImportFamily={(familyId) => loadRecipeBucket(familyId)}
+          />
+        </ModalSheet>
+      )}
+
+      {modalView === "plus" && (
+        <ModalSheet title="Plus" onClose={() => setModalView(null)}>
+          <PlusView
+            isPlus={isPlus}
+            onToggle={async (next) => {
+              await setPlusFlag(next);
+              await loadFamiliesState();
+            }}
+          />
+        </ModalSheet>
+      )}
+
+      {modalView === "account" && (
+        <ModalSheet title="Hesabım" onClose={() => setModalView(null)}>
+          <AccountView
+            authUser={authUser}
+            personName={personName}
+            onSignOut={handleSignOut}
+            onImportPersonal={() => loadRecipeBucket(PERSONAL)}
+          />
+        </ModalSheet>
+      )}
+
+      {modalView === "settings" && (
+        <ModalSheet title="Ayarlar" onClose={() => setModalView(null)}>
+          <SettingsView personName={personName} nameDraft={nameDraft} setNameDraft={setNameDraft} onSaveName={handleSaveName} />
+        </ModalSheet>
+      )}
 
       {nameLoaded && !personName && (
         <div
@@ -1191,6 +1207,64 @@ function SideMenu({ open, onClose, isPlus, onNavigate }) {
   );
 }
 
+function ModalSheet({ title, onClose, children }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 80, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+      <div
+        onClick={onClose}
+        style={{
+          position: "absolute",
+          inset: 0,
+          background: "rgba(42,38,32,0.45)",
+          backdropFilter: "blur(4px)",
+          WebkitBackdropFilter: "blur(4px)",
+        }}
+      />
+      <div
+        style={{
+          position: "relative",
+          width: "100%",
+          maxWidth: "560px",
+          height: "92vh",
+          background: COLORS.paper,
+          borderRadius: "20px 20px 0 0",
+          boxShadow: "0 -8px 40px rgba(0,0,0,0.3)",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+        }}
+        className="md-modal-sheet"
+      >
+        <style>{`
+          @media (min-width: 768px) {
+            .md-modal-sheet { height: 88vh !important; border-radius: 20px !important; margin-bottom: 24px; }
+          }
+        `}</style>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "18px 20px",
+            borderBottom: `1px solid ${COLORS.line}`,
+            flexShrink: 0,
+          }}
+        >
+          <h2 style={{ fontFamily: SERIF, fontSize: "19px", color: COLORS.ink, margin: 0 }}>{title}</h2>
+          <button
+            onClick={onClose}
+            aria-label="Kapat"
+            style={{ background: "transparent", border: "none", cursor: "pointer", color: COLORS.inkSoft, padding: "6px", display: "flex" }}
+          >
+            <X size={20} />
+          </button>
+        </div>
+        <div style={{ flex: 1, overflowY: "auto", padding: "20px" }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
 function AuthGate({ onGuest }) {
   const [mode, setMode] = useState("login"); // "login" | "signup"
   const [email, setEmail] = useState("");
@@ -1451,7 +1525,7 @@ function AuthGate({ onGuest }) {
   );
 }
 
-function Sidebar({ recipes, loaded, activeId, familyNameById, onSelect, onAdd, onManual, onPantry, onShopping, onToggleFavorite, onDelete }) {
+function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, onAdd, onManual, onPantry, onShopping, onToggleFavorite, onDelete }) {
   const [listOpen, setListOpen] = useState(true);
   const [openCats, setOpenCats] = useState({});
   const [favOpen, setFavOpen] = useState(false);
@@ -1589,7 +1663,14 @@ function Sidebar({ recipes, loaded, activeId, familyNameById, onSelect, onAdd, o
               color: COLORS.ink,
             }}
           >
-            Yemekler {recipes.length > 0 ? <span style={{ color: COLORS.inkSoft, fontSize: "15px" }}>({recipes.length})</span> : ""}
+            Yemekler{" "}
+            {isPlus ? (
+              recipes.length > 0 ? <span style={{ color: COLORS.inkSoft, fontSize: "15px" }}>({recipes.length})</span> : ""
+            ) : (
+              <span style={{ color: COLORS.inkSoft, fontSize: "15px" }}>
+                ({recipes.length}/{FREE_RECIPE_LIMIT})
+              </span>
+            )}
           </span>
           <span
             style={{
@@ -3657,7 +3738,7 @@ function FavoritesView({ recipes, familyNameById, onSelect }) {
   );
 }
 
-function FamiliesView({ isPlus, families, onReload, onOpenPlus, onImportFamily }) {
+function FamiliesView({ isPlus, families, personName, onReload, onOpenPlus, onImportFamily }) {
   const [nameDraft, setNameDraft] = useState("");
   const [codeDraft, setCodeDraft] = useState("");
   const [busy, setBusy] = useState(false);
@@ -3706,7 +3787,7 @@ function FamiliesView({ isPlus, families, onReload, onOpenPlus, onImportFamily }
     }
     setBusy(true);
     try {
-      await createFamily(nameDraft.trim());
+      await createFamily(nameDraft.trim(), personName);
       setNameDraft("");
       await onReload();
     } catch (e) {
@@ -3724,7 +3805,7 @@ function FamiliesView({ isPlus, families, onReload, onOpenPlus, onImportFamily }
     }
     setBusy(true);
     try {
-      await joinFamily(codeDraft.trim());
+      await joinFamily(codeDraft.trim(), personName);
       setCodeDraft("");
       await onReload();
     } catch (e) {
@@ -3795,7 +3876,7 @@ function FamiliesView({ isPlus, families, onReload, onOpenPlus, onImportFamily }
             </button>
           </div>
           <div style={{ fontSize: "13px", color: COLORS.inkSoft, marginBottom: "12px" }}>
-            Üyeler: {f.members.map((m) => m.email || (m.isAnonymous ? "Misafir kullanıcı" : "Kullanıcı")).join(", ")}
+            Üyeler: {f.members.map((m) => m.name || m.email || (m.isAnonymous ? "Misafir kullanıcı" : "Kullanıcı")).join(", ")}
           </div>
           <button
             onClick={() => handleImport(f.id)}

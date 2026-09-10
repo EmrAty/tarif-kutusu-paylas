@@ -1,6 +1,7 @@
 import { requireUser } from "./_lib/auth.js";
 import { redisGetJSON, redisSetJSON } from "./_lib/redis.js";
 import { getProfile, setProfile, MAX_FAMILIES } from "./_lib/profile.js";
+import { membersKey, removeMemberFromFamily } from "./_lib/families.js";
 
 function familyId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -15,9 +16,6 @@ function inviteCode() {
 
 function metaKey(id) {
   return `family:${id}:meta`;
-}
-function membersKey(id) {
-  return `family:${id}:members`;
 }
 function inviteKey(code) {
   return `invite:${code}:family`;
@@ -36,10 +34,27 @@ async function loadFamilySummary(id) {
     ownerUid: meta.ownerUid,
     members: Object.entries(members).map(([uid, info]) => ({
       uid,
+      name: info.name || null,
       email: info.email || null,
       isAnonymous: !!info.isAnonymous,
     })),
   };
+}
+
+// Kullanıcı görünen ismini (Ayarlar'da girdiği, cihazda saklanan isim) sonradan
+// değiştirebiliyor — her aile listesi çekilişinde kendi üyelik kaydındaki ismi
+// güncel tutuyor ki aile üyeleri e-posta yerine gerçek ismini görsün.
+async function syncDisplayName(uid, familyIds, name) {
+  if (!name) return;
+  await Promise.all(
+    familyIds.map(async (id) => {
+      const members = await redisGetJSON(membersKey(id), {});
+      if (members[uid] && members[uid].name !== name) {
+        members[uid] = { ...members[uid], name };
+        await redisSetJSON(membersKey(id), members);
+      }
+    })
+  );
 }
 
 export default async function handler(req, res) {
@@ -53,6 +68,8 @@ export default async function handler(req, res) {
 
   if (req.method === "GET") {
     const profile = await getProfile(user.uid);
+    const name = (req.query.name || "").trim();
+    if (name) await syncDisplayName(user.uid, profile.families, name);
     const families = (await Promise.all(profile.families.map(loadFamilySummary))).filter(Boolean);
     res.status(200).json({ isPlus: profile.isPlus, families });
     return;
@@ -85,9 +102,12 @@ export default async function handler(req, res) {
     }
     const id = familyId();
     const code = inviteCode();
+    const memberName = (req.body?.memberName || "").trim() || null;
     await Promise.all([
       redisSetJSON(metaKey(id), { name, ownerUid: user.uid, createdAt: Date.now(), inviteCode: code }),
-      redisSetJSON(membersKey(id), { [user.uid]: { email: user.email, isAnonymous: user.isAnonymous, joinedAt: Date.now() } }),
+      redisSetJSON(membersKey(id), {
+        [user.uid]: { name: memberName, email: user.email, isAnonymous: user.isAnonymous, joinedAt: Date.now() },
+      }),
       redisSetJSON(inviteKey(code), id),
     ]);
     profile.families = [...profile.families, id];
@@ -115,8 +135,9 @@ export default async function handler(req, res) {
       res.status(400).json({ error: "Bu ailenin zaten üyesisin." });
       return;
     }
+    const memberName = (req.body?.memberName || "").trim() || null;
     const members = await redisGetJSON(membersKey(id), {});
-    members[user.uid] = { email: user.email, isAnonymous: user.isAnonymous, joinedAt: Date.now() };
+    members[user.uid] = { name: memberName, email: user.email, isAnonymous: user.isAnonymous, joinedAt: Date.now() };
     await redisSetJSON(membersKey(id), members);
     profile.families = [...profile.families, id];
     await setProfile(user.uid, profile);
@@ -130,9 +151,7 @@ export default async function handler(req, res) {
       res.status(400).json({ error: "Bu ailenin üyesi değilsin." });
       return;
     }
-    const members = await redisGetJSON(membersKey(id), {});
-    delete members[user.uid];
-    await redisSetJSON(membersKey(id), members);
+    await removeMemberFromFamily(user.uid, id);
     profile.families = profile.families.filter((f) => f !== id);
     await setProfile(user.uid, profile);
     res.status(200).json({ ok: true });
