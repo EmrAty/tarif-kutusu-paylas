@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   ChefHat, Plus, Minus, Link2, ExternalLink, Trash2, Loader2, ArrowLeft, AlertCircle,
   FileText, Pencil, Check, ChevronDown, Star, Search, ShoppingCart, Clock, Gauge, Undo2, X, Package, Download,
@@ -132,6 +132,10 @@ function storageSet(key, value) {
 const FREE_RECIPE_LIMIT = 50;
 const MAX_FAMILIES = 2;
 const PERSONAL = "personal";
+
+function isFamilyRecipeScope(recipe) {
+  return (recipe._scopes || [recipe._scope]).some((s) => s && s !== PERSONAL);
+}
 
 // Kişisel veriler ("personal") sadece o hesaba, aile verileri ("family:<id>")
 // o ailenin tüm üyelerine ait — hangisi olduğu her istekte scope/familyId ile
@@ -952,6 +956,7 @@ export default function TarifKutusu() {
             onShopping={() => setView((v) => (v === "shopping" ? "list" : "shopping"))}
             onToggleFavorite={handleToggleFavorite}
             onDelete={handleDelete}
+            onSendNotification={handleSendNotification}
           />
         </div>
 
@@ -1755,11 +1760,45 @@ function scopeLabels(recipe, familyNameById) {
   return scopes.map((s) => (s === PERSONAL ? "Kişisel" : familyNameById?.[s] || "Aile"));
 }
 
-function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, onAdd, onManual, onPantry, onShopping, onToggleFavorite, onDelete }) {
+function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, onAdd, onManual, onPantry, onShopping, onToggleFavorite, onDelete, onSendNotification }) {
   const [listOpen, setListOpen] = useState(true);
   const [openCats, setOpenCats] = useState({});
   const [favOpen, setFavOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [longPressId, setLongPressId] = useState(null);
+  const [quickNotify, setQuickNotify] = useState({ id: null, status: "idle" }); // "idle" | "sending" | "sent" | "error"
+  const pressTimerRef = useRef(null);
+  const longPressFiredRef = useRef(false);
+
+  const startPress = (r) => {
+    if (!isFamilyRecipeScope(r)) return;
+    longPressFiredRef.current = false;
+    pressTimerRef.current = setTimeout(() => {
+      longPressFiredRef.current = true;
+      setLongPressId(r.id);
+    }, 500);
+  };
+  const cancelPress = () => {
+    if (pressTimerRef.current) {
+      clearTimeout(pressTimerRef.current);
+      pressTimerRef.current = null;
+    }
+  };
+  const handleQuickNotify = async (r) => {
+    if (quickNotify.id === r.id && quickNotify.status === "sending") return;
+    setQuickNotify({ id: r.id, status: "sending" });
+    try {
+      await onSendNotification(r);
+      setQuickNotify({ id: r.id, status: "sent" });
+      setTimeout(() => {
+        setQuickNotify({ id: null, status: "idle" });
+        setLongPressId(null);
+      }, 1500);
+    } catch (e) {
+      setQuickNotify({ id: r.id, status: "error" });
+      setTimeout(() => setQuickNotify({ id: null, status: "idle" }), 2000);
+    }
+  };
 
   const toggleCat = (cat) => {
     setOpenCats((prev) => ({ ...prev, [cat]: !prev[cat] }));
@@ -1776,67 +1815,138 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
 
   const renderRecipeButton = (r) => {
     const isActive = activeId === r.id;
+    const isFam = isFamilyRecipeScope(r);
+    const notifyOpen = isFam && longPressId === r.id;
+    const notifyStatus = quickNotify.id === r.id ? quickNotify.status : "idle";
     return (
-      <div
-        key={r.id}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "4px",
-          borderRadius: "6px",
-          border: `1px solid ${isActive ? COLORS.forest : "transparent"}`,
-          background: isActive ? COLORS.forest : "transparent",
-        }}
-      >
-        <button
-          onClick={() => onSelect(r.id)}
+      <div key={r.id} style={{ borderRadius: "6px", overflow: "hidden" }}>
+        <div
+          onPointerDown={() => startPress(r)}
+          onPointerUp={cancelPress}
+          onPointerLeave={cancelPress}
+          onPointerCancel={cancelPress}
           style={{
-            flex: 1,
-            minWidth: 0,
-            textAlign: "left",
-            padding: "10px 4px 10px 10px",
-            background: "transparent",
-            border: "none",
-            color: isActive ? "#F3EFE6" : COLORS.ink,
-            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            gap: "4px",
+            borderRadius: "6px",
+            border: `1px solid ${isActive ? COLORS.forest : "transparent"}`,
+            background: isActive ? COLORS.forest : "transparent",
           }}
         >
-          <div style={{ fontSize: "13px", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {r.title || "İsimsiz tarif"}
+          <button
+            onClick={() => {
+              if (longPressFiredRef.current) {
+                longPressFiredRef.current = false;
+                return;
+              }
+              onSelect(r.id);
+            }}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              textAlign: "left",
+              padding: "10px 4px 10px 10px",
+              background: "transparent",
+              border: "none",
+              color: isActive ? "#F3EFE6" : COLORS.ink,
+              cursor: "pointer",
+            }}
+          >
+            <div style={{ fontSize: "13px", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {r.title || "İsimsiz tarif"}
+            </div>
+            <div style={{ fontSize: "11px", marginTop: "2px", color: isActive ? "#C9C2AE" : COLORS.inkSoft }}>
+              {(() => {
+                const labels = scopeLabels(r, familyNameById).filter((l) => l !== "Kişisel");
+                return labels.length > 0 ? `${labels.join(" + ")} · ` : "";
+              })()}
+              {r.addedBy ? `${r.addedBy} · ` : ""}
+              {new Date(r.createdAt).toLocaleDateString("tr-TR")}
+            </div>
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleFavorite(r.id);
+            }}
+            aria-label="Favori"
+            style={{ padding: "8px", background: "transparent", border: "none", cursor: "pointer", flexShrink: 0 }}
+          >
+            <Star
+              size={15}
+              color={r.isFavorite ? COLORS.mustard : isActive ? "#C9C2AE" : COLORS.inkSoft}
+              fill={r.isFavorite ? COLORS.mustard : "none"}
+            />
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete(r.id);
+            }}
+            aria-label="Tarifi sil"
+            style={{ padding: "8px", background: "transparent", border: "none", cursor: "pointer", flexShrink: 0 }}
+          >
+            <Trash2 size={14} color={isActive ? "#C9C2AE" : COLORS.inkSoft} />
+          </button>
+        </div>
+        {isFam && (
+          <div style={{ display: "grid", gridTemplateRows: notifyOpen ? "1fr" : "0fr", transition: "grid-template-rows 220ms ease" }}>
+            <div style={{ overflow: "hidden" }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  padding: "6px 8px 8px",
+                  marginTop: "2px",
+                  borderRadius: "6px",
+                  border: `1px solid ${COLORS.line}`,
+                  background: COLORS.panel,
+                }}
+              >
+                <button
+                  onClick={() => handleQuickNotify(r)}
+                  disabled={notifyStatus === "sending"}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    padding: "6px 10px",
+                    borderRadius: "9999px",
+                    border: "none",
+                    background: "transparent",
+                    color: notifyStatus === "error" ? COLORS.danger : notifyStatus === "sent" ? COLORS.forest : COLORS.mustardDark,
+                    fontSize: "12px",
+                    fontWeight: 600,
+                    cursor: notifyStatus === "sending" ? "default" : "pointer",
+                    opacity: notifyStatus === "sending" ? 0.5 : 1,
+                  }}
+                >
+                  {notifyStatus === "sending" ? (
+                    <Loader2 size={15} className="spin" />
+                  ) : notifyStatus === "sent" ? (
+                    <Check size={15} />
+                  ) : (
+                    <Bell size={15} />
+                  )}
+                  {notifyStatus === "sent"
+                    ? "Bildirim gönderildi"
+                    : notifyStatus === "error"
+                    ? "Bildirim gönderilemedi"
+                    : "Canımın çektiğini bildir"}
+                </button>
+                <button
+                  onClick={() => setLongPressId(null)}
+                  aria-label="Kapat"
+                  style={{ marginLeft: "auto", padding: "6px", background: "transparent", border: "none", color: COLORS.inkSoft, cursor: "pointer" }}
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            </div>
           </div>
-          <div style={{ fontSize: "11px", marginTop: "2px", color: isActive ? "#C9C2AE" : COLORS.inkSoft }}>
-            {(() => {
-              const labels = scopeLabels(r, familyNameById).filter((l) => l !== "Kişisel");
-              return labels.length > 0 ? `${labels.join(" + ")} · ` : "";
-            })()}
-            {r.addedBy ? `${r.addedBy} · ` : ""}
-            {new Date(r.createdAt).toLocaleDateString("tr-TR")}
-          </div>
-        </button>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggleFavorite(r.id);
-          }}
-          aria-label="Favori"
-          style={{ padding: "8px", background: "transparent", border: "none", cursor: "pointer", flexShrink: 0 }}
-        >
-          <Star
-            size={15}
-            color={r.isFavorite ? COLORS.mustard : isActive ? "#C9C2AE" : COLORS.inkSoft}
-            fill={r.isFavorite ? COLORS.mustard : "none"}
-          />
-        </button>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete(r.id);
-          }}
-          aria-label="Tarifi sil"
-          style={{ padding: "8px", background: "transparent", border: "none", cursor: "pointer", flexShrink: 0 }}
-        >
-          <Trash2 size={14} color={isActive ? "#C9C2AE" : COLORS.inkSoft} />
-        </button>
+        )}
       </div>
     );
   };
@@ -2581,7 +2691,7 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
   const [draft, setDraft] = useState(title || "");
   const [notifyState, setNotifyState] = useState("idle"); // "idle" | "sending" | "sent" | "error"
 
-  const isFamilyRecipe = (recipe._scopes || [recipe._scope]).some((s) => s && s !== PERSONAL);
+  const isFamilyRecipe = isFamilyRecipeScope(recipe);
 
   const handleNotifyClick = async () => {
     if (notifyState === "sending") return;
