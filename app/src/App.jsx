@@ -8,16 +8,49 @@ import { auth, googleProvider, requestFcmToken } from "./firebase.js";
 import {
   onAuthStateChanged,
   signInWithPopup,
+  signInWithCredential,
+  GoogleAuthProvider,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   signInAnonymously,
   linkWithPopup,
+  linkWithCredential,
   signOut,
 } from "firebase/auth";
 import { Capacitor } from "@capacitor/core";
 import { App as CapacitorApp } from "@capacitor/app";
 import { SplashScreen } from "@capacitor/splash-screen";
+import { FirebaseAuthentication } from "@capacitor-firebase/authentication";
 import ShareReceiver from "./capacitorShare.js";
+
+// Google, gömülü (embedded) WebView'lerde OAuth popup'ını User-Agent'a bakarak
+// engelliyor ("disallowed_useragent") - TWA gerçek Chrome kullandığı için sorun
+// değildi, ama Capacitor'ın kendi WebView'inde signInWithPopup hiç sonuçlanmadan
+// asılı kalıyordu. Native Android'de bunun yerine cihazın kendi Google Sign-In
+// arayüzü (@capacitor-firebase/authentication) kullanılıp dönen id token'la
+// Firebase JS SDK'sında oturum açılıyor - auth nesnesi (onAuthStateChanged,
+// authedFetch vb.) hiç değişmiyor, sadece kimlik bilgisini alma yöntemi farklı.
+async function googleSignIn() {
+  if (Capacitor.isNativePlatform()) {
+    const result = await FirebaseAuthentication.signInWithGoogle();
+    const idToken = result.credential?.idToken;
+    if (!idToken) throw new Error("Google girişi iptal edildi.");
+    const credential = GoogleAuthProvider.credential(idToken);
+    return signInWithCredential(auth, credential);
+  }
+  return signInWithPopup(auth, googleProvider);
+}
+
+async function googleLink(user) {
+  if (Capacitor.isNativePlatform()) {
+    const result = await FirebaseAuthentication.signInWithGoogle();
+    const idToken = result.credential?.idToken;
+    if (!idToken) throw new Error("Google girişi iptal edildi.");
+    const credential = GoogleAuthProvider.credential(idToken);
+    return linkWithCredential(user, credential);
+  }
+  return linkWithPopup(user, googleProvider);
+}
 
 const COLORS = {
   paper: "#F3EFE6",
@@ -1445,7 +1478,7 @@ function AuthGate({ onGuest }) {
     setError("");
     setBusy(true);
     try {
-      await signInWithPopup(auth, googleProvider);
+      await googleSignIn();
     } catch (e) {
       setError(mapAuthError(e.code));
     } finally {
@@ -4333,7 +4366,7 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal }) {
     setLinkError("");
     setLinking(true);
     try {
-      await linkWithPopup(authUser, googleProvider);
+      await googleLink(authUser);
     } catch (e) {
       setLinkError("Bağlanamadı, tekrar dener misin?");
     } finally {
