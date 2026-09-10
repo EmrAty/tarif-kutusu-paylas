@@ -121,6 +121,10 @@ async function leaveFamily(familyId) {
   return authedFetch("/api/families", { method: "POST", body: { action: "leave", familyId } });
 }
 
+async function deleteFamily(familyId) {
+  return authedFetch("/api/families", { method: "POST", body: { action: "delete", familyId } });
+}
+
 async function setPlusFlag(isPlus) {
   return authedFetch("/api/profile", { method: "POST", body: { isPlus } });
 }
@@ -450,7 +454,7 @@ export default function TarifKutusu() {
   }, []);
 
   const [recipeBuckets, setRecipeBuckets] = useState({ [PERSONAL]: [] });
-  const [saveTarget, setSaveTarget] = useState(PERSONAL);
+  const [saveTargets, setSaveTargets] = useState([PERSONAL]);
 
   const loadRecipeBucket = useCallback(async (scopeKey) => {
     try {
@@ -505,16 +509,29 @@ export default function TarifKutusu() {
     return map;
   }, [families]);
 
+  // Aynı tarif birden fazla yere (kişisel + bir ya da iki aile) kaydedilebiliyor —
+  // her yerde AYNI id'yle saklanıyor. Burada id'ye göre tekilleştirip, o tarifin
+  // ait olduğu tüm yerleri "_scopes" dizisinde topluyoruz ki "Yemekler" listesinde
+  // aynı yemek birden fazla kez görünmesin.
   const recipes = useMemo(() => {
-    const personal = (recipeBuckets[PERSONAL] || []).map((r) => ({ ...r, _scope: PERSONAL }));
-    const familyRecipes = families.flatMap((f) =>
-      (recipeBuckets[f.id] || []).map((r) => ({ ...r, _scope: f.id }))
-    );
-    return [...personal, ...familyRecipes];
+    const byId = new Map();
+    const addFrom = (scopeKey, list) => {
+      list.forEach((r) => {
+        const existing = byId.get(r.id);
+        if (existing) {
+          existing._scopes.push(scopeKey);
+        } else {
+          byId.set(r.id, { ...r, _scopes: [scopeKey] });
+        }
+      });
+    };
+    addFrom(PERSONAL, recipeBuckets[PERSONAL] || []);
+    families.forEach((f) => addFrom(f.id, recipeBuckets[f.id] || []));
+    return Array.from(byId.values());
   }, [recipeBuckets, families]);
 
   const persistScope = useCallback(async (scopeKey, updatedList) => {
-    const cleaned = updatedList.map(({ _scope, ...rest }) => rest);
+    const cleaned = updatedList.map(({ _scope, _scopes, ...rest }) => rest);
     setRecipeBuckets((prev) => ({ ...prev, [scopeKey]: cleaned }));
     try {
       await bucketSet("recipes", scopeKey, JSON.stringify(cleaned));
@@ -522,6 +539,23 @@ export default function TarifKutusu() {
       // yazma başarısız olsa da yerel görünüm güncel kalsın
     }
   }, []);
+
+  // Bir tarifin kayıtlı olduğu TÜM yerlere aynı değişikliği uygular (favori,
+  // kategori, isim, düzenleme) — sadece bir kopyasını güncelleyip diğerlerini
+  // eski hâlde bırakmamak için.
+  const applyToAllScopes = useCallback(
+    async (id, updater) => {
+      const recipe = recipes.find((r) => r.id === id);
+      if (!recipe) return;
+      await Promise.all(
+        recipe._scopes.map((scopeKey) => {
+          const list = (recipeBuckets[scopeKey] || []).map((r) => (r.id === id ? updater(r) : r));
+          return persistScope(scopeKey, list);
+        })
+      );
+    },
+    [recipes, recipeBuckets, persistScope]
+  );
 
   const handleExtract = async () => {
     setError("");
@@ -533,7 +567,7 @@ export default function TarifKutusu() {
       setError("Yemeğin hangi kategoriye ait olduğunu seçmen lazım.");
       return;
     }
-    if (saveTarget === PERSONAL && !isPlus && (recipeBuckets[PERSONAL] || []).length >= FREE_RECIPE_LIMIT) {
+    if (saveTargets.includes(PERSONAL) && !isPlus && (recipeBuckets[PERSONAL] || []).length >= FREE_RECIPE_LIMIT) {
       setError(`Ücretsiz hesaplarda en fazla ${FREE_RECIPE_LIMIT} kişisel tarif olabilir. Sınırsız eklemek için Plus'a geç.`);
       return;
     }
@@ -549,8 +583,7 @@ export default function TarifKutusu() {
         addedBy: personName || "",
         ...parsed,
       };
-      const updated = [recipe, ...(recipeBuckets[saveTarget] || [])];
-      await persistScope(saveTarget, updated);
+      await Promise.all(saveTargets.map((scopeKey) => persistScope(scopeKey, [recipe, ...(recipeBuckets[scopeKey] || [])])));
       setLink("");
       setCaption("");
       setNotes("");
@@ -568,73 +601,80 @@ export default function TarifKutusu() {
   const handleDelete = async (id) => {
     const recipe = recipes.find((r) => r.id === id);
     if (!recipe) return;
-    const scopeKey = recipe._scope;
-    const list = recipeBuckets[scopeKey] || [];
-    const index = list.findIndex((r) => r.id === id);
-    if (index === -1) return;
-    const removed = list[index];
-    const updated = list.filter((r) => r.id !== id);
-    await persistScope(scopeKey, updated);
+    const removalInfo = recipe._scopes.map((scopeKey) => {
+      const list = recipeBuckets[scopeKey] || [];
+      const index = list.findIndex((r) => r.id === id);
+      return { scopeKey, index, item: list[index] };
+    });
+    await Promise.all(
+      removalInfo.map(({ scopeKey }) => persistScope(scopeKey, (recipeBuckets[scopeKey] || []).filter((r) => r.id !== id)))
+    );
     setView("list");
 
     if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
-    setUndoState({ recipe: removed, index, scopeKey });
+    setUndoState({ title: recipe.title, removalInfo });
     undoTimerRef.current = setTimeout(() => setUndoState(null), 6000);
   };
 
   const handleUndoDelete = async () => {
     if (!undoState) return;
     if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
-    const { scopeKey, recipe, index } = undoState;
-    const list = [...(recipeBuckets[scopeKey] || [])];
-    list.splice(index, 0, recipe);
-    await persistScope(scopeKey, list);
+    await Promise.all(
+      undoState.removalInfo.map(({ scopeKey, index, item }) => {
+        if (!item) return null;
+        const list = [...(recipeBuckets[scopeKey] || [])];
+        list.splice(index, 0, item);
+        return persistScope(scopeKey, list);
+      })
+    );
     setUndoState(null);
   };
 
   const handleRename = async (id, newTitle) => {
     const trimmed = newTitle.trim();
     if (!trimmed) return;
-    const recipe = recipes.find((r) => r.id === id);
-    if (!recipe) return;
-    const updated = (recipeBuckets[recipe._scope] || []).map((r) => (r.id === id ? { ...r, title: trimmed } : r));
-    await persistScope(recipe._scope, updated);
+    await applyToAllScopes(id, (r) => ({ ...r, title: trimmed }));
   };
 
   const handleToggleFavorite = async (id) => {
-    const recipe = recipes.find((r) => r.id === id);
-    if (!recipe) return;
-    const updated = (recipeBuckets[recipe._scope] || []).map((r) => (r.id === id ? { ...r, isFavorite: !r.isFavorite } : r));
-    await persistScope(recipe._scope, updated);
+    await applyToAllScopes(id, (r) => ({ ...r, isFavorite: !r.isFavorite }));
   };
 
   const handleChangeCategory = async (id, newCategory) => {
-    const recipe = recipes.find((r) => r.id === id);
-    if (!recipe) return;
-    const updated = (recipeBuckets[recipe._scope] || []).map((r) => (r.id === id ? { ...r, category: newCategory } : r));
-    await persistScope(recipe._scope, updated);
+    await applyToAllScopes(id, (r) => ({ ...r, category: newCategory }));
   };
 
   const handleManualSave = async (data) => {
     const recipe = { id: uid(), createdAt: Date.now(), isFavorite: false, addedBy: personName || "", ...data };
-    const updated = [recipe, ...(recipeBuckets[saveTarget] || [])];
-    await persistScope(saveTarget, updated);
+    await Promise.all(saveTargets.map((scopeKey) => persistScope(scopeKey, [recipe, ...(recipeBuckets[scopeKey] || [])])));
     setManualPrefill(null);
     setActiveId(recipe.id);
     setView("detail");
   };
 
   const handleEditSave = async (id, data) => {
-    const recipe = recipes.find((r) => r.id === id);
-    if (!recipe) return;
-    const updated = (recipeBuckets[recipe._scope] || []).map((r) => (r.id === id ? { ...r, ...data } : r));
-    await persistScope(recipe._scope, updated);
+    await applyToAllScopes(id, (r) => ({ ...r, ...data }));
     setView("detail");
   };
 
-  const [autoAddToShoppingId, setAutoAddToShoppingId] = useState(null);
-  const addRecipeToShoppingList = (recipe) => {
-    setAutoAddToShoppingId(recipe.id);
+  const [shoppingInitialContext, setShoppingInitialContext] = useState(PERSONAL);
+  const addRecipeToShoppingList = async (recipe) => {
+    const scopes = recipe._scopes && recipe._scopes.length ? recipe._scopes : [PERSONAL];
+    await Promise.all(
+      scopes.map(async (scopeKey) => {
+        try {
+          const res = await bucketGet("shopping-list", scopeKey);
+          const data = res && res.value ? JSON.parse(res.value) : {};
+          const selected = data.selected || [];
+          if (!selected.includes(recipe.id)) {
+            await bucketSet("shopping-list", scopeKey, JSON.stringify({ ...data, selected: [...selected, recipe.id] }));
+          }
+        } catch (e) {
+          // eklenemezse sessizce geç, kullanıcı Alışveriş Listesi'nden elle seçebilir
+        }
+      })
+    );
+    setShoppingInitialContext(scopes[0]);
     setView("shopping");
   };
 
@@ -726,12 +766,12 @@ export default function TarifKutusu() {
             }}
             onAdd={() => {
               setError("");
-              setSaveTarget(PERSONAL);
+              setSaveTargets([PERSONAL]);
               setView((v) => (v === "add" ? "list" : "add"));
             }}
             onManual={() => {
               setManualPrefill(null);
-              setSaveTarget(PERSONAL);
+              setSaveTargets([PERSONAL]);
               setView((v) => (v === "manual" ? "list" : "manual"));
             }}
             onPantry={() => setView((v) => (v === "pantry" ? "list" : "pantry"))}
@@ -758,8 +798,8 @@ export default function TarifKutusu() {
               setNotes={setNotes}
               setImages={setImages}
               setCategory={setCategory}
-              saveTarget={saveTarget}
-              setSaveTarget={setSaveTarget}
+              saveTargets={saveTargets}
+              setSaveTargets={setSaveTargets}
               isPlus={isPlus}
               families={families}
               onSubmit={handleExtract}
@@ -772,8 +812,8 @@ export default function TarifKutusu() {
               heading="Yeni Tarif Oluştur"
               initial={manualPrefill}
               isNew
-              saveTarget={saveTarget}
-              setSaveTarget={setSaveTarget}
+              saveTargets={saveTargets}
+              setSaveTargets={setSaveTargets}
               isPlus={isPlus}
               families={families}
               personalCount={(recipeBuckets[PERSONAL] || []).length}
@@ -810,7 +850,7 @@ export default function TarifKutusu() {
           )}
 
           {view === "shopping" && (
-            <ShoppingList recipes={recipes} isPlus={isPlus} families={families} autoAddId={autoAddToShoppingId} onAutoAdded={() => setAutoAddToShoppingId(null)} />
+            <ShoppingList key={shoppingInitialContext} recipes={recipes} isPlus={isPlus} families={families} initialContext={shoppingInitialContext} />
           )}
 
           {view === "pantry" && (
@@ -828,7 +868,7 @@ export default function TarifKutusu() {
                   ingredients: suggestion.ingredients || [],
                   instructions: suggestion.instructions || [],
                 });
-                setSaveTarget(PERSONAL);
+                setSaveTargets([PERSONAL]);
                 setView("manual");
               }}
             />
@@ -853,6 +893,7 @@ export default function TarifKutusu() {
             isPlus={isPlus}
             families={families}
             personName={personName}
+            currentUid={authUser?.uid}
             onReload={loadFamiliesState}
             onOpenPlus={() => setModalView("plus")}
             onImportFamily={(familyId) => loadRecipeBucket(familyId)}
@@ -984,7 +1025,7 @@ export default function TarifKutusu() {
             fontSize: "14px",
           }}
         >
-          <span>"{undoState.recipe.title || "İsimsiz tarif"}" silindi.</span>
+          <span>"{undoState.title || "İsimsiz tarif"}" silindi.</span>
           <button
             onClick={handleUndoDelete}
             style={{
@@ -1143,41 +1184,44 @@ function SideMenu({ open, onClose, isPlus, onNavigate }) {
           bottom: 0,
           width: "260px",
           maxWidth: "80vw",
-          background: COLORS.panel,
-          boxShadow: "4px 0 24px rgba(0,0,0,0.18)",
+          background: COLORS.paper,
+          boxShadow: "4px 0 24px rgba(0,0,0,0.25)",
           transform: open ? "translateX(0)" : "translateX(-100%)",
           transition: "transform 240ms ease",
           zIndex: 71,
           display: "flex",
           flexDirection: "column",
-          padding: "20px 0",
+          overflow: "hidden",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: "10px", padding: "0 20px 18px", borderBottom: `1px solid ${COLORS.line}` }}>
-          <div style={{ padding: "8px", borderRadius: "9999px", background: COLORS.mustard }}>
-            <ChefHat size={16} color={COLORS.forestDark} />
+        <div style={{ background: COLORS.forest, padding: "22px 20px 16px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <div style={{ padding: "8px", borderRadius: "9999px", background: COLORS.mustard }}>
+              <ChefHat size={16} color={COLORS.forestDark} />
+            </div>
+            <span style={{ fontFamily: SERIF, fontSize: "18px", color: "#F8F5EC" }}>Tarif Kutusu</span>
+            {isPlus && (
+              <span
+                style={{
+                  marginLeft: "auto",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "4px",
+                  fontSize: "10px",
+                  fontWeight: 700,
+                  color: COLORS.forestDark,
+                  background: COLORS.mustard,
+                  padding: "3px 8px",
+                  borderRadius: "9999px",
+                }}
+              >
+                <Crown size={10} /> PLUS
+              </span>
+            )}
           </div>
-          <span style={{ fontFamily: SERIF, fontSize: "17px", color: COLORS.ink }}>Tarif Kutusu</span>
-          {isPlus && (
-            <span
-              style={{
-                marginLeft: "auto",
-                display: "flex",
-                alignItems: "center",
-                gap: "4px",
-                fontSize: "10px",
-                fontWeight: 700,
-                color: COLORS.forestDark,
-                background: COLORS.mustard,
-                padding: "3px 8px",
-                borderRadius: "9999px",
-              }}
-            >
-              <Crown size={10} /> PLUS
-            </span>
-          )}
         </div>
-        <nav style={{ display: "flex", flexDirection: "column", padding: "10px 10px" }}>
+        <div style={{ height: "3px", background: `linear-gradient(90deg, ${COLORS.mustard}, ${COLORS.mustard} 60%, transparent)`, flexShrink: 0 }} />
+        <nav style={{ display: "flex", flexDirection: "column", padding: "14px 10px" }}>
           {items.map(({ key, label, icon: Icon }) => (
             <button
               key={key}
@@ -1191,6 +1235,7 @@ function SideMenu({ open, onClose, isPlus, onNavigate }) {
                 background: "transparent",
                 border: "none",
                 color: COLORS.ink,
+                fontFamily: BODY,
                 fontSize: "14px",
                 fontWeight: 500,
                 cursor: "pointer",
@@ -1240,24 +1285,27 @@ function ModalSheet({ title, onClose, children }) {
             .md-modal-sheet { height: 88vh !important; border-radius: 20px !important; margin-bottom: 24px; }
           }
         `}</style>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            padding: "18px 20px",
-            borderBottom: `1px solid ${COLORS.line}`,
-            flexShrink: 0,
-          }}
-        >
-          <h2 style={{ fontFamily: SERIF, fontSize: "19px", color: COLORS.ink, margin: 0 }}>{title}</h2>
-          <button
-            onClick={onClose}
-            aria-label="Kapat"
-            style={{ background: "transparent", border: "none", cursor: "pointer", color: COLORS.inkSoft, padding: "6px", display: "flex" }}
+        <div style={{ flexShrink: 0 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "18px 20px",
+              background: COLORS.forest,
+              borderRadius: "20px 20px 0 0",
+            }}
           >
-            <X size={20} />
-          </button>
+            <h2 style={{ fontFamily: SERIF, fontSize: "19px", color: "#F8F5EC", margin: 0 }}>{title}</h2>
+            <button
+              onClick={onClose}
+              aria-label="Kapat"
+              style={{ background: "rgba(243,239,230,0.12)", border: "none", borderRadius: "9999px", cursor: "pointer", color: "#F3EFE6", padding: "6px", display: "flex" }}
+            >
+              <X size={18} />
+            </button>
+          </div>
+          <div style={{ height: "3px", background: `linear-gradient(90deg, ${COLORS.mustard}, ${COLORS.mustard} 60%, transparent)` }} />
         </div>
         <div style={{ flex: 1, overflowY: "auto", padding: "20px" }}>{children}</div>
       </div>
@@ -1525,6 +1573,13 @@ function AuthGate({ onGuest }) {
   );
 }
 
+// Bir tarif hem kişisel hem bir ya da iki ailede kayıtlı olabilir — hepsini
+// okunabilir isimlere çeviriyor (örn. ["Kişisel", "Yılmazlar"]).
+function scopeLabels(recipe, familyNameById) {
+  const scopes = recipe._scopes || [recipe._scope];
+  return scopes.map((s) => (s === PERSONAL ? "Kişisel" : familyNameById?.[s] || "Aile"));
+}
+
 function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, onAdd, onManual, onPantry, onShopping, onToggleFavorite, onDelete }) {
   const [listOpen, setListOpen] = useState(true);
   const [openCats, setOpenCats] = useState({});
@@ -1575,7 +1630,10 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
             {r.title || "İsimsiz tarif"}
           </div>
           <div style={{ fontSize: "11px", marginTop: "2px", color: isActive ? "#C9C2AE" : COLORS.inkSoft }}>
-            {r._scope !== PERSONAL ? `${familyNameById?.[r._scope] || "Aile"} · ` : ""}
+            {(() => {
+              const labels = scopeLabels(r, familyNameById).filter((l) => l !== "Kişisel");
+              return labels.length > 0 ? `${labels.join(" + ")} · ` : "";
+            })()}
             {r.addedBy ? `${r.addedBy} · ` : ""}
             {new Date(r.createdAt).toLocaleDateString("tr-TR")}
           </div>
@@ -2010,11 +2068,22 @@ function EmptyState({ onAdd }) {
   );
 }
 
-function SaveTargetPicker({ saveTarget, setSaveTarget, isPlus, families }) {
+function SaveTargetPicker({ saveTargets, setSaveTargets, isPlus, families }) {
   const options = [
     { key: PERSONAL, label: "Kişisel Tariflerim" },
     ...(isPlus ? families.map((f) => ({ key: f.id, label: f.name })) : []),
   ];
+
+  const toggle = (key) => {
+    setSaveTargets((prev) => {
+      if (prev.includes(key)) {
+        const next = prev.filter((k) => k !== key);
+        return next.length === 0 ? prev : next; // en az bir yer seçili kalmalı
+      }
+      return [...prev, key];
+    });
+  };
+
   return (
     <>
       <label
@@ -2028,17 +2097,20 @@ function SaveTargetPicker({ saveTarget, setSaveTarget, isPlus, families }) {
           marginBottom: "6px",
         }}
       >
-        Kaydetme yeri
+        Kaydetme yeri {options.length > 1 && <span style={{ textTransform: "none", fontWeight: 400 }}>(birden fazla seçebilirsin)</span>}
       </label>
       <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "16px" }}>
         {options.map((opt) => {
-          const selected = saveTarget === opt.key;
+          const selected = saveTargets.includes(opt.key);
           return (
             <button
               key={opt.key}
               type="button"
-              onClick={() => setSaveTarget(opt.key)}
+              onClick={() => toggle(opt.key)}
               style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
                 padding: "8px 14px",
                 borderRadius: "9999px",
                 fontSize: "13px",
@@ -2049,6 +2121,7 @@ function SaveTargetPicker({ saveTarget, setSaveTarget, isPlus, families }) {
                 cursor: "pointer",
               }}
             >
+              {selected && <Check size={13} />}
               {opt.label}
             </button>
           );
@@ -2058,7 +2131,7 @@ function SaveTargetPicker({ saveTarget, setSaveTarget, isPlus, families }) {
   );
 }
 
-function AddForm({ link, caption, notes, images, category, busy, error, setLink, setCaption, setNotes, setImages, setCategory, saveTarget, setSaveTarget, isPlus, families, onSubmit, onCancel }) {
+function AddForm({ link, caption, notes, images, category, busy, error, setLink, setCaption, setNotes, setImages, setCategory, saveTargets, setSaveTargets, isPlus, families, onSubmit, onCancel }) {
   const [fetchingCaption, setFetchingCaption] = useState(false);
   const [captionFetchError, setCaptionFetchError] = useState("");
   const fetchedForLinkRef = React.useRef("");
@@ -2271,7 +2344,7 @@ function AddForm({ link, caption, notes, images, category, busy, error, setLink,
         })}
       </div>
 
-      <SaveTargetPicker saveTarget={saveTarget} setSaveTarget={setSaveTarget} isPlus={isPlus} families={families} />
+      <SaveTargetPicker saveTargets={saveTargets} setSaveTargets={setSaveTargets} isPlus={isPlus} families={families} />
 
       {error && (
         <div
@@ -2343,7 +2416,7 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
   };
 
   const hasValidCategory = CATEGORIES.includes(category);
-  const scopeLabel = recipe._scope === PERSONAL ? "Kişisel" : familyNameById?.[recipe._scope] || "Aile";
+  const scopeLabel = scopeLabels(recipe, familyNameById).join(" + ");
 
   const metaParts = [
     servings ? `${servings} porsiyon` : null,
@@ -2690,15 +2763,11 @@ function ContextTabs({ context, setContext, isPlus, families }) {
   );
 }
 
-function ShoppingList({ recipes, isPlus, families, autoAddId, onAutoAdded }) {
-  const [context, setContext] = useState(PERSONAL);
+function ShoppingList({ recipes, isPlus, families, initialContext }) {
+  const [context, setContext] = useState(initialContext || PERSONAL);
   const [selected, setSelected] = useState([]);
   const [checked, setChecked] = useState({});
   const [loaded, setLoaded] = useState(false);
-  // Hangi context'in verisinin gerçekten yüklendiğini takip ediyor — context değişip
-  // yeni verinin gelişi arasındaki kısa aralıkta eski selected/checked state'iyle
-  // yanlış bağlama yazma yapılmasını önlemek için (aşağıdaki otomatik ekleme efekti).
-  const loadedContextRef = React.useRef(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -2710,7 +2779,6 @@ function ShoppingList({ recipes, isPlus, families, autoAddId, onAutoAdded }) {
           const data = res && res.value ? JSON.parse(res.value) : {};
           setSelected(data.selected || []);
           setChecked(data.checked || {});
-          loadedContextRef.current = context;
         }
       } catch (e) {
         // henüz alışveriş listesi yok
@@ -2736,28 +2804,9 @@ function ShoppingList({ recipes, isPlus, families, autoAddId, onAutoAdded }) {
     [context]
   );
 
-  const contextRecipes = recipes.filter((r) => r._scope === context);
-
-  // Tarif detayından "Alışveriş Listesine Ekle" ile geldiyse: tarifin ait olduğu
-  // bağlama (kişisel/aile) otomatik geçip listeye ekliyor.
-  useEffect(() => {
-    if (!autoAddId) return;
-    const recipe = recipes.find((r) => r.id === autoAddId);
-    if (!recipe) {
-      onAutoAdded();
-      return;
-    }
-    if (recipe._scope !== context) {
-      setContext(recipe._scope);
-      return;
-    }
-    if (!loaded || loadedContextRef.current !== context) return;
-    if (!selected.includes(autoAddId)) {
-      persist([...selected, autoAddId], checked);
-    }
-    onAutoAdded();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoAddId, context, loaded]);
+  // Bir tarif birden fazla yere (kişisel + aile) kaydedilmiş olabilir — hangi
+  // context'te olursak olalım, o context'e ait olan tariflerin hepsi seçilebilir.
+  const contextRecipes = recipes.filter((r) => (r._scopes || [r._scope]).includes(context));
 
   const toggleSelect = (id) => {
     const next = selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id];
@@ -3002,7 +3051,7 @@ function NutritionRow({ label, value, unit, last }) {
   );
 }
 
-function RecipeEditor({ heading, initial, isNew, saveTarget, setSaveTarget, isPlus, families, personalCount, onSave, onCancel }) {
+function RecipeEditor({ heading, initial, isNew, saveTargets, setSaveTargets, isPlus, families, personalCount, onSave, onCancel }) {
   const [title, setTitle] = useState(initial?.title || "");
   const [category, setCategory] = useState(initial?.category || "");
   const [servings, setServings] = useState(initial?.servings != null ? String(initial.servings) : "");
@@ -3067,7 +3116,7 @@ function RecipeEditor({ heading, initial, isNew, saveTarget, setSaveTarget, isPl
       setError("Bir kategori seçmen lazım.");
       return;
     }
-    if (isNew && saveTarget === PERSONAL && !isPlus && personalCount >= FREE_RECIPE_LIMIT) {
+    if (isNew && saveTargets.includes(PERSONAL) && !isPlus && personalCount >= FREE_RECIPE_LIMIT) {
       setError(`Ücretsiz hesaplarda en fazla ${FREE_RECIPE_LIMIT} kişisel tarif olabilir. Sınırsız eklemek için Plus'a geç.`);
       return;
     }
@@ -3136,7 +3185,7 @@ function RecipeEditor({ heading, initial, isNew, saveTarget, setSaveTarget, isPl
           })}
         </div>
 
-        {isNew && <SaveTargetPicker saveTarget={saveTarget} setSaveTarget={setSaveTarget} isPlus={isPlus} families={families} />}
+        {isNew && <SaveTargetPicker saveTargets={saveTargets} setSaveTargets={setSaveTargets} isPlus={isPlus} families={families} />}
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "16px" }}>
           <div>
@@ -3467,7 +3516,7 @@ function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onCreateFromS
     }
   };
 
-  const contextRecipes = recipes.filter((r) => r._scope === context);
+  const contextRecipes = recipes.filter((r) => (r._scopes || [r._scope]).includes(context));
 
   const results = contextRecipes
     .map((r) => {
@@ -3728,7 +3777,7 @@ function FavoritesView({ recipes, familyNameById, onSelect }) {
             >
               <span style={{ fontFamily: SERIF, fontSize: "15px", color: COLORS.ink }}>{r.title || "İsimsiz tarif"}</span>
               <span style={{ fontSize: "12px", color: COLORS.inkSoft, flexShrink: 0 }}>
-                {r._scope === PERSONAL ? "Kişisel" : familyNameById[r._scope] || "Aile"}
+                {scopeLabels(r, familyNameById).join(" + ")}
               </span>
             </button>
           ))}
@@ -3738,12 +3787,13 @@ function FavoritesView({ recipes, familyNameById, onSelect }) {
   );
 }
 
-function FamiliesView({ isPlus, families, personName, onReload, onOpenPlus, onImportFamily }) {
+function FamiliesView({ isPlus, families, personName, currentUid, onReload, onOpenPlus, onImportFamily }) {
   const [nameDraft, setNameDraft] = useState("");
   const [codeDraft, setCodeDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [importState, setImportState] = useState({});
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
 
   // Plus kapatılmış ama hâlâ üyesi olduğu aileler varsa (ör. Plus'ı kapattı), onları
   // görüp ayrılabilsin diye upsell sadece hiç ailesi yoksa tam ekran gösteriliyor.
@@ -3827,6 +3877,19 @@ function FamiliesView({ isPlus, families, personName, onReload, onOpenPlus, onIm
     }
   };
 
+  const handleDelete = async (familyId) => {
+    setBusy(true);
+    try {
+      await deleteFamily(familyId);
+      setConfirmDeleteId(null);
+      await onReload();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleImport = async (familyId) => {
     setImportState((prev) => ({ ...prev, [familyId]: "checking" }));
     try {
@@ -3844,13 +3907,42 @@ function FamiliesView({ isPlus, families, personName, onReload, onOpenPlus, onIm
         <div key={f.id} style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "10px" }}>
             <h3 style={{ fontFamily: SERIF, fontSize: "18px", color: COLORS.ink, margin: 0 }}>{f.name}</h3>
-            <button
-              onClick={() => handleLeave(f.id)}
-              disabled={busy}
-              style={{ fontSize: "12px", color: COLORS.danger, background: "transparent", border: "none", cursor: "pointer" }}
-            >
-              Aileden Ayrıl
-            </button>
+            {f.ownerUid === currentUid ? (
+              confirmDeleteId === f.id ? (
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <span style={{ fontSize: "12px", color: COLORS.danger }}>Emin misin?</span>
+                  <button
+                    onClick={() => handleDelete(f.id)}
+                    disabled={busy}
+                    style={{ fontSize: "12px", fontWeight: 700, color: "#fff", background: COLORS.danger, border: "none", borderRadius: "6px", padding: "4px 10px", cursor: "pointer" }}
+                  >
+                    Evet, Sil
+                  </button>
+                  <button
+                    onClick={() => setConfirmDeleteId(null)}
+                    style={{ fontSize: "12px", color: COLORS.inkSoft, background: "transparent", border: "none", cursor: "pointer" }}
+                  >
+                    Vazgeç
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setConfirmDeleteId(f.id)}
+                  disabled={busy}
+                  style={{ fontSize: "12px", color: COLORS.danger, background: "transparent", border: "none", cursor: "pointer" }}
+                >
+                  Aileyi Sil
+                </button>
+              )
+            ) : (
+              <button
+                onClick={() => handleLeave(f.id)}
+                disabled={busy}
+                style={{ fontSize: "12px", color: COLORS.danger, background: "transparent", border: "none", cursor: "pointer" }}
+              >
+                Aileden Ayrıl
+              </button>
+            )}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px", flexWrap: "wrap" }}>
             <span style={{ fontSize: "12px", color: COLORS.inkSoft }}>Davet kodu:</span>

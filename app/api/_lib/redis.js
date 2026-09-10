@@ -23,6 +23,20 @@ export async function redisGet(key) {
   return data.result ?? null;
 }
 
+export async function redisDel(key) {
+  assertConfigured();
+  const res = await fetch(BASE_URL, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
+    body: JSON.stringify(["DEL", key]),
+  });
+  if (!res.ok) {
+    const err = new Error("Veritabanından silinemedi.");
+    err.status = 502;
+    throw err;
+  }
+}
+
 export async function redisSet(key, value) {
   assertConfigured();
   const res = await fetch(BASE_URL, {

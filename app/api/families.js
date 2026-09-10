@@ -1,5 +1,5 @@
 import { requireUser } from "./_lib/auth.js";
-import { redisGetJSON, redisSetJSON } from "./_lib/redis.js";
+import { redisGetJSON, redisSetJSON, redisDel } from "./_lib/redis.js";
 import { getProfile, setProfile, MAX_FAMILIES } from "./_lib/profile.js";
 import { membersKey, removeMemberFromFamily } from "./_lib/families.js";
 
@@ -154,6 +154,46 @@ export default async function handler(req, res) {
     await removeMemberFromFamily(user.uid, id);
     profile.families = profile.families.filter((f) => f !== id);
     await setProfile(user.uid, profile);
+    res.status(200).json({ ok: true });
+    return;
+  }
+
+  if (action === "delete") {
+    const id = req.body?.familyId;
+    if (!id || !profile.families.includes(id)) {
+      res.status(400).json({ error: "Bu ailenin üyesi değilsin." });
+      return;
+    }
+    const meta = await redisGetJSON(metaKey(id), null);
+    if (!meta) {
+      res.status(404).json({ error: "Aile bulunamadı." });
+      return;
+    }
+    if (meta.ownerUid !== user.uid) {
+      res.status(403).json({ error: "Sadece aileyi kuran kişi silebilir." });
+      return;
+    }
+    const members = await redisGetJSON(membersKey(id), {});
+    // Silinen ailenin tüm üyelerinin kendi profilinden de bu aile çıkarılıyor,
+    // sadece silen kişinin değil — yoksa diğer üyeler artık var olmayan bir
+    // aileye üyeymiş gibi görünmeye devam ederdi.
+    await Promise.all(
+      Object.keys(members).map(async (uid) => {
+        const memberProfile = await getProfile(uid);
+        if (memberProfile.families.includes(id)) {
+          memberProfile.families = memberProfile.families.filter((f) => f !== id);
+          await setProfile(uid, memberProfile);
+        }
+      })
+    );
+    await Promise.all([
+      redisDel(metaKey(id)),
+      redisDel(membersKey(id)),
+      redisDel(`family:${id}:recipes`),
+      redisDel(`family:${id}:shopping-list`),
+      redisDel(`family:${id}:pantry-items`),
+      redisDel(inviteKey(meta.inviteCode)),
+    ]);
     res.status(200).json({ ok: true });
     return;
   }
