@@ -10,6 +10,7 @@ import {
   signInWithPopup,
   signInWithCredential,
   GoogleAuthProvider,
+  EmailAuthProvider,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   signInAnonymously,
@@ -30,12 +31,24 @@ import ShareReceiver from "./capacitorShare.js";
 // arayüzü (@capacitor-firebase/authentication) kullanılıp dönen id token'la
 // Firebase JS SDK'sında oturum açılıyor - auth nesnesi (onAuthStateChanged,
 // authedFetch vb.) hiç değişmiyor, sadece kimlik bilgisini alma yöntemi farklı.
+// Native tarafta ASIL hangi adımın patladığını görebilmek için (Google Sign-In
+// arayüzünün kendisi mi, yoksa Firebase'e id token'ı teslim etme kısmı mı) tüm
+// akış tek bir try/catch'te, hatanın orijinal mesajı korunarak fırlatılıyor.
+async function nativeGoogleCredential() {
+  let result;
+  try {
+    result = await FirebaseAuthentication.signInWithGoogle();
+  } catch (e) {
+    throw new Error(`Google Sign-In: ${e.message || e.code || JSON.stringify(e)}`);
+  }
+  const idToken = result?.credential?.idToken;
+  if (!idToken) throw new Error("Google girişi iptal edildi ya da id token alınamadı.");
+  return GoogleAuthProvider.credential(idToken);
+}
+
 async function googleSignIn() {
   if (Capacitor.isNativePlatform()) {
-    const result = await FirebaseAuthentication.signInWithGoogle();
-    const idToken = result.credential?.idToken;
-    if (!idToken) throw new Error("Google girişi iptal edildi.");
-    const credential = GoogleAuthProvider.credential(idToken);
+    const credential = await nativeGoogleCredential();
     return signInWithCredential(auth, credential);
   }
   return signInWithPopup(auth, googleProvider);
@@ -49,10 +62,7 @@ async function googleSignIn() {
 // desteği yok).
 async function googleLink(user) {
   if (Capacitor.isNativePlatform()) {
-    const result = await FirebaseAuthentication.signInWithGoogle();
-    const idToken = result.credential?.idToken;
-    if (!idToken) throw new Error("Google girişi iptal edildi.");
-    const credential = GoogleAuthProvider.credential(idToken);
+    const credential = await nativeGoogleCredential();
     try {
       return await linkWithCredential(user, credential);
     } catch (e) {
@@ -1501,7 +1511,7 @@ function AuthGate({ onGuest }) {
     try {
       await googleSignIn();
     } catch (e) {
-      setError(mapAuthError(e.code));
+      setError(e.code ? mapAuthError(e.code) : e.message);
     } finally {
       setBusy(false);
     }
@@ -4382,6 +4392,11 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal }) {
   const [linking, setLinking] = useState(false);
   const [linkError, setLinkError] = useState("");
   const [importState, setImportState] = useState(null);
+  const [emailMode, setEmailMode] = useState(null); // "create" | "login" | null
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [emailBusy, setEmailBusy] = useState(false);
+  const [emailError, setEmailError] = useState("");
 
   const handleLinkGoogle = async () => {
     setLinkError("");
@@ -4389,9 +4404,49 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal }) {
     try {
       await googleLink(authUser);
     } catch (e) {
-      setLinkError("Bağlanamadı, tekrar dener misin?");
+      setLinkError(e.message || mapAuthError(e.code) || "Bağlanamadı, tekrar dener misin?");
     } finally {
       setLinking(false);
+    }
+  };
+
+  const openEmailForm = (mode) => {
+    setEmailMode(mode);
+    setEmail("");
+    setPassword("");
+    setEmailError("");
+  };
+
+  const handleEmailSubmit = async (e) => {
+    e.preventDefault();
+    if (!email.trim() || !password) {
+      setEmailError("E-posta ve şifreni gir.");
+      return;
+    }
+    setEmailError("");
+    setEmailBusy(true);
+    try {
+      if (emailMode === "create") {
+        // Misafirin uid'i korunuyor (linkWithCredential) - tüm tarifleri kalıyor.
+        try {
+          await linkWithCredential(authUser, EmailAuthProvider.credential(email.trim(), password));
+        } catch (e2) {
+          if (e2.code === "auth/email-already-in-use") {
+            // Bu e-posta zaten başka bir hesapta - bağlamak yerine o hesaba geç.
+            await signInWithEmailAndPassword(auth, email.trim(), password);
+          } else {
+            throw e2;
+          }
+        }
+      } else {
+        // Giriş Yap: mevcut bir hesaba geçiliyor, misafir verisi otomatik taşınmıyor.
+        await signInWithEmailAndPassword(auth, email.trim(), password);
+      }
+      setEmailMode(null);
+    } catch (e2) {
+      setEmailError(mapAuthError(e2.code) || e2.message);
+    } finally {
+      setEmailBusy(false);
     }
   };
 
@@ -4421,30 +4476,129 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal }) {
         {authUser?.isAnonymous && (
           <div style={{ padding: "14px", borderRadius: "10px", background: "#EFE9D8", marginBottom: "16px" }}>
             <p style={{ fontSize: "13px", color: COLORS.ink, margin: "0 0 10px" }}>
-              Misafir hesabı kaybolabilir (ör. tarayıcı verisi silinirse). Google ile bağlarsan tüm tariflerin
-              aynı kalır, sadece kalıcı bir hesaba dönüşür.
+              Misafir hesabı kaybolabilir (ör. tarayıcı verisi silinirse). Bir hesap oluşturursan ya da mevcut
+              hesabına girersen tariflerin güvenceye alınır.
             </p>
-            <button
-              onClick={handleLinkGoogle}
-              disabled={linking}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "6px",
-                padding: "8px 14px",
-                borderRadius: "8px",
-                fontWeight: 700,
-                fontSize: "13px",
-                background: COLORS.forest,
-                color: "#F3EFE6",
-                border: "none",
-                cursor: "pointer",
-              }}
-            >
-              <LogIn size={13} />
-              Google ile Bağla
-            </button>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+              <button
+                onClick={handleLinkGoogle}
+                disabled={linking}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  padding: "8px 14px",
+                  borderRadius: "8px",
+                  fontWeight: 700,
+                  fontSize: "13px",
+                  background: COLORS.forest,
+                  color: "#F3EFE6",
+                  border: "none",
+                  cursor: linking ? "default" : "pointer",
+                  opacity: linking ? 0.6 : 1,
+                }}
+              >
+                <LogIn size={13} />
+                Google ile Bağla
+              </button>
+              <button
+                type="button"
+                onClick={() => openEmailForm(emailMode === "create" ? null : "create")}
+                style={{
+                  padding: "8px 14px",
+                  borderRadius: "8px",
+                  fontWeight: 700,
+                  fontSize: "13px",
+                  background: emailMode === "create" ? COLORS.forest : COLORS.panel,
+                  color: emailMode === "create" ? "#F3EFE6" : COLORS.ink,
+                  border: `1px solid ${COLORS.forest}`,
+                  cursor: "pointer",
+                }}
+              >
+                Hesap Oluştur
+              </button>
+              <button
+                type="button"
+                onClick={() => openEmailForm(emailMode === "login" ? null : "login")}
+                style={{
+                  padding: "8px 14px",
+                  borderRadius: "8px",
+                  fontWeight: 600,
+                  fontSize: "13px",
+                  background: emailMode === "login" ? COLORS.forest : "transparent",
+                  color: emailMode === "login" ? "#F3EFE6" : COLORS.inkSoft,
+                  border: `1px solid ${COLORS.line}`,
+                  cursor: "pointer",
+                }}
+              >
+                Giriş Yap
+              </button>
+            </div>
             {linkError && <div style={{ fontSize: "12px", color: COLORS.danger, marginTop: "8px" }}>{linkError}</div>}
+
+            {emailMode && (
+              <form onSubmit={handleEmailSubmit} style={{ marginTop: "12px" }}>
+                {emailMode === "login" && (
+                  <p style={{ fontSize: "12px", color: COLORS.inkSoft, margin: "0 0 8px" }}>
+                    Mevcut bir hesaba giriş yapıyorsun - misafirdeki tarifler bu hesaba otomatik taşınmaz.
+                  </p>
+                )}
+                <input
+                  type="email"
+                  placeholder="E-posta"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  style={{
+                    width: "100%",
+                    borderRadius: "8px",
+                    border: `1px solid ${COLORS.line}`,
+                    background: COLORS.paper,
+                    color: COLORS.ink,
+                    padding: "9px 11px",
+                    fontSize: "13px",
+                    outline: "none",
+                    boxSizing: "border-box",
+                    marginBottom: "8px",
+                  }}
+                />
+                <input
+                  type="password"
+                  placeholder="Şifre"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  style={{
+                    width: "100%",
+                    borderRadius: "8px",
+                    border: `1px solid ${COLORS.line}`,
+                    background: COLORS.paper,
+                    color: COLORS.ink,
+                    padding: "9px 11px",
+                    fontSize: "13px",
+                    outline: "none",
+                    boxSizing: "border-box",
+                    marginBottom: "8px",
+                  }}
+                />
+                {emailError && <div style={{ fontSize: "12px", color: COLORS.danger, marginBottom: "8px" }}>{emailError}</div>}
+                <button
+                  type="submit"
+                  disabled={emailBusy}
+                  style={{
+                    padding: "8px 14px",
+                    borderRadius: "8px",
+                    fontWeight: 700,
+                    fontSize: "13px",
+                    background: COLORS.mustard,
+                    color: COLORS.forestDark,
+                    border: "none",
+                    cursor: emailBusy ? "default" : "pointer",
+                    opacity: emailBusy ? 0.6 : 1,
+                  }}
+                >
+                  {emailBusy ? "…" : emailMode === "create" ? "Hesap Oluştur" : "Giriş Yap"}
+                </button>
+              </form>
+            )}
           </div>
         )}
 
