@@ -331,6 +331,15 @@ Kullanıcı bildirimin artık ulaştığını ama geç geldiğini bildirdi. Kök
 - **Bu tamamen sunucu tarafı bir değişiklik** (`app/api/_lib/fcm.js`) — **yeni APK gerekmiyor**, hatta uygulamayı kapatıp açmaya bile gerek yok (bir sonraki `/api/notify` çağrısında otomatik devreye girer, Vercel deploy'u yeterli).
 - **Henüz kullanıcı tarafından gecikmenin gerçekten kısaldığı doğrulanmadı** — bir sonraki bildirim testinde kontrol edilmeli.
 
+### Açılışta splash görseli ile ana uygulama arasındaki krem "yükleniyor" flaşı kaldırıldı (10 Eylül 2026)
+
+Kullanıcı v13'te (ve v12'de de zaten vardı, önceki oturumlarda fark edilmemiş) şunu bildirdi: tam ekran marka görseli kapandıktan sonra, asıl uygulama (giriş ekranı ya da yemek listesi) görünmeden önce kısa süreliğine krem/beyaz zeminli, ortasında dönen bir yükleniyor ikonu olan bir ekran çıkıyordu — kullanıcı bunu istemiyor, görselin uygulama "tam olarak yüklenene kadar" ekranda kalmasını istedi.
+
+- **Kök neden:** `App.jsx`'teki splash-kapatma `useEffect`'i (`SplashScreen.hide()` + `NativeSplash.hide()`) **React ilk mount olur olmaz** (boş `[]` deps) çalışıyordu — bu, Firebase'in "oturum açık mı, misafir mi, hiç giriş yapılmamış mı" durumunu belirlemesinden (`authChecked`, `onAuthStateChanged` ile async geliyor) **önce**. Yani splash görseli, uygulamanın gerçekten hangi ekranı göstereceğine karar vermesinden önce kapanıyordu; arada kalan boşlukta `if (!authChecked)` dalındaki krem (`COLORS.paper`) zeminli `Loader2` spinner'ı görünüyordu.
+- **Çözüm:** `useEffect`'in bağımlılığı `[authChecked]` yapıldı, içine `if (!authChecked) return;` eklendi — splash görseli artık Firebase'in oturum durumunu belirlemesini bekleyip **ancak ondan sonra** (giriş ekranı ya da ana liste render edilmeye hazır olduğunda) kapanıyor. `MainActivity`'deki 10 saniyelik güvenlik tavanı (internet yokken JS hiç çalışmazsa splash'ta sonsuza kadar kalmasın diye) değişmedi, hâlâ geçerli.
+- **Bu tamamen web/React değişikliği** (`app/src/App.jsx`) — **yeni APK gerekmiyor**, uygulamayı kapatıp açmak yeterli.
+- **Henüz kullanıcı tarafından telefonda doğrulanmadı.**
+
 ## Bilinen eksik / yapılacaklar
 
 1. **iPhone paylaşım entegrasyonu:** iOS Safari, Web Share Target API'yi desteklemiyor (Apple kısıtlaması, düzeltilemez). Android'de uygulama zaten yüklenince paylaşım menüsünde çıkabiliyor. iPhone için plan: kullanıcının telefonunda bir kere kuracağı bir **Kısayollar (Shortcuts) app** kısayolu — TikTok'ta paylaşırken "Tarif Kutusu" olarak çıkıp linki `?link=...` ile uygulamaya atacak. Henüz kurulmadı, kullanıcıyla adım adım yapılacak.

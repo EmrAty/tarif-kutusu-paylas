@@ -635,12 +635,16 @@ export default function TarifKutusu() {
 
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
-    // WebView içeriği (bu React uygulaması) yüklenip ilk render'ı yapınca açılış
-    // ekranlarını kapat: SplashScreen sistemin (Android 12+) splash'ı,
-    // NativeSplash ise MainActivity'nin tam ekran marka görseli.
+    // Eskiden React mount olur olmaz (boş deps ile) kapanıyordu — ama mount,
+    // Firebase'in oturum durumunu (authChecked) henüz belirlemeden önce olduğu
+    // için splash görseli erken kapanıp arkasından kısa süreliğine krem renkli
+    // "yükleniyor" ekranı (bkz. aşağıdaki !authChecked dalı) görünüyordu.
+    // Artık authChecked true olana kadar (yani gösterilecek ilk gerçek ekran
+    // - giriş ekranı ya da ana liste - belli olana kadar) bekleniyor.
+    if (!authChecked) return;
     SplashScreen.hide();
     NativeSplash.hide().catch(() => {});
-  }, []);
+  }, [authChecked]);
 
   useEffect(() => {
     // Android'in paylaşım menüsünden ("Tarif Kutusu") ACTION_SEND ile gelen
