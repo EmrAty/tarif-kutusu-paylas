@@ -14,6 +14,10 @@ import {
   linkWithPopup,
   signOut,
 } from "firebase/auth";
+import { Capacitor } from "@capacitor/core";
+import { App as CapacitorApp } from "@capacitor/app";
+import { SplashScreen } from "@capacitor/splash-screen";
+import ShareReceiver from "./capacitorShare.js";
 
 const COLORS = {
   paper: "#F3EFE6",
@@ -492,6 +496,69 @@ export default function TarifKutusu() {
       // URL okunamazsa sessizce geç
     }
   }, []);
+
+  // --- Android (Capacitor) kabuğuna özel entegrasyonlar ---
+  // Aşağıdaki üç useEffect sadece native Android'de çalışır (Capacitor.isNativePlatform()
+  // web'de/Vercel'deki normal tarayıcı sürümünde false döner), web davranışını etkilemez.
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    // WebView içeriği (bu React uygulaması) yüklenip ilk render'ı yapınca native
+    // açılış (splash) ekranını kapat.
+    SplashScreen.hide();
+  }, []);
+
+  useEffect(() => {
+    // Android'in paylaşım menüsünden ("Tarif Kutusu") ACTION_SEND ile gelen
+    // TikTok/Instagram/YouTube linkini, yukarıdaki web share_target akışıyla
+    // aynı mantıkla (regex ile URL ayıklama) "Yeni Tarif Çıkar" ekranına aktarır.
+    // Uygulama kapalıyken paylaşılırsa getInitialShare, açıkken paylaşılırsa
+    // "shareReceived" olayı bu veriyi taşır.
+    if (!Capacitor.isNativePlatform()) return;
+    const applyShared = (data) => {
+      if (!data) return;
+      const combined = [data.text, data.title].filter(Boolean).join(" ");
+      const found = combined.match(/https?:\/\/[^\s]+/g) || [];
+      const sharedLink =
+        found.find((u) => /tiktok\.com|youtu\.be|youtube\.com|instagram\.com/i.test(u)) || found[0];
+      if (sharedLink) {
+        setLink(sharedLink);
+        setView("add");
+      }
+    };
+    ShareReceiver.getInitialShare().then(applyShared).catch(() => {});
+    let listenerHandle;
+    ShareReceiver.addListener("shareReceived", applyShared).then((h) => {
+      listenerHandle = h;
+    });
+    return () => {
+      if (listenerHandle) listenerHandle.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    // Android donanım geri tuşu: önce açık modal, sonra drawer, sonra ekran
+    // içi "geri" (Header'daki ok ile aynı davranış: her zaman listeye döner),
+    // hiçbiri yoksa uygulamayı kapatmadan arka plana alır.
+    if (!Capacitor.isNativePlatform()) return;
+    let listenerHandle;
+    CapacitorApp.addListener("backButton", () => {
+      if (modalView) {
+        setModalView(null);
+      } else if (menuOpen) {
+        setMenuOpen(false);
+      } else if (view !== "list") {
+        setView("list");
+      } else {
+        CapacitorApp.minimizeApp();
+      }
+    }).then((h) => {
+      listenerHandle = h;
+    });
+    return () => {
+      if (listenerHandle) listenerHandle.remove();
+    };
+  }, [view, menuOpen, modalView]);
 
   const [recipeBuckets, setRecipeBuckets] = useState({ [PERSONAL]: [] });
   const [saveTargets, setSaveTargets] = useState([PERSONAL]);
