@@ -15,7 +15,11 @@ Capacitor geçişi tamamlandı ve çalışıyor. Son durum ve açık kalan işle
 - **"Canı çekti" bildirimi artık gerçekten ulaşıyor** (native FCM'e geçiş sonrası) ✅
 - **Açılış görseli ile ana uygulama arasındaki krem "yükleniyor" flaşı kalktı** (splash artık Firebase oturum kontrolü bitene kadar kapanmıyor) ✅
 
-**Bekleyen tek doğrulama:** Bildirimin "geç geliyor" şikayetine karşı FCM mesajına `android.priority: "high"` eklendi (bkz. aşağıdaki "Bildirim gecikmesi düzeltildi") ama **bunun gecikmeyi gerçekten kısalttığı henüz ayrıca doğrulanmadı** — bir sonraki bildirim testinde kontrol edilmeli. En güncel APK: `android-capacitor-builds/tarif-kutusu-capacitor-v13.apk` (`versionCode 13`) — sonraki tüm düzeltmeler (FCM önceliği, splash flaşı) APK'ya değil doğrudan Vercel'e gitti, yani v13 kurulu bir telefon uygulamayı kapatıp açtığında otomatik güncel.
+**Bekleyen doğrulamalar (sonraki oturumun ilk işi):**
+1. Bildirimin "geç geliyor" şikayetine karşı FCM mesajına `android.priority: "high"` eklendi (bkz. aşağıdaki "Bildirim gecikmesi düzeltildi") ama **bunun gecikmeyi gerçekten kısalttığı henüz ayrıca doğrulanmadı.**
+2. **"Canı çekti" bildirimine tıklanınca doğrudan o tarifin açılması** eklendi (bkz. aşağıdaki "'Canı çekti' bildirimine tıklanınca doğrudan o tarif açılıyor") — **henüz hiç telefonda test edilmedi.** Bir aile üyesine bildirim gönderilip, tıklayınca gerçekten doğru tarifin açılıp açılmadığına bakılmalı.
+
+En güncel APK: `android-capacitor-builds/tarif-kutusu-capacitor-v13.apk` (`versionCode 13`) — bu ikisi dahil sonraki tüm düzeltmeler (FCM önceliği, splash flaşı, bildirim deep-link'i) APK'ya değil doğrudan Vercel'e gitti, yani v13 kurulu bir telefon uygulamayı kapatıp açtığında otomatik güncel — yeni bir APK kurmaya gerek yok.
 
 **Hiç test edilmemiş / doğrulanmamış diğer maddeler** (kullanıcı yukarıdakilerin dışındakileri henüz denemedi):
 - Android geri tuşu davranışı (modal → drawer → liste → arka plana alma)
