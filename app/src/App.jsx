@@ -21,6 +21,7 @@ import {
 import { Capacitor } from "@capacitor/core";
 import { App as CapacitorApp } from "@capacitor/app";
 import { SplashScreen } from "@capacitor/splash-screen";
+import { PushNotifications } from "@capacitor/push-notifications";
 import { FirebaseAuthentication } from "@capacitor-firebase/authentication";
 import ShareReceiver from "./capacitorShare.js";
 import NativeSplash from "./capacitorSplash.js";
@@ -53,6 +54,42 @@ async function googleSignIn() {
     return signInWithCredential(auth, credential);
   }
   return signInWithPopup(auth, googleProvider);
+}
+
+// Capacitor'ın düz Android WebView'i, tarayıcının Web Push API'sini (Service
+// Worker + push aboneliği) arka planda güvenilir şekilde çalıştırmıyor — TWA
+// gerçek Chrome olduğu için sorun değildi, ama WebView'de "canı çekti"
+// bildirimleri sessizce hiç ulaşmıyordu. Bunun yerine native Android FCM
+// (@capacitor/push-notifications) kullanılıp aynı `/api/fcm-token`'a
+// kaydediliyor — sunucu tarafı token'ın web push mü native FCM mi olduğunu
+// ayırt etmiyor, ikisi de aynı FCM HTTP v1 API'sine gidiyor.
+async function nativeFcmToken() {
+  try {
+    const current = await PushNotifications.checkPermissions();
+    let status = current.receive;
+    if (status === "prompt" || status === "prompt-with-rationale") {
+      status = (await PushNotifications.requestPermissions()).receive;
+    }
+    if (status !== "granted") return null;
+    return await new Promise((resolve) => {
+      let settled = false;
+      let regHandle;
+      let errHandle;
+      const finish = (token) => {
+        if (settled) return;
+        settled = true;
+        regHandle?.then((h) => h.remove());
+        errHandle?.then((h) => h.remove());
+        resolve(token);
+      };
+      regHandle = PushNotifications.addListener("registration", (token) => finish(token.value));
+      errHandle = PushNotifications.addListener("registrationError", () => finish(null));
+      PushNotifications.register();
+      setTimeout(() => finish(null), 10000);
+    });
+  } catch (e) {
+    return null;
+  }
 }
 
 // Bu Google hesabı daha önce (misafirden bağımsız) gerçek bir hesap olarak
@@ -479,13 +516,14 @@ export default function TarifKutusu() {
 
   useEffect(() => {
     // Aile üyeleri arasında "canı çekti" bildirimi alabilmek için, giriş
-    // yapılınca sessizce bir push bildirim izni/token'ı almayı dener — VAPID
-    // anahtarı tanımlı değilse ya da tarayıcı desteklemiyorsa (requestFcmToken
-    // içinde) sessizce hiçbir şey yapmaz.
+    // yapılınca sessizce bir push bildirim izni/token'ı almayı dener. Native
+    // Android'de (Capacitor) web push yerine native FCM kullanılıyor (bkz.
+    // nativeFcmToken) — VAPID anahtarı tanımlı değilse, tarayıcı web push
+    // desteklemiyorsa ya da izin reddedilirse sessizce hiçbir şey yapmaz.
     if (!authUser) return;
     let cancelled = false;
     (async () => {
-      const token = await requestFcmToken();
+      const token = Capacitor.isNativePlatform() ? await nativeFcmToken() : await requestFcmToken();
       if (token && !cancelled) {
         try {
           await registerFcmToken(token);
