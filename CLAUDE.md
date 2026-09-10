@@ -10,18 +10,18 @@ Capacitor geçişi tamamlandı ve çalışıyor. Son durum ve açık kalan işle
 - Uygulama Chrome açmadan kendi WebView'inde çalışıyor (asıl amaç ✅)
 - TikTok/Instagram/YouTube paylaş → Tarif Kutusu → link "Yeni Tarif Çıkar"a düşüyor ✅
 - Google ile giriş/bağlama (native Google Sign-In üzerinden) ✅
+- v12/v13'teki tam ekran açılış (splash) görseli doğru görünüyor ✅
+- Yemekler listesinde bir aile tarifine basılı tutunca "canımın çekti" bildirim butonu doğru çıkıyor ✅
+- **"Canı çekti" bildirimi artık gerçekten ulaşıyor** (native FCM'e geçiş sonrası) ✅
+- **Açılış görseli ile ana uygulama arasındaki krem "yükleniyor" flaşı kalktı** (splash artık Firebase oturum kontrolü bitene kadar kapanmıyor) ✅
 
-**Bekleyen tek şey — v12 telefonda test edilmedi:**
-`android-capacitor-builds/tarif-kutusu-capacitor-v12.apk` kullanıcıya gönderildi ama kurulup bakılmadan oturum kapandı. İçindeki değişiklik: tam ekran açılış (splash) görseli MainActivity'de kendi ImageView'imizle geri getirildi (bkz. aşağıdaki v12 bölümü). **Sonraki oturumda ilk iş: kullanıcıya v12'yi kurup açılış ekranının artık TWA'daki gibi tam ekran kumaş dokulu marka görselini gösterip göstermediğini sormak.** Göstermiyorsa alternatif: `windowSplashScreenBackground` yerine doğrudan `android:windowBackground`'a bitmap koymak ya da overlay'i `getWindow().addContentView` yerine `bridge.getWebView()`'in parent'ına eklemek denenebilir.
+**Bekleyen tek doğrulama:** Bildirimin "geç geliyor" şikayetine karşı FCM mesajına `android.priority: "high"` eklendi (bkz. aşağıdaki "Bildirim gecikmesi düzeltildi") ama **bunun gecikmeyi gerçekten kısalttığı henüz ayrıca doğrulanmadı** — bir sonraki bildirim testinde kontrol edilmeli. En güncel APK: `android-capacitor-builds/tarif-kutusu-capacitor-v13.apk` (`versionCode 13`) — sonraki tüm düzeltmeler (FCM önceliği, splash flaşı) APK'ya değil doğrudan Vercel'e gitti, yani v13 kurulu bir telefon uygulamayı kapatıp açtığında otomatik güncel.
 
-**Ayrıca bu oturumda eklenen:** Yemekler listesinde bir aile tarifine basılı tutunca hızlı "canımın çekti" bildirim butonu çıkması (sadece web/React, telefonda test edildi, buton doğru çıkıyor). Ama bu test **asıl bildirim teslim sorununu ortaya çıkardı** — "gönderildi" görünüyordu ama karşı tarafa hiç ulaşmıyordu. Kök neden bulunup **v13 ile düzeltildi**: bildirim artık tarayıcı web push yerine native Android FCM (`@capacitor/push-notifications`) kullanıyor (bkz. aşağıdaki "v13: 'canı çekti' bildirimi native Android FCM'e taşındı" bölümü). **Bu native bir değişiklik olduğu için yeni APK gerekti** — v13, v12'nin üzerine (aynı splash düzeltmesi dahil) build edildi, yani v13'ü kurmak hem v12'nin bekleyen splash testini hem yeni bildirim düzeltmesini aynı anda test eder. `android-capacitor-builds/tarif-kutusu-capacitor-v13.apk` kullanıcıya gönderildi ama **henüz telefonda test edilmedi.**
-
-**Hiç test edilmemiş / doğrulanmamış diğer maddeler** (kullanıcı sadece yukarıdaki üçünü denedi):
+**Hiç test edilmemiş / doğrulanmamış diğer maddeler** (kullanıcı yukarıdakilerin dışındakileri henüz denemedi):
 - Android geri tuşu davranışı (modal → drawer → liste → arka plana alma)
 - Klavye açılınca input'ların kapanmaması
 - Alışveriş listesi / Kiler / AI önerileri / aile-kişisel ayrımı gibi mevcut özelliklerin Capacitor içinde sorunsuz çalışması
 - Hesabım ekranına yeni eklenen "Hesap Oluştur" / "Giriş Yap" (e-posta+şifre) butonları — sadece yerel `npm run dev` ile smoke test edildi, ne canlı webde ne telefonda denendi
-- **"Canı çekti" push bildirimi** — Capacitor'ın düz WebView'inde arka plan push'unun çalışıp çalışmadığı hâlâ belirsiz (TWA gerçek Chrome olduğu için çalışıyordu). Gerekirse çözüm `@capacitor/push-notifications` (native FCM) — `google-services.json` zaten projede mevcut olduğu için artık kurulumun yarısı hazır.
 
 **⚠️ Önemli risk — `app/android/` klasörü git'te DEĞİL:**
 Eski `android-twa/` bubblewrap'ten yeniden üretilebildiği için git'e alınmamıştı ve aynı alışkanlıkla `app/android/` de alınmadı. Ama bu klasör artık **elle yazılmış ve başka hiçbir yerde bulunmayan** kod içeriyor: `ShareReceiverPlugin.java`, `NativeSplashPlugin.java`, özelleştirilmiş `MainActivity.java`, `AndroidManifest.xml`'deki share intent-filter, `values/styles.xml` + `colors.xml` splash teması, ikon/splash kaynakları, `google-services.json`. **Bu klasör silinirse bu iş baştan yazılır.** Sonraki oturumda kullanıcıya sorulup git'e eklenmesi önerilmeli (`local.properties` ve `android.keystore` hariç — onlar zaten `.gitignore`'da).
@@ -338,7 +338,7 @@ Kullanıcı v13'te (ve v12'de de zaten vardı, önceki oturumlarda fark edilmemi
 - **Kök neden:** `App.jsx`'teki splash-kapatma `useEffect`'i (`SplashScreen.hide()` + `NativeSplash.hide()`) **React ilk mount olur olmaz** (boş `[]` deps) çalışıyordu — bu, Firebase'in "oturum açık mı, misafir mi, hiç giriş yapılmamış mı" durumunu belirlemesinden (`authChecked`, `onAuthStateChanged` ile async geliyor) **önce**. Yani splash görseli, uygulamanın gerçekten hangi ekranı göstereceğine karar vermesinden önce kapanıyordu; arada kalan boşlukta `if (!authChecked)` dalındaki krem (`COLORS.paper`) zeminli `Loader2` spinner'ı görünüyordu.
 - **Çözüm:** `useEffect`'in bağımlılığı `[authChecked]` yapıldı, içine `if (!authChecked) return;` eklendi — splash görseli artık Firebase'in oturum durumunu belirlemesini bekleyip **ancak ondan sonra** (giriş ekranı ya da ana liste render edilmeye hazır olduğunda) kapanıyor. `MainActivity`'deki 10 saniyelik güvenlik tavanı (internet yokken JS hiç çalışmazsa splash'ta sonsuza kadar kalmasın diye) değişmedi, hâlâ geçerli.
 - **Bu tamamen web/React değişikliği** (`app/src/App.jsx`) — **yeni APK gerekmiyor**, uygulamayı kapatıp açmak yeterli.
-- **Henüz kullanıcı tarafından telefonda doğrulanmadı.**
+- **Kullanıcı tarafından telefonda doğrulandı, düzeldi (10 Eylül 2026).**
 
 ## Bilinen eksik / yapılacaklar
 
