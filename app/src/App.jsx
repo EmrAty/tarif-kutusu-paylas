@@ -23,6 +23,7 @@ import { App as CapacitorApp } from "@capacitor/app";
 import { SplashScreen } from "@capacitor/splash-screen";
 import { FirebaseAuthentication } from "@capacitor-firebase/authentication";
 import ShareReceiver from "./capacitorShare.js";
+import NativeSplash from "./capacitorSplash.js";
 
 // Google, gömülü (embedded) WebView'lerde OAuth popup'ını User-Agent'a bakarak
 // engelliyor ("disallowed_useragent") - TWA gerçek Chrome kullandığı için sorun
@@ -567,9 +568,11 @@ export default function TarifKutusu() {
 
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
-    // WebView içeriği (bu React uygulaması) yüklenip ilk render'ı yapınca native
-    // açılış (splash) ekranını kapat.
+    // WebView içeriği (bu React uygulaması) yüklenip ilk render'ı yapınca açılış
+    // ekranlarını kapat: SplashScreen sistemin (Android 12+) splash'ı,
+    // NativeSplash ise MainActivity'nin tam ekran marka görseli.
     SplashScreen.hide();
+    NativeSplash.hide().catch(() => {});
   }, []);
 
   useEffect(() => {
