@@ -2,6 +2,15 @@
 
 Bu dosyayı her oturum başında otomatik okuyorum. Buradaki bilgiler güncel tutulmalı; büyük bir değişiklik yaptığımda bu dosyayı da güncellerim.
 
+## 🔜 SONRAKİ OTURUMDA YAPILACAK: TWA'dan Capacitor'a geç (10 Eylül 2026'da kararlaştırıldı)
+
+Kullanıcı, Android uygulamasının şu anki **TWA** (Trusted Web Activity — Chrome'u arka planda kullanan yöntem, bkz. "Android uygulaması" bölümü) yerine **Capacitor**'a geçilmesini istedi. Henüz hiçbir Capacitor kodu/kurulumu yapılmadı — bu iş bir sonraki oturumda baştan başlanacak.
+
+- **Neden:** Kullanıcı telefonunda "Chrome'da çalıştırılıyor" bildirimini gördü ve bunun "gerçek bir uygulama" hissi vermediğini fark etti. TWA teknik olarak gerçek bir APK ama motoru Chrome'u ödünç alıyor; Capacitor ise kendi gömülü WebView'ini taşıdığı için bu bildirim çıkmıyor.
+- **Neden Capacitor, sıfırdan native değil:** Mevcut `app/` klasöründeki React/Vite kodu (App.jsx ~4340 satır) aynen korunuyor, sadece yeni bir native kabuk ekleniyor — sıfırdan native (Kotlin/Swift ya da React Native/Flutter) tüm bu kodu baştan yazmayı gerektirirdi, haftalar sürerdi. Ölçek (kullanıcı sayısı) açısından da Capacitor'ın bir dezavantajı yok — büyük ölçekli üretim uygulamaları Capacitor'la yapılabiliyor, asıl darboğaz backend (Redis/Vercel) olurdu, paketleme yöntemiyle ilgisi yok.
+- **Ne yapılacak (kabaca):** `@capacitor/core` + `@capacitor/cli` + `@capacitor/android` kurulup `app/` klasörüne Capacitor eklenecek, `npx cap init` ile yapılandırılacak, `npx cap add android` ile yeni bir Android projesi (`android-twa/` klasöründeki mevcut TWA projesinin YERİNE, muhtemelen ayrı bir `android-capacitor/` ya da onun yerini alacak şekilde — karar verilecek) oluşturulacak, mevcut ikonlar/splash/keystore (aynı `android.keystore`, aynı imza — telefondaki kurulumun üzerine güncelleme olarak gitmesi için) yeni projeye taşınacak, gerekirse push bildirimi (`@capacitor/push-notifications` ya da mevcut web-push FCM akışı Capacitor içinde de çalışabilir mi kontrol edilmeli) ve paylaşım (share_target yerine `@capacitor/share`/intent-filter) native eklentilerle yeniden kurulacak, build alınıp aynı keystore ile imzalanıp kullanıcıya yeni bir APK olarak gönderilecek.
+- **Dikkat:** Mevcut TWA (`android-twa/` klasörü, bu repoya dahil değil) hemen silinmemeli — Capacitor sürümü test edilip kullanıcı tarafından onaylanana kadar yedek olarak kalsın.
+
 ## Ne bu proje
 
 Kullanıcı TikTok/YouTube'da gördüğü yemek videolarının linkini/açıklamasını yapıştırıyor, yapay zeka (Claude API) bundan yapılandırılmış bir tarif (malzemeler, yapılış, besin değerleri) çıkarıyor. Başlangıçta bir Claude Artifact prototipiydi, gerçek bağımsız bir web uygulamasına dönüştürüldü.
