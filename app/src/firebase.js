@@ -19,7 +19,7 @@ const firebaseConfig = {
 // normal olan public bir değer — Firebase Console > Project Settings > Cloud
 // Messaging > Web Push certificates'ten üretilip buraya yapıştırılmalı.
 // Boş bırakılırsa bildirim özelliği sessizce devre dışı kalır (çökmez).
-const VAPID_KEY = "";
+const VAPID_KEY = "BP10K8TFmNgb6T7g2s20h-7J8zinVRIH0PHXWzgK76TMRapq-OtBLR2tthQxXITIRybf22Swz76qpeCVLf_Id9M";
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
