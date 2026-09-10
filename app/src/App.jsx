@@ -2,9 +2,9 @@ import React, { useState, useEffect, useCallback, useMemo } from "react";
 import {
   ChefHat, Plus, Minus, Link2, ExternalLink, Trash2, Loader2, ArrowLeft, AlertCircle,
   FileText, Pencil, Check, ChevronDown, Star, Search, ShoppingCart, Clock, Gauge, Undo2, X, Package, Download,
-  Mail, LogOut, Users, Crown, Settings, UserCircle, Copy, Sparkles, LogIn,
+  Mail, LogOut, Users, Crown, Settings, UserCircle, Copy, Sparkles, LogIn, Bell,
 } from "lucide-react";
-import { auth, googleProvider } from "./firebase.js";
+import { auth, googleProvider, requestFcmToken } from "./firebase.js";
 import {
   onAuthStateChanged,
   signInWithPopup,
@@ -131,6 +131,14 @@ async function setPlusFlag(isPlus) {
 
 async function fetchLegacyData() {
   return authedFetch("/api/legacy");
+}
+
+async function registerFcmToken(token) {
+  return authedFetch("/api/fcm-token", { method: "POST", body: { token } });
+}
+
+async function sendFamilyNotification(familyId, recipeTitle, senderName) {
+  return authedFetch("/api/notify", { method: "POST", body: { familyId, recipeTitle, senderName } });
 }
 
 async function suggestFromPantry(items) {
@@ -395,6 +403,38 @@ export default function TarifKutusu() {
   useEffect(() => {
     if (authUser) loadFamiliesState();
   }, [authUser, loadFamiliesState]);
+
+  useEffect(() => {
+    // Aile üyeleri arasında "canı çekti" bildirimi alabilmek için, giriş
+    // yapılınca sessizce bir push bildirim izni/token'ı almayı dener — VAPID
+    // anahtarı tanımlı değilse ya da tarayıcı desteklemiyorsa (requestFcmToken
+    // içinde) sessizce hiçbir şey yapmaz.
+    if (!authUser) return;
+    let cancelled = false;
+    (async () => {
+      const token = await requestFcmToken();
+      if (token && !cancelled) {
+        try {
+          await registerFcmToken(token);
+        } catch (e) {
+          // kaydedilemezse sessizce geç, bir sonraki oturumda tekrar denenir
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authUser]);
+
+  const handleSendNotification = useCallback(async (recipe) => {
+    const familyScopes = (recipe._scopes || [recipe._scope]).filter((s) => s && s !== PERSONAL);
+    if (!familyScopes.length) return;
+    await Promise.all(
+      familyScopes.map((familyId) =>
+        sendFamilyNotification(familyId, recipe.title || "bir yemek", personName)
+      )
+    );
+  }, [personName]);
 
   useEffect(() => {
     let cancelled = false;
@@ -846,6 +886,7 @@ export default function TarifKutusu() {
               onChangeCategory={(cat) => handleChangeCategory(active.id, cat)}
               onEdit={() => setView("edit")}
               onAddToShopping={() => addRecipeToShoppingList(active)}
+              onSendNotification={() => handleSendNotification(active)}
             />
           )}
 
@@ -2400,10 +2441,26 @@ function AddForm({ link, caption, notes, images, category, busy, error, setLink,
   );
 }
 
-function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavorite, onChangeCategory, onEdit, onAddToShopping }) {
+function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavorite, onChangeCategory, onEdit, onAddToShopping, onSendNotification }) {
   const { title, servings, category, prep_time_minutes, difficulty, ingredients = [], instructions = [], nutrition = {}, assumptions, link, isFavorite, addedBy } = recipe;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(title || "");
+  const [notifyState, setNotifyState] = useState("idle"); // "idle" | "sending" | "sent" | "error"
+
+  const isFamilyRecipe = (recipe._scopes || [recipe._scope]).some((s) => s && s !== PERSONAL);
+
+  const handleNotifyClick = async () => {
+    if (notifyState === "sending") return;
+    setNotifyState("sending");
+    try {
+      await onSendNotification();
+      setNotifyState("sent");
+      setTimeout(() => setNotifyState("idle"), 2500);
+    } catch (e) {
+      setNotifyState("error");
+      setTimeout(() => setNotifyState("idle"), 2500);
+    }
+  };
 
   useEffect(() => {
     setDraft(title || "");
@@ -2498,6 +2555,37 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
             )}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "4px", flexShrink: 0 }}>
+            {isFamilyRecipe && (
+              <button
+                onClick={handleNotifyClick}
+                disabled={notifyState === "sending"}
+                aria-label="Bildirim gönder"
+                title={
+                  notifyState === "sent"
+                    ? "Bildirim gönderildi"
+                    : notifyState === "error"
+                    ? "Bildirim gönderilemedi"
+                    : "Ailene bu yemeği canının çektiğini bildir"
+                }
+                style={{
+                  padding: "8px",
+                  borderRadius: "8px",
+                  background: "transparent",
+                  border: "none",
+                  color: notifyState === "error" ? COLORS.danger : notifyState === "sent" ? COLORS.forest : COLORS.mustardDark,
+                  cursor: notifyState === "sending" ? "default" : "pointer",
+                  opacity: notifyState === "sending" ? 0.5 : 1,
+                }}
+              >
+                {notifyState === "sending" ? (
+                  <Loader2 size={18} className="spin" />
+                ) : notifyState === "sent" ? (
+                  <Check size={18} />
+                ) : (
+                  <Bell size={18} />
+                )}
+              </button>
+            )}
             <button
               onClick={onToggleFavorite}
               aria-label="Favori"
