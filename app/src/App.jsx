@@ -174,6 +174,18 @@ function isFamilyRecipeScope(recipe) {
   return (recipe._scopes || [recipe._scope]).some((s) => s && s !== PERSONAL);
 }
 
+// handleSendNotification'ın döndürdüğü {sent, attempted, recipientCount, error}
+// özetini kullanıcıya anlamlı bir Türkçe mesaja çeviriyor — "gönderildi" ile
+// "kimseye ulaşmadı" arasındaki farkı görünür kılmak için (bkz. api/notify.js).
+function notifyResultMessage(result) {
+  if (!result) return "Bildirim gönderildi";
+  if (result.recipientCount === 0) return "Ailede başka üye yok";
+  if (result.attempted === 0) return "Kimsenin bildirim kaydı yok";
+  if (result.sent === 0) return result.error ? `Gönderilemedi: ${result.error}` : "Gönderilemedi";
+  if (result.sent < result.attempted) return `Kısmen gönderildi (${result.sent}/${result.attempted})`;
+  return "Bildirim gönderildi";
+}
+
 // Kişisel veriler ("personal") sadece o hesaba, aile verileri ("family:<id>")
 // o ailenin tüm üyelerine ait — hangisi olduğu her istekte scope/familyId ile
 // belirtiliyor. Kimlik doğrulaması Firebase ID token'ıyla yapılıyor.
@@ -537,13 +549,26 @@ export default function TarifKutusu() {
     };
   }, [authUser]);
 
+  // Sunucudan gelen sent/attempted/recipientCount bilgisini (bkz. api/notify.js)
+  // birden fazla aileye kaydedilmiş bir tarif için topluyor, çağıran taraf
+  // (RecipeDetail/Sidebar) bunu "gönderildi" ile "kimseye ulaşmadı" arasında
+  // ayrım yapıp kullanıcıya göstermek için kullanıyor.
   const handleSendNotification = useCallback(async (recipe) => {
     const familyScopes = (recipe._scopes || [recipe._scope]).filter((s) => s && s !== PERSONAL);
-    if (!familyScopes.length) return;
-    await Promise.all(
+    if (!familyScopes.length) return { sent: 0, attempted: 0, recipientCount: 0 };
+    const results = await Promise.all(
       familyScopes.map((familyId) =>
         sendFamilyNotification(familyId, recipe.title || "bir yemek", personName)
       )
+    );
+    return results.reduce(
+      (acc, r) => ({
+        sent: acc.sent + (r?.sent || 0),
+        attempted: acc.attempted + (r?.attempted || 0),
+        recipientCount: acc.recipientCount + (r?.recipientCount || 0),
+        error: acc.error || r?.error || null,
+      }),
+      { sent: 0, attempted: 0, recipientCount: 0, error: null }
     );
   }, [personName]);
 
@@ -1804,7 +1829,7 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
   const [favOpen, setFavOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [longPressId, setLongPressId] = useState(null);
-  const [quickNotify, setQuickNotify] = useState({ id: null, status: "idle" }); // "idle" | "sending" | "sent" | "error"
+  const [quickNotify, setQuickNotify] = useState({ id: null, status: "idle", message: "" }); // status: "idle" | "sending" | "done" | "empty" | "error"
   const pressTimerRef = useRef(null);
   const longPressFiredRef = useRef(false);
 
@@ -1824,17 +1849,18 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
   };
   const handleQuickNotify = async (r) => {
     if (quickNotify.id === r.id && quickNotify.status === "sending") return;
-    setQuickNotify({ id: r.id, status: "sending" });
+    setQuickNotify({ id: r.id, status: "sending", message: "" });
     try {
-      await onSendNotification(r);
-      setQuickNotify({ id: r.id, status: "sent" });
+      const result = await onSendNotification(r);
+      const status = result && result.sent > 0 ? "done" : "empty";
+      setQuickNotify({ id: r.id, status, message: notifyResultMessage(result) });
       setTimeout(() => {
-        setQuickNotify({ id: null, status: "idle" });
+        setQuickNotify({ id: null, status: "idle", message: "" });
         setLongPressId(null);
-      }, 1500);
+      }, 3000);
     } catch (e) {
-      setQuickNotify({ id: r.id, status: "error" });
-      setTimeout(() => setQuickNotify({ id: null, status: "idle" }), 2000);
+      setQuickNotify({ id: r.id, status: "error", message: e.message || "Bildirim gönderilemedi" });
+      setTimeout(() => setQuickNotify({ id: null, status: "idle", message: "" }), 3000);
     }
   };
 
@@ -1954,7 +1980,8 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
                     borderRadius: "9999px",
                     border: "none",
                     background: "transparent",
-                    color: notifyStatus === "error" ? COLORS.danger : notifyStatus === "sent" ? COLORS.forest : COLORS.mustardDark,
+                    color:
+                      notifyStatus === "error" ? COLORS.danger : notifyStatus === "empty" ? COLORS.mustardDark : notifyStatus === "done" ? COLORS.forest : COLORS.mustardDark,
                     fontSize: "12px",
                     fontWeight: 600,
                     cursor: notifyStatus === "sending" ? "default" : "pointer",
@@ -1963,16 +1990,14 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
                 >
                   {notifyStatus === "sending" ? (
                     <Loader2 size={15} className="spin" />
-                  ) : notifyStatus === "sent" ? (
+                  ) : notifyStatus === "done" ? (
                     <Check size={15} />
                   ) : (
                     <Bell size={15} />
                   )}
-                  {notifyStatus === "sent"
-                    ? "Bildirim gönderildi"
-                    : notifyStatus === "error"
-                    ? "Bildirim gönderilemedi"
-                    : "Canımın çektiğini bildir"}
+                  {notifyStatus === "idle" || notifyStatus === "sending"
+                    ? "Canımın çektiğini bildir"
+                    : quickNotify.message}
                 </button>
                 <button
                   onClick={() => setLongPressId(null)}
@@ -2727,7 +2752,8 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
   const { title, servings, category, prep_time_minutes, difficulty, ingredients = [], instructions = [], nutrition = {}, assumptions, link, isFavorite, addedBy } = recipe;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(title || "");
-  const [notifyState, setNotifyState] = useState("idle"); // "idle" | "sending" | "sent" | "error"
+  const [notifyState, setNotifyState] = useState("idle"); // "idle" | "sending" | "done" | "empty" | "error"
+  const [notifyMessage, setNotifyMessage] = useState("");
 
   const isFamilyRecipe = isFamilyRecipeScope(recipe);
 
@@ -2735,12 +2761,14 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
     if (notifyState === "sending") return;
     setNotifyState("sending");
     try {
-      await onSendNotification();
-      setNotifyState("sent");
-      setTimeout(() => setNotifyState("idle"), 2500);
+      const result = await onSendNotification();
+      setNotifyMessage(notifyResultMessage(result));
+      setNotifyState(result && result.sent > 0 ? "done" : "empty");
+      setTimeout(() => setNotifyState("idle"), 3500);
     } catch (e) {
+      setNotifyMessage(e.message || "Bildirim gönderilemedi");
       setNotifyState("error");
-      setTimeout(() => setNotifyState("idle"), 2500);
+      setTimeout(() => setNotifyState("idle"), 3500);
     }
   };
 
@@ -2838,35 +2866,44 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "4px", flexShrink: 0 }}>
             {isFamilyRecipe && (
-              <button
-                onClick={handleNotifyClick}
-                disabled={notifyState === "sending"}
-                aria-label="Bildirim gönder"
-                title={
-                  notifyState === "sent"
-                    ? "Bildirim gönderildi"
-                    : notifyState === "error"
-                    ? "Bildirim gönderilemedi"
-                    : "Ailene bu yemeği canının çektiğini bildir"
-                }
-                style={{
-                  padding: "8px",
-                  borderRadius: "8px",
-                  background: "transparent",
-                  border: "none",
-                  color: notifyState === "error" ? COLORS.danger : notifyState === "sent" ? COLORS.forest : COLORS.mustardDark,
-                  cursor: notifyState === "sending" ? "default" : "pointer",
-                  opacity: notifyState === "sending" ? 0.5 : 1,
-                }}
-              >
-                {notifyState === "sending" ? (
-                  <Loader2 size={18} className="spin" />
-                ) : notifyState === "sent" ? (
-                  <Check size={18} />
-                ) : (
-                  <Bell size={18} />
+              <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                {notifyState !== "idle" && notifyState !== "sending" && (
+                  <span
+                    style={{
+                      fontSize: "11px",
+                      fontWeight: 600,
+                      color: notifyState === "done" ? COLORS.forest : notifyState === "empty" ? COLORS.mustardDark : COLORS.danger,
+                      maxWidth: "150px",
+                    }}
+                  >
+                    {notifyMessage}
+                  </span>
                 )}
-              </button>
+                <button
+                  onClick={handleNotifyClick}
+                  disabled={notifyState === "sending"}
+                  aria-label="Bildirim gönder"
+                  title="Ailene bu yemeği canının çektiğini bildir"
+                  style={{
+                    padding: "8px",
+                    borderRadius: "8px",
+                    background: "transparent",
+                    border: "none",
+                    color: notifyState === "error" ? COLORS.danger : notifyState === "empty" ? COLORS.mustardDark : notifyState === "done" ? COLORS.forest : COLORS.mustardDark,
+                    cursor: notifyState === "sending" ? "default" : "pointer",
+                    opacity: notifyState === "sending" ? 0.5 : 1,
+                    flexShrink: 0,
+                  }}
+                >
+                  {notifyState === "sending" ? (
+                    <Loader2 size={18} className="spin" />
+                  ) : notifyState === "done" ? (
+                    <Check size={18} />
+                  ) : (
+                    <Bell size={18} />
+                  )}
+                </button>
+              </div>
             )}
             <button
               onClick={onToggleFavorite}

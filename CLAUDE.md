@@ -312,6 +312,17 @@ Kullanıcı Capacitor sürümünü telefonda dener­ken "bir yemeğe basılı tu
 - **Bu değişiklik native tarafa dokunuyor (yeni Capacitor plugin) → yeni APK şart, sadece Vercel push yetmiyor.**
 - **`app/api/notify.js`'teki "0 token'a da sessizce başarı dön" davranışı bilerek değiştirilmedi** — kullanıcı arayüzünde zaten "gönderildi" ile "kimse yok" ayrımı yapılmıyor, bu ayrı bir iyileştirme konusu (bkz. "Bilinen eksik").
 - **Henüz kullanıcı tarafından telefonda test edilmedi** — v13 kurulup iki farklı hesapla bildirimin gerçekten ulaşıp ulaşmadığı doğrulanmalı. Ulaşmazsa bir sonraki şüpheli: `firebase-messaging-sw.js`'nin artık gereksiz olması (native FCM service worker'a ihtiyaç duymuyor, ama zararı da yok) ya da bildirim izninin native `PushNotifications.requestPermissions()` ile `MainActivity.onCreate()`'teki eski `POST_NOTIFICATIONS` runtime isteği arasında bir çakışma olup olmadığı.
+- **v13 telefonda denendi, hâlâ bildirim gitmiyordu** — "gönderildi" yazıyordu ama kimseye ulaşmıyordu. Bu, native FCM'e geçmenin sorunu çözmediğini gösterdi; asıl soru **istemcinin token'ı hiç kaydedemediği mi, yoksa sunucunun kayıtlı bir token'a göndermeyi başaramadığı mı** oldu — ikisi de aynı "gönderildi" görünümünü veriyordu çünkü `api/notify.js`'in "0 token'a da başarı dön" davranışı hâlâ oradaydı.
+
+### Bildirim durumunun gerçek sonucu göstermesi sağlandı (10 Eylül 2026)
+
+Yukarıdaki belirsizliği çözmek için (Vercel loglarına bakmak yerine, kullanıcının kendi telefonundan tek tıkla teşhis edebilmesi için) `api/notify.js` artık **gerçek sonucu döndürüyor**: `{ok, sent, attempted, recipientCount, error}` — kaç kişiye ulaşılmaya çalışıldığı (`attempted` = ailedeki üyelerin toplam kayıtlı token sayısı), kaçına gerçekten gönderildiği (`sent`) ve son hatanın mesajı.
+
+- `app/src/App.jsx`'teki `handleSendNotification`, birden fazla aileye kayıtlı bir tarif için bu sonuçları topluyor (`notifyResultMessage` yardımcı fonksiyonu bunu Türkçe bir mesaja çeviriyor): `recipientCount === 0` → "Ailede başka üye yok", `attempted === 0` → **"Kimsenin bildirim kaydı yok"** (token hiç kaydolmamış — sorun istemci tarafında), `sent === 0` ama `attempted > 0` → "Gönderilemedi: ⟨sunucu hatası⟩" (token var ama FCM gönderimi başarısız — sorun sunucu/kimlik bilgisi tarafında), kısmi başarı → "Kısmen gönderildi (X/Y)".
+- Hem `RecipeDetail`'deki zil butonu (artık ikonun yanında küçük, geçici bir metin etiketi de gösteriyor — önceden sadece `title` tooltip'i vardı ki dokunmatik ekranda hiç görünmüyordu) hem `Sidebar`'daki basılı-tutma şeridi bu gerçek mesajı gösteriyor.
+- **Yerel `npm run dev`'de `/api/notify` mock'u `{sent:0, attempted:0, recipientCount:1}` döndürecek şekilde ayarlanıp doğrulandı** — her iki yüzeyde de "Kimsenin bildirim kaydı yok" doğru görünüyor (test sonunda `index.html` mock'u geri alındı, kalıcı değil).
+- **Bu tamamen web/API değişikliği** (`app/api/notify.js`, `app/src/App.jsx`) — **yeni APK gerekmiyor**, GitHub'a push + Vercel deploy sonrası telefonda uygulamayı kapatıp açmak yeterli.
+- **Sonraki adım:** Kullanıcı v13'te tekrar bildirim gönder deyip artık hangi mesajı gördüğünü bildirmeli — "Kimsenin bildirim kaydı yok" çıkarsa sorun native FCM token'ının hâlâ kaydolamaması (v13'ün kendisi), "Gönderilemedi: ..." çıkarsa sorun sunucu tarafında (`FIREBASE_SERVICE_ACCOUNT_KEY` env değişkeni / FCM kimlik doğrulaması) — bu ikisi çok farklı düzeltmeler gerektiriyor, mesaj hangisi olduğunu netleştirecek.
 
 ## Bilinen eksik / yapılacaklar
 

@@ -36,11 +36,18 @@ export default async function handler(req, res) {
   const body = craveNotificationBody(name, recipeTitle);
   const recipientUids = Object.keys(members).filter((uid) => uid !== user.uid);
 
+  // sent/attempted, gönderenin "gönderildi" görmesine rağmen kimsenin bildirim
+  // almadığı durumları (kayıtlı token yok / FCM gönderimi hata verdi) istemcide
+  // ayırt edebilmek için dönülüyor — daha önce bu bilgi hiç görünmüyordu ve
+  // token hiç kaydolmasa bile istemci her zaman "gönderildi" gösteriyordu.
   let sent = 0;
+  let attempted = 0;
+  let lastError = null;
   await Promise.all(
     recipientUids.map(async (uid) => {
       const tokens = await redisGetJSON(fcmTokensKey(uid), []);
       if (!tokens.length) return;
+      attempted += tokens.length;
       const stillValid = [];
       for (const token of tokens) {
         try {
@@ -51,6 +58,7 @@ export default async function handler(req, res) {
           // invalidToken değilse geçici bir hata olabilir (ör. ağ) — token'ı
           // silmeden bırakıyoruz, sadece kalıcı olarak geçersizse temizliyoruz.
           if (!e.invalidToken) stillValid.push(token);
+          lastError = e.message;
         }
       }
       if (stillValid.length !== tokens.length) {
@@ -59,5 +67,11 @@ export default async function handler(req, res) {
     })
   );
 
-  res.status(200).json({ ok: true, sent });
+  res.status(200).json({
+    ok: true,
+    sent,
+    attempted,
+    recipientCount: recipientUids.length,
+    error: sent === 0 ? lastError : null,
+  });
 }
