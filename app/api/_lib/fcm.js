@@ -77,6 +77,10 @@ export async function sendFcmMessage(token, { title, body }) {
       message: {
         token,
         notification: { title, body },
+        // Varsayılan ("normal") öncelik, cihaz Doze/pil optimizasyonu
+        // modundayken bildirimi dakikalarca geciktirebiliyordu ("geç geliyor"
+        // diye bildirildi, 10 Eylül 2026) - "high" cihazı hemen uyandırıyor.
+        android: { priority: "high" },
         webpush: { fcm_options: { link: "/" } },
       },
     }),

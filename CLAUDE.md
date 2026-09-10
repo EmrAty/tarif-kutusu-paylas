@@ -323,6 +323,13 @@ Yukarıdaki belirsizliği çözmek için (Vercel loglarına bakmak yerine, kulla
 - **Yerel `npm run dev`'de `/api/notify` mock'u `{sent:0, attempted:0, recipientCount:1}` döndürecek şekilde ayarlanıp doğrulandı** — her iki yüzeyde de "Kimsenin bildirim kaydı yok" doğru görünüyor (test sonunda `index.html` mock'u geri alındı, kalıcı değil).
 - **Bu tamamen web/API değişikliği** (`app/api/notify.js`, `app/src/App.jsx`) — **yeni APK gerekmiyor**, GitHub'a push + Vercel deploy sonrası telefonda uygulamayı kapatıp açmak yeterli.
 - **Sonraki adım:** Kullanıcı v13'te tekrar bildirim gönder deyip artık hangi mesajı gördüğünü bildirmeli — "Kimsenin bildirim kaydı yok" çıkarsa sorun native FCM token'ının hâlâ kaydolamaması (v13'ün kendisi), "Gönderilemedi: ..." çıkarsa sorun sunucu tarafında (`FIREBASE_SERVICE_ACCOUNT_KEY` env değişkeni / FCM kimlik doğrulaması) — bu ikisi çok farklı düzeltmeler gerektiriyor, mesaj hangisi olduğunu netleştirecek.
+- **Sonuç: v13 + bu tanı değişikliğiyle birlikte bildirim gerçekten ulaştı** ("demin düzelmiş zaten çalışıyo") — yani asıl sorun native FCM'e geçişti (token artık kaydolabiliyor), tanı mesajı ayrıca bir sorun ortaya çıkarmadı. Tek kalan şikayet: **bildirim geç geliyordu.**
+
+### Bildirim gecikmesi düzeltildi — FCM mesajına "high" öncelik eklendi (10 Eylül 2026)
+
+Kullanıcı bildirimin artık ulaştığını ama geç geldiğini bildirdi. Kök neden: `app/api/_lib/fcm.js`'teki `sendFcmMessage`, mesaja bir `android.priority` belirtmiyordu — FCM'in varsayılanı "normal" öncelik, bu da alıcı cihaz Doze/pil optimizasyonu (App Standby) modundayken teslimatı dakikalarca (bazen daha uzun) erteleyebiliyor. `message.android.priority = "high"` eklendi — bu, cihazı Doze modundan hemen uyandırıp mesajı derhal teslim etmesini FCM'e söylüyor (Android'in kendi resmi önerisi, zamana duyarlı/kullanıcı etkileşimli bildirimler için).
+- **Bu tamamen sunucu tarafı bir değişiklik** (`app/api/_lib/fcm.js`) — **yeni APK gerekmiyor**, hatta uygulamayı kapatıp açmaya bile gerek yok (bir sonraki `/api/notify` çağrısında otomatik devreye girer, Vercel deploy'u yeterli).
+- **Henüz kullanıcı tarafından gecikmenin gerçekten kısaldığı doğrulanmadı** — bir sonraki bildirim testinde kontrol edilmeli.
 
 ## Bilinen eksik / yapılacaklar
 
@@ -332,7 +339,7 @@ Yukarıdaki belirsizliği çözmek için (Vercel loglarına bakmak yerine, kulla
 4. **Plus için gerçek ödeme entegrasyonu yok** — kullanıcının kendi isteğiyle şimdilik "Plus" ekranındaki bir test bayrağıyla açılıp kapatılıyor (bkz. aynı bölüm). Gerçek ödeme (muhtemelen Stripe) istenirse ayrı bir iş.
 5. **Hesap/aile/Plus sistemi canlıda gerçek (throwaway) hesaplarla API üzerinden uçtan uca test edildi (10 Eylül 2026)** — kişisel/aile veri izolasyonu, 2 aile sınırı, Plus kapanınca aileden çıkma + veri korunması, Plus tekrar açılınca otomatik geri dönmeme, 50 tarif sınırı + Plus'ta kalkması, aile silme, ve bir tarifin birden fazla yere kaydedilip listede tekrarlamaması — hepsi doğrulandı (test script'leri bu makinede `scratchpad` altında, kalıcı değil). Test için oluşturulan tüm sahte hesaplar sonunda silindi; sadece test sırasında oluşan birkaç "ZZZ_TEST_..." adlı aile kaydı (üyesiz, erişilemez, zararsız) Redis'te kalıntı olarak durabilir — aile silme özelliği eklendiğinden beri yeni testler kendi kendini temizliyor. **Henüz test edilmeyen tek şey:** gerçek kullanıcı hesaplarıyla (anonim değil, iki farklı gerçek kişi/cihaz) tarayıcı üzerinden uçtan uca kullanım.
 
-6. ~~"Canı çekti" push bildirimi Capacitor'da çalışıyor mu bilinmiyor~~ — **kök nedeni bulundu, çözüldü (10 Eylül 2026, v13, bkz. yukarıdaki "v13: 'canı çekti' bildirimi native Android FCM'e taşındı").** Web push yerine `@capacitor/push-notifications` (native FCM) kullanılıyor artık. **Ama v13 henüz kullanıcı tarafından telefonda test edilmedi** — bir sonraki oturumda ilk iş bu olmalı.
+6. ~~"Canı çekti" push bildirimi Capacitor'da çalışıyor mu bilinmiyor~~ — **çözüldü ve kullanıcı tarafından telefonda doğrulandı (10 Eylül 2026, v13 + native FCM'e geçiş, bkz. yukarıdaki "v13: 'canı çekti' bildirimi native Android FCM'e taşındı").** Tek kalan not: bildirim gecikmeli geliyordu, `android.priority: "high"` eklenerek düzeltildi (bkz. "Bildirim gecikmesi düzeltildi") — **bu son düzeltme henüz doğrulanmadı.**
 7. **`app/android/` klasörü git'te değil** — elle yazılmış native kod içerdiği için riskli, bkz. "KALDIĞIMIZ YER".
 
 ### Test edilip kapatılan maddeler
