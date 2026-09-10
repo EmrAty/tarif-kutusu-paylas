@@ -22,10 +22,15 @@ messaging.onBackgroundMessage((payload) => {
     body: body || "",
     icon: "/icon-192.png",
     badge: "/icon-192.png",
+    data: payload.data || {},
   });
 });
 
+// Bildirime tıklanınca, varsa data.recipeId'yi taşıyarak uygulamayı açar -
+// App.jsx'teki ?openRecipe= query param okuyucusu doğru tarife yönlendiriyor.
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  event.waitUntil(clients.openWindow("/"));
+  const recipeId = event.notification.data && event.notification.data.recipeId;
+  const url = recipeId ? `/?openRecipe=${encodeURIComponent(recipeId)}` : "/";
+  event.waitUntil(clients.openWindow(url));
 });

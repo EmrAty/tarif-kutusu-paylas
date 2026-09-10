@@ -19,7 +19,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  const { familyId, recipeTitle, senderName } = req.body || {};
+  const { familyId, recipeId, recipeTitle, senderName } = req.body || {};
   if (!familyId || !recipeTitle) {
     res.status(400).json({ error: "Eksik bilgi." });
     return;
@@ -51,7 +51,14 @@ export default async function handler(req, res) {
       const stillValid = [];
       for (const token of tokens) {
         try {
-          await sendFcmMessage(token, { title: "Tarif Kutusu", body });
+          await sendFcmMessage(token, {
+            title: "Tarif Kutusu",
+            body,
+            // Bildirime tıklanınca doğrudan bu tarifin açılması için (bkz.
+            // App.jsx'teki pushNotificationActionPerformed dinleyicisi ve
+            // firebase-messaging-sw.js'teki notificationclick).
+            data: recipeId ? { recipeId } : undefined,
+          });
           sent++;
           stillValid.push(token);
         } catch (e) {

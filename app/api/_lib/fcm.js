@@ -68,8 +68,9 @@ export function fcmTokensKey(uid) {
 // Tek bir cihaz token'ına push gönderiyor. Token artık geçersizse (uygulama
 // kaldırılmış, izin geri alınmış vb.) invalidToken:true fırlatıyor ki çağıran
 // taraf o token'ı kalıcı listeden temizleyebilsin.
-export async function sendFcmMessage(token, { title, body }) {
+export async function sendFcmMessage(token, { title, body, data }) {
   const { accessToken, projectId } = await getAccessToken();
+  const recipeId = data?.recipeId;
   const res = await fetch(`https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`, {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
@@ -77,11 +78,15 @@ export async function sendFcmMessage(token, { title, body }) {
       message: {
         token,
         notification: { title, body },
+        // data, bildirime tıklanınca doğru tarifin açılabilmesi için (bkz.
+        // App.jsx / firebase-messaging-sw.js) - FCM data payload'ı sadece
+        // string değer kabul ediyor.
+        ...(data ? { data: Object.fromEntries(Object.entries(data).map(([k, v]) => [k, String(v)])) } : {}),
         // Varsayılan ("normal") öncelik, cihaz Doze/pil optimizasyonu
         // modundayken bildirimi dakikalarca geciktirebiliyordu ("geç geliyor"
         // diye bildirildi, 10 Eylül 2026) - "high" cihazı hemen uyandırıyor.
         android: { priority: "high" },
-        webpush: { fcm_options: { link: "/" } },
+        webpush: { fcm_options: { link: recipeId ? `/?openRecipe=${encodeURIComponent(recipeId)}` : "/" } },
       },
     }),
   });

@@ -259,8 +259,8 @@ async function registerFcmToken(token) {
   return authedFetch("/api/fcm-token", { method: "POST", body: { token } });
 }
 
-async function sendFamilyNotification(familyId, recipeTitle, senderName) {
-  return authedFetch("/api/notify", { method: "POST", body: { familyId, recipeTitle, senderName } });
+async function sendFamilyNotification(familyId, recipeId, recipeTitle, senderName) {
+  return authedFetch("/api/notify", { method: "POST", body: { familyId, recipeId, recipeTitle, senderName } });
 }
 
 async function suggestFromPantry(items) {
@@ -471,6 +471,7 @@ export default function TarifKutusu() {
   const [loaded, setLoaded] = useState(false);
   const [view, setView] = useState("list");
   const [activeId, setActiveId] = useState(null);
+  const [pendingRecipeId, setPendingRecipeId] = useState(null);
   const [link, setLink] = useState("");
   const [caption, setCaption] = useState("");
   const [notes, setNotes] = useState("");
@@ -558,7 +559,7 @@ export default function TarifKutusu() {
     if (!familyScopes.length) return { sent: 0, attempted: 0, recipientCount: 0 };
     const results = await Promise.all(
       familyScopes.map((familyId) =>
-        sendFamilyNotification(familyId, recipe.title || "bir yemek", personName)
+        sendFamilyNotification(familyId, recipe.id, recipe.title || "bir yemek", personName)
       )
     );
     return results.reduce(
@@ -603,6 +604,17 @@ export default function TarifKutusu() {
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
+
+      // "Canı çekti" bildirimine tıklanınca (web push, firebase-messaging-sw.js'in
+      // notificationclick'te açtığı link) doğrudan o tarife gitmek için.
+      const openRecipeId = params.get("openRecipe");
+      if (openRecipeId) {
+        setPendingRecipeId(openRecipeId);
+        const url = new URL(window.location.href);
+        url.searchParams.delete("openRecipe");
+        window.history.replaceState({}, "", url);
+      }
+
       const directLink = params.get("link");
       if (directLink && directLink.trim()) {
         setLink(directLink.trim());
@@ -667,6 +679,24 @@ export default function TarifKutusu() {
     ShareReceiver.getInitialShare().then(applyShared).catch(() => {});
     let listenerHandle;
     ShareReceiver.addListener("shareReceived", applyShared).then((h) => {
+      listenerHandle = h;
+    });
+    return () => {
+      if (listenerHandle) listenerHandle.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    // "Canı çekti" bildirimine tıklanınca (uygulama kapalıyken/arka plandayken/
+    // açıkken hepsinde) doğrudan o tarifi açar - data payload'ındaki recipeId,
+    // api/notify.js'in sendFcmMessage'a geçtiği aynı id (bkz. aşağıdaki
+    // pendingRecipeId + recipes effect'i, gerçek navigasyonu o yapıyor).
+    if (!Capacitor.isNativePlatform()) return;
+    let listenerHandle;
+    PushNotifications.addListener("pushNotificationActionPerformed", (action) => {
+      const recipeId = action?.notification?.data?.recipeId;
+      if (recipeId) setPendingRecipeId(recipeId);
+    }).then((h) => {
       listenerHandle = h;
     });
     return () => {
@@ -774,6 +804,20 @@ export default function TarifKutusu() {
     families.forEach((f) => addFrom(f.id, recipeBuckets[f.id] || []));
     return Array.from(byId.values());
   }, [recipeBuckets, families]);
+
+  // Bildirime tıklanınca (native pushNotificationActionPerformed ya da web
+  // ?openRecipe= query param) hedef tarif henüz yüklenmemiş olabilir - ailenin
+  // tarif bucket'ı ayrı bir istekle geliyor. Bu yüzden tarifin recipes'e girip
+  // girmediğini, her recipes güncellendiğinde tekrar kontrol ediyoruz.
+  useEffect(() => {
+    if (!pendingRecipeId) return;
+    const recipe = recipes.find((r) => r.id === pendingRecipeId);
+    if (recipe) {
+      setActiveId(recipe.id);
+      setView("detail");
+      setPendingRecipeId(null);
+    }
+  }, [pendingRecipeId, recipes]);
 
   const persistScope = useCallback(async (scopeKey, updatedList) => {
     const cleaned = updatedList.map(({ _scope, _scopes, ...rest }) => rest);

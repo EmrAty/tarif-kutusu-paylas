@@ -340,6 +340,21 @@ Kullanıcı v13'te (ve v12'de de zaten vardı, önceki oturumlarda fark edilmemi
 - **Bu tamamen web/React değişikliği** (`app/src/App.jsx`) — **yeni APK gerekmiyor**, uygulamayı kapatıp açmak yeterli.
 - **Kullanıcı tarafından telefonda doğrulandı, düzeldi (10 Eylül 2026).**
 
+### "Canı çekti" bildirimine tıklanınca doğrudan o tarif açılıyor (10 Eylül 2026)
+
+Kullanıcının isteği: bildirime tıklanınca uygulama sadece açılmasın, doğrudan bahsedilen tarifin detay ekranına gitsin.
+
+- **`app/api/notify.js`**, artık istekte `recipeId` de alıyor (App.jsx'teki `handleSendNotification`/`sendFamilyNotification` `recipe.id`'yi gönderiyor) ve bunu `sendFcmMessage`'a `data: {recipeId}` olarak geçiyor.
+- **`app/api/_lib/fcm.js`**'teki `sendFcmMessage`, artık bir `data` objesi kabul edip FCM mesajına ekliyor (FCM data payload'ı sadece string değer kabul ettiği için değerler `String()` ile çevriliyor) — ayrıca `webpush.fcm_options.link`'i `/?openRecipe=<id>` yapıyor (web push'ta tarayıcının kendi varsayılan tıklama davranışı için bir yedek, asıl iş aşağıdaki service worker'da).
+- **`app/public/firebase-messaging-sw.js`**: `onBackgroundMessage` artık bildirim gösterirken `data`'yı da saklıyor (`showNotification(..., {data: payload.data})`), `notificationclick` bu veriden `recipeId`'yi okuyup `/?openRecipe=<id>` ile bir pencere açıyor (uygulama arka plandayken/kapalıyken gelen web push'lar için).
+- **`app/src/App.jsx`**:
+  - Yeni bir `useEffect`, web tarafında `?openRecipe=` query param'ını okuyup `pendingRecipeId` state'ine yazıyor (aynı share-link query-param okuma effect'inin içine eklendi), sonra URL'den temizliyor (`history.replaceState`, sayfa yenilenince tekrar tetiklenmesin diye).
+  - Yeni bir native-only `useEffect`, `PushNotifications.addListener("pushNotificationActionPerformed", ...)` ile bildirime tıklanma olayını dinleyip `action.notification.data.recipeId`'yi aynı `pendingRecipeId` state'ine yazıyor — hem uygulama kapalıyken/arka plandayken hem açıkken tıklanan bildirimler için çalışıyor (Capacitor'ın kendi event kuyruklaması sayesinde, ShareReceiver'ın `getInitialShare()` desenine benzer).
+  - Yeni bir `useEffect` (`recipes` useMemo'sunun hemen altında), `pendingRecipeId` set olduğunda `recipes` her güncellendiğinde o id'yi arıyor — bulununca `setActiveId` + `setView("detail")` yapıp `pendingRecipeId`'yi temizliyor. Aile tarifleri bucket'ı ayrı/asenkron yüklendiği için (kişisel bucket'tan sonra gelebiliyor), tek seferlik bir kontrol yerine `recipes` değiştikçe tekrar deniyor.
+- **Test:** Yerel `npm run dev`'de `/api/families` + `/api/data` mock'lanıp tarayıcı doğrudan `?openRecipe=r1` ile açıldı — misafir girişi sonrası uygulama gerçekten otomatik olarak o tarifin detay ekranına gitti, URL de `openRecipe`'siz hâline temizlendi (test sonunda `index.html` mock'u geri alındı, kalıcı değil). **Native `pushNotificationActionPerformed` tarafı bu şekilde test edilemedi** (gerçek bir Android bildirime tıklama gerekiyor).
+- **Yeni APK gerekmiyor** — `@capacitor/push-notifications` zaten v13'te kurulu (token almak için), bu değişiklik sadece o eklentinin zaten var olan bir event'ini JS'den dinlemeye başlıyor; native tarafta hiçbir şey değişmedi. Web push tarafı da tamamen `app/public/` + `app/src/App.jsx` içinde.
+- **Henüz kullanıcı tarafından telefonda test edilmedi.**
+
 ## Bilinen eksik / yapılacaklar
 
 1. **iPhone paylaşım entegrasyonu:** iOS Safari, Web Share Target API'yi desteklemiyor (Apple kısıtlaması, düzeltilemez). Android'de uygulama zaten yüklenince paylaşım menüsünde çıkabiliyor. iPhone için plan: kullanıcının telefonunda bir kere kuracağı bir **Kısayollar (Shortcuts) app** kısayolu — TikTok'ta paylaşırken "Tarif Kutusu" olarak çıkıp linki `?link=...` ile uygulamaya atacak. Henüz kurulmadı, kullanıcıyla adım adım yapılacak.
