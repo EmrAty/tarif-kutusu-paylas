@@ -138,7 +138,10 @@ const SERIF = "Charter, 'Iowan Old Style', 'Georgia', 'Times New Roman', serif";
 const BODY = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
 const LABELSANS = "'Helvetica Neue Condensed', 'Arial Narrow', Arial, sans-serif";
 const CARD_SHADOW = "0 1px 2px rgba(42,38,32,0.05), 0 8px 24px rgba(42,38,32,0.06)";
-const DETAIL_EXIT_MS = 200; // tarif detayı kapanış animasyonunun süresi (mobil, view="list"e geçmeden önce)
+const SCREEN_EXIT_MS = 200; // mobil "ekran" kapanış animasyonunun süresi (gerçek view değişiminden önce)
+// Mobilde/Capacitor'da tarif listesinin (Sidebar) üstünde kalmayıp onun yerine
+// tam ekran açılan, kendi giriş/çıkış animasyonu + scroll-üste-sıfırlama olan view'lar.
+const FULLSCREEN_VIEWS = ["detail", "add", "manual", "shopping", "pantry"];
 
 const CATEGORIES = ["Kahvaltı", "Öğle Yemeği ve Akşam Yemeği", "Soslar", "Atıştırmalıklar", "Tatlılar"];
 
@@ -496,52 +499,63 @@ export default function TarifKutusu() {
   const updateAvailable = useUpdateAvailable();
   const listScrollYRef = React.useRef(0);
   const prevViewRef = React.useRef(view);
-  const [detailClosing, setDetailClosing] = useState(false);
-  const detailClosingRef = React.useRef(false);
+  // Hangi "tam ekran" view'ın (bkz. FULLSCREEN_VIEWS) şu an kapanış animasyonunu
+  // oynattığı — null iken kapanış yok. Aynı anda tek bir fullscreen view render
+  // olduğu için (view === closingScreen) kontrolü hepsi için tek bir ortak sınıf verir.
+  const [closingScreen, setClosingScreen] = useState(null);
+  const closingScreenRef = React.useRef(null);
+  const closeBackTargetRef = React.useRef("list");
+  // "Alışveriş Listesi" özel durum: ana ekrandan mı (→ geri: list) yoksa bir
+  // tarif detayından "Alışveriş Listesine Ekle" ile mi (→ geri: o detay) açıldı.
+  const [shoppingReturnView, setShoppingReturnView] = useState("list");
 
   useEffect(() => {
-    // Tarif kartına tıklayınca detay ekranı ayrı bir "sayfa" gibi açılsın: detaya
-    // girerken en üste kaydır, listeye dönünce listede bırakılan konuma geri dön.
+    // Mobilde ana bölümler (detay/Yeni Tarif Çıkar/Tarifini Kendin Oluştur/
+    // Alışveriş Listesi/Elimde Bunlar Var) ayrı birer "ekran" gibi açılsın:
+    // her birine girerken en üste kaydır, listeye dönünce listede bırakılan
+    // konuma geri dön.
     const prevView = prevViewRef.current;
-    if (view === "detail" && prevView !== "detail") {
+    if (FULLSCREEN_VIEWS.includes(view)) {
       window.scrollTo(0, 0);
-    } else if (prevView === "detail" && view === "list") {
+    } else if (FULLSCREEN_VIEWS.includes(prevView) && view === "list") {
       window.scrollTo(0, listScrollYRef.current);
     }
     prevViewRef.current = view;
   }, [view]);
 
-  // Detaydan listeye dönüşün ortak yolu: Header'daki ← butonu ve Android
-  // backButton'ı ikisi de bunu çağırıyor. Detaydayken önce kısa bir "kapanış"
-  // animasyonu oynatıp (mobilde, reduced-motion kapalıyken), animasyon
-  // bitince gerçek view="list" geçişini yapıyor ki scroll restore effect'i
-  // (yukarıda) doğru zamanda tetiklensin. Diğer view'lardan (add/edit/...)
-  // dönüş her zaman anında.
-  const closeDetailScreen = useCallback(() => {
-    if (view !== "detail") {
+  // Herhangi bir "tam ekran" view'dan geri dönüşün ortak yolu: Header'daki ←
+  // butonu ve Android backButton'ı ikisi de bunu çağırıyor. FULLSCREEN_VIEWS
+  // içindeyken önce kısa bir "kapanış" animasyonu oynatıp (mobilde,
+  // reduced-motion kapalıyken), animasyon bitince gerçek view geçişini yapıyor
+  // ki yukarıdaki scroll restore effect'i doğru zamanda tetiklensin. Diğer
+  // view'lardan (edit/favorites/...) dönüş her zaman anında, değişmedi.
+  const closeActiveScreen = useCallback(() => {
+    if (!FULLSCREEN_VIEWS.includes(view)) {
       setView("list");
       return;
     }
-    if (detailClosingRef.current) return;
+    if (closingScreenRef.current) return;
+    const backTarget = view === "shopping" ? shoppingReturnView : "list";
     const reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const isMobileWidth = window.innerWidth < 768;
     if (reduceMotion || !isMobileWidth) {
-      setView("list");
+      setView(backTarget);
       return;
     }
-    detailClosingRef.current = true;
-    setDetailClosing(true);
-  }, [view]);
+    closeBackTargetRef.current = backTarget;
+    closingScreenRef.current = view;
+    setClosingScreen(view);
+  }, [view, shoppingReturnView]);
 
   useEffect(() => {
-    if (!detailClosing) return;
+    if (!closingScreen) return;
     const timer = setTimeout(() => {
-      detailClosingRef.current = false;
-      setDetailClosing(false);
-      setView("list");
-    }, DETAIL_EXIT_MS);
+      closingScreenRef.current = null;
+      setClosingScreen(null);
+      setView(closeBackTargetRef.current);
+    }, SCREEN_EXIT_MS);
     return () => clearTimeout(timer);
-  }, [detailClosing]);
+  }, [closingScreen]);
 
   useEffect(() => {
     // Misafir girişi artık Firebase'in anonim oturum açma yöntemiyle yapılıyor:
@@ -765,7 +779,7 @@ export default function TarifKutusu() {
       } else if (menuOpen) {
         setMenuOpen(false);
       } else if (view !== "list") {
-        closeDetailScreen();
+        closeActiveScreen();
       } else {
         CapacitorApp.minimizeApp();
       }
@@ -775,7 +789,7 @@ export default function TarifKutusu() {
     return () => {
       if (listenerHandle) listenerHandle.remove();
     };
-  }, [view, menuOpen, modalView, closeDetailScreen]);
+  }, [view, menuOpen, modalView, closeActiveScreen]);
 
   const [recipeBuckets, setRecipeBuckets] = useState({ [PERSONAL]: [] });
   const [saveTargets, setSaveTargets] = useState([PERSONAL]);
@@ -1013,10 +1027,15 @@ export default function TarifKutusu() {
       })
     );
     setShoppingInitialContext(scopes[0]);
+    setShoppingReturnView("detail");
     setView("shopping");
   };
 
   const active = recipes.find((r) => r.id === activeId);
+  // Şu an render edilen tam ekran view kapanış animasyonundaysa (closingScreen
+  // her zaman geçerli `view` ile aynı olur, bkz. closeActiveScreen), aynı ortak
+  // giriş/çıkış sınıfı tüm FULLSCREEN_VIEWS ekranlarında kullanılıyor.
+  const screenTransitionClass = closingScreen === view ? "detail-screen-exit" : "detail-screen-enter";
 
   if (!authChecked) {
     return (
@@ -1053,7 +1072,7 @@ export default function TarifKutusu() {
       }}
     >
       {updateAvailable && <UpdateBanner onUpdate={() => window.location.reload()} />}
-      <Header view={view} onBack={closeDetailScreen} authUser={authUser} onSignOut={handleSignOut} onOpenMenu={() => setMenuOpen(true)} />
+      <Header view={view} onBack={closeActiveScreen} authUser={authUser} onSignOut={handleSignOut} onOpenMenu={() => setMenuOpen(true)} />
 
       <SideMenu
         open={menuOpen}
@@ -1083,6 +1102,9 @@ export default function TarifKutusu() {
         className="md-row"
       >
         <style>{`
+          /* .detail-screen-enter/-exit: FULLSCREEN_VIEWS'teki her ekran (detay,
+             Yeni Tarif Çıkar, Tarifini Kendin Oluştur, Alışveriş Listesi,
+             Elimde Bunlar Var) için ortak giriş/çıkış animasyonu. */
           .list-sidebar-mobile-hidden { display: none; }
           @keyframes detailScreenIn {
             from { opacity: 0; transform: translateY(24px); }
@@ -1093,7 +1115,7 @@ export default function TarifKutusu() {
             to { opacity: 0; transform: translateY(24px); }
           }
           .detail-screen-enter { animation: detailScreenIn 220ms ease-out both; }
-          .detail-screen-exit { animation: detailScreenOut ${DETAIL_EXIT_MS}ms ease-out both; }
+          .detail-screen-exit { animation: detailScreenOut ${SCREEN_EXIT_MS}ms ease-out both; }
           @media (prefers-reduced-motion: reduce) {
             .detail-screen-enter, .detail-screen-exit { animation: none; }
           }
@@ -1108,7 +1130,7 @@ export default function TarifKutusu() {
         `}</style>
 
         <div
-          className={`md-sidebar${view === "detail" ? " list-sidebar-mobile-hidden" : ""}`}
+          className={`md-sidebar${FULLSCREEN_VIEWS.includes(view) ? " list-sidebar-mobile-hidden" : ""}`}
           style={{ width: "100%" }}
         >
           <Sidebar
@@ -1123,17 +1145,28 @@ export default function TarifKutusu() {
               setView("detail");
             }}
             onAdd={() => {
+              if (view !== "add") listScrollYRef.current = window.scrollY;
               setError("");
               setSaveTargets([PERSONAL]);
               setView((v) => (v === "add" ? "list" : "add"));
             }}
             onManual={() => {
+              if (view !== "manual") listScrollYRef.current = window.scrollY;
               setManualPrefill(null);
               setSaveTargets([PERSONAL]);
               setView((v) => (v === "manual" ? "list" : "manual"));
             }}
-            onPantry={() => setView((v) => (v === "pantry" ? "list" : "pantry"))}
-            onShopping={() => setView((v) => (v === "shopping" ? "list" : "shopping"))}
+            onPantry={() => {
+              if (view !== "pantry") listScrollYRef.current = window.scrollY;
+              setView((v) => (v === "pantry" ? "list" : "pantry"));
+            }}
+            onShopping={() => {
+              if (view !== "shopping") {
+                listScrollYRef.current = window.scrollY;
+                setShoppingReturnView("list");
+              }
+              setView((v) => (v === "shopping" ? "list" : "shopping"));
+            }}
             onToggleFavorite={handleToggleFavorite}
             onDelete={handleDelete}
             onSendNotification={handleSendNotification}
@@ -1141,47 +1174,58 @@ export default function TarifKutusu() {
         </div>
 
         <main style={{ minWidth: 0, flex: 1 }}>
-          {view === "list" && <EmptyState onAdd={() => setView("add")} />}
-
-          {view === "add" && (
-            <AddForm
-              link={link}
-              caption={caption}
-              notes={notes}
-              images={images}
-              category={category}
-              busy={busy}
-              error={error}
-              setLink={setLink}
-              setCaption={setCaption}
-              setNotes={setNotes}
-              setImages={setImages}
-              setCategory={setCategory}
-              saveTargets={saveTargets}
-              setSaveTargets={setSaveTargets}
-              isPlus={isPlus}
-              families={families}
-              onSubmit={handleExtract}
-              onCancel={() => setView("list")}
+          {view === "list" && (
+            <EmptyState
+              onAdd={() => {
+                listScrollYRef.current = window.scrollY;
+                setView("add");
+              }}
             />
           )}
 
+          {view === "add" && (
+            <div className={screenTransitionClass}>
+              <AddForm
+                link={link}
+                caption={caption}
+                notes={notes}
+                images={images}
+                category={category}
+                busy={busy}
+                error={error}
+                setLink={setLink}
+                setCaption={setCaption}
+                setNotes={setNotes}
+                setImages={setImages}
+                setCategory={setCategory}
+                saveTargets={saveTargets}
+                setSaveTargets={setSaveTargets}
+                isPlus={isPlus}
+                families={families}
+                onSubmit={handleExtract}
+                onCancel={() => setView("list")}
+              />
+            </div>
+          )}
+
           {view === "manual" && (
-            <RecipeEditor
-              heading="Yeni Tarif Oluştur"
-              initial={manualPrefill}
-              isNew
-              saveTargets={saveTargets}
-              setSaveTargets={setSaveTargets}
-              isPlus={isPlus}
-              families={families}
-              personalCount={(recipeBuckets[PERSONAL] || []).length}
-              onSave={handleManualSave}
-              onCancel={() => {
-                setManualPrefill(null);
-                setView("list");
-              }}
-            />
+            <div className={screenTransitionClass}>
+              <RecipeEditor
+                heading="Yeni Tarif Oluştur"
+                initial={manualPrefill}
+                isNew
+                saveTargets={saveTargets}
+                setSaveTargets={setSaveTargets}
+                isPlus={isPlus}
+                families={families}
+                personalCount={(recipeBuckets[PERSONAL] || []).length}
+                onSave={handleManualSave}
+                onCancel={() => {
+                  setManualPrefill(null);
+                  setView("list");
+                }}
+              />
+            </div>
           )}
 
           {view === "edit" && active && (
@@ -1196,7 +1240,7 @@ export default function TarifKutusu() {
           )}
 
           {view === "detail" && active && (
-            <div className={detailClosing ? "detail-screen-exit" : "detail-screen-enter"}>
+            <div className={screenTransitionClass}>
               <RecipeDetail
                 recipe={active}
                 familyNameById={familyNameById}
@@ -1212,28 +1256,32 @@ export default function TarifKutusu() {
           )}
 
           {view === "shopping" && (
-            <ShoppingList key={shoppingInitialContext} recipes={recipes} isPlus={isPlus} families={families} initialContext={shoppingInitialContext} />
+            <div className={screenTransitionClass}>
+              <ShoppingList key={shoppingInitialContext} recipes={recipes} isPlus={isPlus} families={families} initialContext={shoppingInitialContext} />
+            </div>
           )}
 
           {view === "pantry" && (
-            <PantryFinder
-              recipes={recipes}
-              isPlus={isPlus}
-              families={families}
-              onSelectRecipe={(id) => {
-                setActiveId(id);
-                setView("detail");
-              }}
-              onCreateFromSuggestion={(suggestion) => {
-                setManualPrefill({
-                  title: suggestion.title,
-                  ingredients: suggestion.ingredients || [],
-                  instructions: suggestion.instructions || [],
-                });
-                setSaveTargets([PERSONAL]);
-                setView("manual");
-              }}
-            />
+            <div className={screenTransitionClass}>
+              <PantryFinder
+                recipes={recipes}
+                isPlus={isPlus}
+                families={families}
+                onSelectRecipe={(id) => {
+                  setActiveId(id);
+                  setView("detail");
+                }}
+                onCreateFromSuggestion={(suggestion) => {
+                  setManualPrefill({
+                    title: suggestion.title,
+                    ingredients: suggestion.ingredients || [],
+                    instructions: suggestion.instructions || [],
+                  });
+                  setSaveTargets([PERSONAL]);
+                  setView("manual");
+                }}
+              />
+            </div>
           )}
 
           {view === "favorites" && (
