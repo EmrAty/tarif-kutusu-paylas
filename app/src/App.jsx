@@ -1049,12 +1049,21 @@ export default function TarifKutusu() {
       >
         <style>{`
           .list-sidebar-mobile-hidden { display: none; }
+          @keyframes detailScreenIn {
+            from { opacity: 0; transform: translateY(24px); }
+            to { opacity: 1; transform: translateY(0); }
+          }
+          .detail-screen-enter { animation: detailScreenIn 220ms ease-out both; }
+          @media (prefers-reduced-motion: reduce) {
+            .detail-screen-enter { animation: none; }
+          }
           @media (min-width: 768px) {
             .md-row { flex-direction: row !important; align-items: flex-start; }
             .md-sidebar { width: 260px !important; flex-shrink: 0; }
             .md-detail-row { flex-direction: row !important; }
             .md-nutrition { width: 220px !important; flex-shrink: 0; }
             .list-sidebar-mobile-hidden { display: block; }
+            .detail-screen-enter { animation: none; }
           }
         `}</style>
 
@@ -1147,17 +1156,19 @@ export default function TarifKutusu() {
           )}
 
           {view === "detail" && active && (
-            <RecipeDetail
-              recipe={active}
-              familyNameById={familyNameById}
-              onDelete={() => handleDelete(active.id)}
-              onRename={(newTitle) => handleRename(active.id, newTitle)}
-              onToggleFavorite={() => handleToggleFavorite(active.id)}
-              onChangeCategory={(cat) => handleChangeCategory(active.id, cat)}
-              onEdit={() => setView("edit")}
-              onAddToShopping={() => addRecipeToShoppingList(active)}
-              onSendNotification={() => handleSendNotification(active)}
-            />
+            <div className="detail-screen-enter">
+              <RecipeDetail
+                recipe={active}
+                familyNameById={familyNameById}
+                onDelete={() => handleDelete(active.id)}
+                onRename={(newTitle) => handleRename(active.id, newTitle)}
+                onToggleFavorite={() => handleToggleFavorite(active.id)}
+                onChangeCategory={(cat) => handleChangeCategory(active.id, cat)}
+                onEdit={() => setView("edit")}
+                onAddToShopping={() => addRecipeToShoppingList(active)}
+                onSendNotification={() => handleSendNotification(active)}
+              />
+            </div>
           )}
 
           {view === "shopping" && (
