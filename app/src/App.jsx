@@ -25,6 +25,7 @@ import { PushNotifications } from "@capacitor/push-notifications";
 import { FirebaseAuthentication } from "@capacitor-firebase/authentication";
 import ShareReceiver from "./capacitorShare.js";
 import NativeSplash from "./capacitorSplash.js";
+import { CATEGORIES, RECIPE_SYSTEM_PROMPT, buildRecipeUserText } from "../shared/recipeExtraction.js";
 
 // Google, gömülü (embedded) WebView'lerde OAuth popup'ını User-Agent'a bakarak
 // engelliyor ("disallowed_useragent") - TWA gerçek Chrome kullandığı için sorun
@@ -143,7 +144,6 @@ const SCREEN_EXIT_MS = 200; // mobil "ekran" kapanış animasyonunun süresi (ge
 // tam ekran açılan, kendi giriş/çıkış animasyonu + scroll-üste-sıfırlama olan view'lar.
 const FULLSCREEN_VIEWS = ["detail", "add", "manual", "shopping", "pantry", "cook"];
 
-const CATEGORIES = ["Kahvaltı", "Öğle Yemeği ve Akşam Yemeği", "Soslar", "Atıştırmalıklar", "Tatlılar"];
 // "Elimde Bunlar Var" AI önerileri kategori döndürmüyor (bkz. suggest-recipes.js
 // şeması); normal recipe şemasında kategori zorunlu olduğu için kaydederken bu
 // varsayılan atanıyor.
@@ -231,7 +231,7 @@ async function bucketGet(bucket, scopeKey) {
 
 async function bucketSet(bucket, scopeKey, value) {
   const { scope, familyId } = scopeQuery(scopeKey);
-  await authedFetch("/api/data", { method: "POST", body: { bucket, scope, familyId, value } });
+  return authedFetch("/api/data", { method: "POST", body: { bucket, scope, familyId, value } });
 }
 
 async function fetchFamilies(memberName) {
@@ -302,39 +302,8 @@ async function importLegacyInto(scopeKey) {
 
 
 async function extractRecipe({ link, caption, notes, images }) {
-  const system = `Sen bir yemek tarifi çıkarma asistanısın. Sana bir sosyal medya (TikTok/YouTube) yemek videosuna dair bilgi verilecek — bu, videonun tam açıklama/altyazı metni olabilir, kullanıcının videoyu izlerken gördüğü malzemeler hakkında yazdığı kısa bir not olabilir, ve/veya videodan alınmış ekran görüntüleri olabilir (görüntülerde video açıklaması, altyazı, ya da ekranda görünen malzeme/tarif yazıları olabilir — görsellerdeki TÜM metni dikkatlice oku). Hangisi verilirse verilsin, bundan yapılandırılmış tarif bilgisi çıkar.
-
-SADECE ve SADECE aşağıdaki şemaya uyan HAM JSON döndür. Markdown yok, açıklama yok, backtick yok, başka hiçbir metin yok:
-
-{
-  "title": string,
-  "servings": number,
-  "prep_time_minutes": number,
-  "difficulty": string, // "Kolay", "Orta" veya "Zor" değerlerinden biri
-  "ingredients": [ { "name": string, "amount": string } ],
-  "instructions": [ string ],
-  "nutrition": {
-    "calories": number,
-    "protein_g": number,
-    "carbs_g": number,
-    "fat_g": number
-  },
-  "assumptions": string
-}
-
-Nutrition alanındaki değerler porsiyon başına DEĞİL, tarifteki TÜM malzemelerin toplamı olsun (tarifin bütünü için toplam kalori, protein, karbonhidrat, yağ).
-
-Eğer sana verilen metin/görsellerde malzemeler açıkça ve eksiksiz yazılı DEĞİLSE ve sen bu yemeğin genel bilgine dayanarak malzemelerin bir kısmını ya da tamamını kendin tahmin ettiysen, bunu "assumptions" alanında AÇIKÇA belirt (örn: "Malzemelerin bir kısmı bu yemeğin tipik tarifine göre tarafımca tamamlandı."). Malzemeler zaten eksiksiz yazılıysa bunu belirtmene gerek yok.
-
-Miktarlar net değilse o yemeğin tipik bir porsiyonuna göre makul tahminler yap ve bunu "assumptions" alanında belirt. Yapılış adımları verilmemişse "instructions" alanını boş dizi olarak döndür, uydurma. "prep_time_minutes" ve "difficulty" belirtilmemişse tarifin niteliğine göre makul bir tahmin yap. Tüm metinler Türkçe olsun.`;
-
-  const textSection = `Video linki: ${link || "(verilmedi)"}
-
-${caption.trim() ? `Video açıklaması / altyazısı:\n"""\n${caption}\n"""` : "(Video açıklaması verilmedi.)"}
-
-${notes.trim() ? `Kullanıcının notu: ${notes}` : ""}
-
-${images && images.length > 0 ? `(Ayrıca ${images.length} adet ekran görüntüsü ekte, içindeki tüm yazıları oku.)` : ""}`;
+  const system = RECIPE_SYSTEM_PROMPT;
+  const textSection = buildRecipeUserText({ link, caption, notes, imageCount: images ? images.length : 0 });
 
   const contentBlocks = [];
   (images || []).forEach((img) => {
@@ -773,8 +742,15 @@ export default function TarifKutusu() {
     if (!Capacitor.isNativePlatform()) return;
     let listenerHandle;
     PushNotifications.addListener("pushNotificationActionPerformed", (action) => {
-      const recipeId = action?.notification?.data?.recipeId;
-      if (recipeId) setPendingRecipeId(recipeId);
+      const data = action?.notification?.data || {};
+      if (data.recipeId) {
+        setPendingRecipeId(data.recipeId);
+      } else if (data.type === "recipe_failed" && data.link) {
+        // Paylaşım panelinden başlatılan tarif oluşturulamadı: eski "Yeni Tarif
+        // Çıkar" formunu linkle açıp elle (ekran görüntüsüyle vb.) denetsin.
+        setLink(data.link);
+        setView("add");
+      }
     }).then((h) => {
       listenerHandle = h;
     });
@@ -834,6 +810,41 @@ export default function TarifKutusu() {
       // henüz kayıtlı tarif yok
     }
   }, []);
+
+  // Sunucunun arka planda eklediği tarifleri (Android paylaşım paneli job'u)
+  // almak için. loadRecipeBucket'tan farkı: istek başarısız olursa eldeki listeyi
+  // boşaltmıyor — boş liste sonraki bir kayıtta sunucudaki tarifleri silerdi.
+  const refreshRecipeBucket = useCallback(async (scopeKey) => {
+    if (!auth.currentUser) return;
+    try {
+      const { scope, familyId } = scopeQuery(scopeKey);
+      const qs = new URLSearchParams({ bucket: "recipes", scope, ...(familyId ? { familyId } : {}) });
+      const data = await authedFetch(`/api/data?${qs.toString()}`);
+      const parsed = data.value ? JSON.parse(data.value) : [];
+      if (!Array.isArray(parsed)) return;
+      const next = parsed.map((r) =>
+        r.category && LEGACY_CATEGORY_MAP[r.category] ? { ...r, category: LEGACY_CATEGORY_MAP[r.category] } : r
+      );
+      setRecipeBuckets((prev) => ({ ...prev, [scopeKey]: next }));
+    } catch (e) {
+      // yenilenemezse mevcut liste korunur
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform() || !authUser) return;
+    let cancelled = false;
+    const handles = [];
+    const keep = (h) => (cancelled ? h.remove() : handles.push(h));
+    CapacitorApp.addListener("resume", () => refreshRecipeBucket(PERSONAL)).then(keep);
+    PushNotifications.addListener("pushNotificationReceived", (notification) => {
+      if (notification?.data?.type === "recipe_ready") refreshRecipeBucket(PERSONAL);
+    }).then(keep);
+    return () => {
+      cancelled = true;
+      handles.forEach((h) => h.remove());
+    };
+  }, [authUser, refreshRecipeBucket]);
 
   useEffect(() => {
     if (!authUser) return;
@@ -898,15 +909,29 @@ export default function TarifKutusu() {
     }
   }, [pendingRecipeId, recipes]);
 
+  // Bildirimdeki tarif eldeki listede yoksa (uygulama arka planda açık kalmış,
+  // tarif sonradan sunucuda oluşmuş) listeyi bir kez sunucudan tazele.
+  const pendingRefreshRef = useRef(null);
+  useEffect(() => {
+    if (!pendingRecipeId || !loaded) return;
+    if (recipes.some((r) => r.id === pendingRecipeId)) return;
+    if (pendingRefreshRef.current === pendingRecipeId) return;
+    pendingRefreshRef.current = pendingRecipeId;
+    refreshRecipeBucket(PERSONAL);
+  }, [pendingRecipeId, loaded, recipes, refreshRecipeBucket]);
+
   const persistScope = useCallback(async (scopeKey, updatedList) => {
     const cleaned = updatedList.map(({ _scope, _scopes, ...rest }) => rest);
     setRecipeBuckets((prev) => ({ ...prev, [scopeKey]: cleaned }));
     try {
-      await bucketSet("recipes", scopeKey, JSON.stringify(cleaned));
+      const result = await bucketSet("recipes", scopeKey, JSON.stringify(cleaned));
+      // Sunucu, bu cihazın henüz görmediği arka plan tariflerini listeye geri
+      // eklediyse (bkz. api/data.js) yerel listeyi sunucuyla eşitle.
+      if (result?.merged?.length) refreshRecipeBucket(scopeKey);
     } catch (e) {
       // yazma başarısız olsa da yerel görünüm güncel kalsın
     }
-  }, []);
+  }, [refreshRecipeBucket]);
 
   // Bir tarifin kayıtlı olduğu TÜM yerlere aynı değişikliği uygular (favori,
   // kategori, isim, düzenleme) — sadece bir kopyasını güncelleyip diğerlerini

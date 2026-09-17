@@ -1,6 +1,7 @@
 import { requireUser } from "./_lib/auth.js";
 import { redisGet, redisSet, redisGetJSON } from "./_lib/redis.js";
 import { getProfile, FREE_RECIPE_LIMIT } from "./_lib/profile.js";
+import { acknowledgePendingJobRecipes, mergePendingJobRecipes } from "./_lib/jobRecipes.js";
 
 const ALLOWED_BUCKETS = new Set(["recipes", "shopping-list", "pantry-items"]);
 
@@ -42,10 +43,14 @@ export default async function handler(req, res) {
   }
 
   const key = bucketKey(scope, user.uid, familyId, bucket);
+  const isPersonalRecipes = bucket === "recipes" && scope === "personal";
 
   if (req.method === "GET") {
     try {
       const value = await redisGet(key);
+      if (isPersonalRecipes && value) {
+        await acknowledgePendingJobRecipes(user.uid, value).catch(() => {});
+      }
       res.status(200).json({ value: value ?? null });
     } catch (e) {
       res.status(e.status || 502).json({ error: e.message });
@@ -54,17 +59,33 @@ export default async function handler(req, res) {
   }
 
   if (req.method === "POST") {
-    const { value } = req.body || {};
+    let { value } = req.body || {};
     if (typeof value !== "string") {
       res.status(400).json({ error: "Geçersiz istek." });
       return;
     }
 
-    if (bucket === "recipes" && scope === "personal") {
+    let merged = [];
+    if (isPersonalRecipes) {
+      let previous = null;
+      const loadPrevious = async () => {
+        if (previous === null) previous = (await redisGetJSON(key, [])) || [];
+        return previous;
+      };
+      try {
+        const result = await mergePendingJobRecipes(user.uid, loadPrevious, JSON.parse(value));
+        if (result.merged.length) {
+          value = JSON.stringify(result.list);
+          merged = result.merged;
+        }
+      } catch (e) {
+        // ayrıştırılamazsa gelen değer olduğu gibi yazılır (önceki davranış)
+      }
+
       const profile = await getProfile(user.uid);
       if (!profile.isPlus) {
         try {
-          const previous = (await redisGetJSON(key, [])) || [];
+          const previous = await loadPrevious();
           const next = JSON.parse(value);
           if (Array.isArray(next) && next.length > FREE_RECIPE_LIMIT && next.length > previous.length) {
             res.status(403).json({
@@ -80,7 +101,7 @@ export default async function handler(req, res) {
 
     try {
       await redisSet(key, value);
-      res.status(200).json({ ok: true });
+      res.status(200).json(merged.length ? { ok: true, merged } : { ok: true });
     } catch (e) {
       res.status(e.status || 502).json({ error: e.message });
     }

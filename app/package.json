@@ -16,6 +16,7 @@
     "@capacitor/keyboard": "^8.0.5",
     "@capacitor/push-notifications": "^8.0.4",
     "@capacitor/splash-screen": "^8.0.2",
+    "@vercel/functions": "^3.9.8",
     "firebase": "^12.18.0",
     "jose": "^6.2.12",
     "lucide-react": "^0.462.0",
