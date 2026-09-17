@@ -144,6 +144,10 @@ const SCREEN_EXIT_MS = 200; // mobil "ekran" kapanış animasyonunun süresi (ge
 const FULLSCREEN_VIEWS = ["detail", "add", "manual", "shopping", "pantry"];
 
 const CATEGORIES = ["Kahvaltı", "Öğle Yemeği ve Akşam Yemeği", "Soslar", "Atıştırmalıklar", "Tatlılar"];
+// "Elimde Bunlar Var" AI önerileri kategori döndürmüyor (bkz. suggest-recipes.js
+// şeması); normal recipe şemasında kategori zorunlu olduğu için kaydederken bu
+// varsayılan atanıyor.
+const DEFAULT_PANTRY_CATEGORY = "Öğle Yemeği ve Akşam Yemeği";
 
 const LEGACY_CATEGORY_MAP = {
   "Öğle Yemeği": "Öğle Yemeği ve Akşam Yemeği",
@@ -1009,6 +1013,29 @@ export default function TarifKutusu() {
     setView("detail");
   };
 
+  // "Elimde Bunlar Var" ekranındaki AI tarif önerilerinden birini normal
+  // (TikTok'tan çıkarılmış tarifle aynı şemada) kişisel tarife dönüştürüp
+  // kaydeder. Kullanıcıyı "Elimde Bunlar Var" ekranından çıkarmaz — çağıran
+  // taraf (PantryFinder) view/activeId'ye dokunmuyor.
+  const handleSavePantrySuggestion = async (suggestion) => {
+    if (!isPlus && (recipeBuckets[PERSONAL] || []).length >= FREE_RECIPE_LIMIT) {
+      throw new Error(`Ücretsiz hesaplarda en fazla ${FREE_RECIPE_LIMIT} kişisel tarif olabilir. Sınırsız eklemek için Plus'a geç.`);
+    }
+    const recipe = {
+      id: uid(),
+      createdAt: Date.now(),
+      title: suggestion.title || "İsimsiz tarif",
+      category: DEFAULT_PANTRY_CATEGORY,
+      link: "",
+      ingredients: (suggestion.ingredients || []).map((i) => ({ name: i.name || "", amount: i.amount || "" })),
+      instructions: suggestion.instructions || [],
+      isFavorite: false,
+      addedBy: personName || "",
+      source: "pantry-ai",
+    };
+    await persistScope(PERSONAL, [recipe, ...(recipeBuckets[PERSONAL] || [])]);
+  };
+
   const [shoppingInitialContext, setShoppingInitialContext] = useState(PERSONAL);
   const addRecipeToShoppingList = async (recipe) => {
     const scopes = recipe._scopes && recipe._scopes.length ? recipe._scopes : [PERSONAL];
@@ -1271,15 +1298,7 @@ export default function TarifKutusu() {
                   setActiveId(id);
                   setView("detail");
                 }}
-                onCreateFromSuggestion={(suggestion) => {
-                  setManualPrefill({
-                    title: suggestion.title,
-                    ingredients: suggestion.ingredients || [],
-                    instructions: suggestion.instructions || [],
-                  });
-                  setSaveTargets([PERSONAL]);
-                  setView("manual");
-                }}
+                onSaveSuggestion={handleSavePantrySuggestion}
               />
             </div>
           )}
@@ -4017,7 +4036,7 @@ function ingredientIsAvailable(ingredientName, pantryItems) {
   });
 }
 
-function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onCreateFromSuggestion }) {
+function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onSaveSuggestion }) {
   const [context, setContext] = useState(PERSONAL);
   const [items, setItems] = useState([]);
   const [draft, setDraft] = useState("");
@@ -4025,6 +4044,11 @@ function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onCreateFromS
   const [suggestions, setSuggestions] = useState(null);
   const [suggesting, setSuggesting] = useState(false);
   const [suggestError, setSuggestError] = useState("");
+  // Her AI önerisi kartının kendi kayıt durumu — dizinle anahtarlanıyor
+  // ({ status: "idle" | "saving" | "saved" | "error", message }). Aynı
+  // öneriye tekrar tekrar basıp duplicate tarif oluşturulmasını, "saved"
+  // durumundaki butonu disabled/tıklanamaz yaparak engelliyoruz.
+  const [suggestionSaveState, setSuggestionSaveState] = useState({});
 
   useEffect(() => {
     let cancelled = false;
@@ -4060,6 +4084,7 @@ function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onCreateFromS
     setSuggesting(true);
     setSuggestError("");
     setSuggestions(null);
+    setSuggestionSaveState({});
     try {
       const data = await suggestFromPantry(items);
       setSuggestions(data.suggestions || []);
@@ -4067,6 +4092,18 @@ function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onCreateFromS
       setSuggestError(e.message || "Öneriler alınamadı, tekrar dener misin?");
     } finally {
       setSuggesting(false);
+    }
+  };
+
+  const handleSaveSuggestion = async (suggestion, index) => {
+    const current = suggestionSaveState[index];
+    if (current && (current.status === "saving" || current.status === "saved")) return;
+    setSuggestionSaveState((prev) => ({ ...prev, [index]: { status: "saving" } }));
+    try {
+      await onSaveSuggestion(suggestion);
+      setSuggestionSaveState((prev) => ({ ...prev, [index]: { status: "saved" } }));
+    } catch (e) {
+      setSuggestionSaveState((prev) => ({ ...prev, [index]: { status: "error", message: e.message || "Kaydedilemedi, tekrar dener misin?" } }));
     }
   };
 
@@ -4285,32 +4322,46 @@ function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onCreateFromS
 
           {suggestions && suggestions.length > 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginTop: "16px" }}>
-              {suggestions.map((s, i) => (
-                <div key={i} style={{ borderRadius: "10px", border: `1px solid ${COLORS.line}`, padding: "14px" }}>
-                  <div style={{ fontFamily: SERIF, fontSize: "16px", color: COLORS.ink, marginBottom: "4px" }}>{s.title}</div>
-                  {s.why && <div style={{ fontSize: "13px", color: COLORS.inkSoft, marginBottom: "6px" }}>{s.why}</div>}
-                  {s.extra_needed && s.extra_needed.length > 0 && (
-                    <div style={{ fontSize: "12px", color: COLORS.mustardDark, marginBottom: "8px" }}>
-                      Ekstra gerekli: {s.extra_needed.join(", ")}
-                    </div>
-                  )}
-                  <button
-                    onClick={() => onCreateFromSuggestion(s)}
-                    style={{
-                      fontSize: "12px",
-                      fontWeight: 700,
-                      color: COLORS.forest,
-                      background: "transparent",
-                      border: `1px solid ${COLORS.forest}`,
-                      borderRadius: "8px",
-                      padding: "6px 12px",
-                      cursor: "pointer",
-                    }}
-                  >
-                    Bu Tarifi Kaydet
-                  </button>
-                </div>
-              ))}
+              {suggestions.map((s, i) => {
+                const saveState = suggestionSaveState[i] || { status: "idle" };
+                const isSaved = saveState.status === "saved";
+                const isSaving = saveState.status === "saving";
+                return (
+                  <div key={i} style={{ borderRadius: "10px", border: `1px solid ${COLORS.line}`, padding: "14px" }}>
+                    <div style={{ fontFamily: SERIF, fontSize: "16px", color: COLORS.ink, marginBottom: "4px" }}>{s.title}</div>
+                    {s.why && <div style={{ fontSize: "13px", color: COLORS.inkSoft, marginBottom: "6px" }}>{s.why}</div>}
+                    {s.extra_needed && s.extra_needed.length > 0 && (
+                      <div style={{ fontSize: "12px", color: COLORS.mustardDark, marginBottom: "8px" }}>
+                        Ekstra gerekli: {s.extra_needed.join(", ")}
+                      </div>
+                    )}
+                    <button
+                      onClick={() => handleSaveSuggestion(s, i)}
+                      disabled={isSaving || isSaved}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "6px",
+                        fontSize: "12px",
+                        fontWeight: 700,
+                        color: isSaved ? "#F3EFE6" : COLORS.forest,
+                        background: isSaved ? COLORS.forest : "transparent",
+                        border: `1px solid ${COLORS.forest}`,
+                        borderRadius: "8px",
+                        padding: "6px 12px",
+                        cursor: isSaving || isSaved ? "default" : "pointer",
+                        opacity: isSaving ? 0.6 : 1,
+                      }}
+                    >
+                      {isSaving && <Loader2 size={13} className="spin" />}
+                      {isSaved ? "Kaydedildi ✓" : isSaving ? "Kaydediliyor…" : "Tarifi Kaydet"}
+                    </button>
+                    {saveState.status === "error" && (
+                      <div style={{ fontSize: "12px", color: COLORS.danger, marginTop: "6px" }}>{saveState.message}</div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
