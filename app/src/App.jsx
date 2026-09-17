@@ -1303,7 +1303,7 @@ export default function TarifKutusu() {
           )}
 
           {view === "cook" && active && (
-            <div className={screenTransitionClass}>
+            <div className={screenTransitionClass} style={{ height: "100%" }}>
               <CookMode recipe={active} onFinish={closeActiveScreen} />
             </div>
           )}
@@ -3686,7 +3686,7 @@ function CookMode({ recipe, onFinish }) {
   };
 
   return (
-    <div className="cook-screen" style={{ display: "flex", flexDirection: "column" }}>
+    <div className="cook-screen" style={{ display: "flex", flexDirection: "column", minHeight: "100%" }}>
       <style>{`
         @keyframes cookStageIn { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: translateX(0); } }
         .cook-stage-enter { animation: cookStageIn 180ms ease-out both; }
@@ -3695,11 +3695,6 @@ function CookMode({ recipe, onFinish }) {
         @media (prefers-reduced-motion: reduce) {
           .cook-stage-enter, .cook-done-enter { animation: none; }
         }
-        /* Kısa bir yapılış adımında bile Önceki/Sonraki + video butonu ekranın
-           altına yakın dursun diye minimum yükseklik — sadece bir taban, uzun
-           adımlarda içerik bunu aşıp normal şekilde sayfa kaydırmasına devam eder. */
-        .cook-screen { min-height: calc(100vh - 220px); }
-        .cook-screen { min-height: calc(100dvh - 220px); }
       `}</style>
 
       {stage !== "done" && (
