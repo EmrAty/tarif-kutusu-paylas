@@ -527,6 +527,14 @@ export default function TarifKutusu() {
     prevViewRef.current = view;
   }, [view]);
 
+  // "Elimde Bunlar Var" içindeki kategori seçim modalı açıkken Header ←
+  // butonu/Android backButton önce SADECE bu modalı kapatsın, "pantry"
+  // ekranından çıkmasın. PantryFinder açık/kapalı durumu ve kendi kapatma
+  // fonksiyonunu bu ref'lere yazıyor (state yerine ref: iki bileşen arasında
+  // ekstra re-render/senkronizasyon olmadan anlık okunabiliyor).
+  const pantryModalOpenRef = React.useRef(false);
+  const pantryModalCloseRef = React.useRef(() => {});
+
   // Herhangi bir "tam ekran" view'dan geri dönüşün ortak yolu: Header'daki ←
   // butonu ve Android backButton'ı ikisi de bunu çağırıyor. FULLSCREEN_VIEWS
   // içindeyken önce kısa bir "kapanış" animasyonu oynatıp (mobilde,
@@ -534,6 +542,10 @@ export default function TarifKutusu() {
   // ki yukarıdaki scroll restore effect'i doğru zamanda tetiklensin. Diğer
   // view'lardan (edit/favorites/...) dönüş her zaman anında, değişmedi.
   const closeActiveScreen = useCallback(() => {
+    if (pantryModalOpenRef.current) {
+      pantryModalCloseRef.current();
+      return;
+    }
     if (!FULLSCREEN_VIEWS.includes(view)) {
       setView("list");
       return;
@@ -1017,18 +1029,25 @@ export default function TarifKutusu() {
   // (TikTok'tan çıkarılmış tarifle aynı şemada) kişisel tarife dönüştürüp
   // kaydeder. Kullanıcıyı "Elimde Bunlar Var" ekranından çıkarmaz — çağıran
   // taraf (PantryFinder) view/activeId'ye dokunmuyor.
-  const handleSavePantrySuggestion = async (suggestion) => {
+  const handleSavePantrySuggestion = async (suggestion, category) => {
     if (!isPlus && (recipeBuckets[PERSONAL] || []).length >= FREE_RECIPE_LIMIT) {
       throw new Error(`Ücretsiz hesaplarda en fazla ${FREE_RECIPE_LIMIT} kişisel tarif olabilir. Sınırsız eklemek için Plus'a geç.`);
     }
+    const n = suggestion.nutrition || {};
     const recipe = {
       id: uid(),
       createdAt: Date.now(),
       title: suggestion.title || "İsimsiz tarif",
-      category: DEFAULT_PANTRY_CATEGORY,
+      category: category || DEFAULT_PANTRY_CATEGORY,
       link: "",
       ingredients: (suggestion.ingredients || []).map((i) => ({ name: i.name || "", amount: i.amount || "" })),
       instructions: suggestion.instructions || [],
+      nutrition: {
+        calories: n.calories,
+        protein_g: n.protein_g,
+        carbs_g: n.carbs_g,
+        fat_g: n.fat_g,
+      },
       isFavorite: false,
       addedBy: personName || "",
       source: "pantry-ai",
@@ -1299,6 +1318,8 @@ export default function TarifKutusu() {
                   setView("detail");
                 }}
                 onSaveSuggestion={handleSavePantrySuggestion}
+                pantryModalOpenRef={pantryModalOpenRef}
+                pantryModalCloseRef={pantryModalCloseRef}
               />
             </div>
           )}
@@ -4036,7 +4057,7 @@ function ingredientIsAvailable(ingredientName, pantryItems) {
   });
 }
 
-function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onSaveSuggestion }) {
+function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onSaveSuggestion, pantryModalOpenRef, pantryModalCloseRef }) {
   const [context, setContext] = useState(PERSONAL);
   const [items, setItems] = useState([]);
   const [draft, setDraft] = useState("");
@@ -4049,6 +4070,15 @@ function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onSaveSuggest
   // öneriye tekrar tekrar basıp duplicate tarif oluşturulmasını, "saved"
   // durumundaki butonu disabled/tıklanamaz yaparak engelliyoruz.
   const [suggestionSaveState, setSuggestionSaveState] = useState({});
+  // "Tarifi Kaydet"e basılan önerinin dizini — null değilken kategori seçim
+  // modalı açık. App'teki tek Android backButton/Header ← fonksiyonu
+  // (closeActiveScreen) bu modal açıkken önce onu kapatabilsin diye, açık/kapalı
+  // durumu ve kapatma fonksiyonu bu ref'ler üzerinden App'e bildiriliyor.
+  const [categoryPromptIndex, setCategoryPromptIndex] = useState(null);
+  useEffect(() => {
+    pantryModalOpenRef.current = categoryPromptIndex !== null;
+    pantryModalCloseRef.current = () => setCategoryPromptIndex(null);
+  }, [categoryPromptIndex, pantryModalOpenRef, pantryModalCloseRef]);
 
   useEffect(() => {
     let cancelled = false;
@@ -4085,6 +4115,7 @@ function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onSaveSuggest
     setSuggestError("");
     setSuggestions(null);
     setSuggestionSaveState({});
+    setCategoryPromptIndex(null);
     try {
       const data = await suggestFromPantry(items);
       setSuggestions(data.suggestions || []);
@@ -4095,16 +4126,23 @@ function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onSaveSuggest
     }
   };
 
-  const handleSaveSuggestion = async (suggestion, index) => {
+  const handleSaveSuggestion = async (suggestion, index, category) => {
     const current = suggestionSaveState[index];
     if (current && (current.status === "saving" || current.status === "saved")) return;
     setSuggestionSaveState((prev) => ({ ...prev, [index]: { status: "saving" } }));
     try {
-      await onSaveSuggestion(suggestion);
+      await onSaveSuggestion(suggestion, category);
       setSuggestionSaveState((prev) => ({ ...prev, [index]: { status: "saved" } }));
     } catch (e) {
       setSuggestionSaveState((prev) => ({ ...prev, [index]: { status: "error", message: e.message || "Kaydedilemedi, tekrar dener misin?" } }));
     }
+  };
+
+  const handlePickCategory = (category) => {
+    const index = categoryPromptIndex;
+    const suggestion = suggestions[index];
+    setCategoryPromptIndex(null);
+    if (suggestion) handleSaveSuggestion(suggestion, index, category);
   };
 
   const addItem = () => {
@@ -4335,8 +4373,16 @@ function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onSaveSuggest
                         Ekstra gerekli: {s.extra_needed.join(", ")}
                       </div>
                     )}
+                    {s.nutrition && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", fontSize: "11px", color: COLORS.inkSoft, marginBottom: "10px" }}>
+                        <span><strong style={{ color: COLORS.ink }}>{s.nutrition.calories ?? "—"}</strong> kcal</span>
+                        <span><strong style={{ color: COLORS.ink }}>{s.nutrition.protein_g ?? "—"}</strong> g protein</span>
+                        <span><strong style={{ color: COLORS.ink }}>{s.nutrition.carbs_g ?? "—"}</strong> g karb</span>
+                        <span><strong style={{ color: COLORS.ink }}>{s.nutrition.fat_g ?? "—"}</strong> g yağ</span>
+                      </div>
+                    )}
                     <button
-                      onClick={() => handleSaveSuggestion(s, i)}
+                      onClick={() => setCategoryPromptIndex(i)}
                       disabled={isSaving || isSaved}
                       style={{
                         display: "flex",
@@ -4366,6 +4412,64 @@ function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onSaveSuggest
           )}
         </div>
       )}
+
+      {categoryPromptIndex !== null && (
+        <CategoryPickerModal onSelect={handlePickCategory} onClose={() => setCategoryPromptIndex(null)} />
+      )}
+    </div>
+  );
+}
+
+function CategoryPickerModal({ onSelect, onClose }) {
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 80, display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" }}>
+      <div
+        onClick={onClose}
+        style={{ position: "absolute", inset: 0, background: "rgba(42,38,32,0.45)", backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)" }}
+      />
+      <div
+        style={{
+          position: "relative",
+          width: "100%",
+          maxWidth: "360px",
+          background: COLORS.panel,
+          borderRadius: "16px",
+          boxShadow: "0 8px 40px rgba(0,0,0,0.3)",
+          padding: "20px",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
+          <h3 style={{ fontFamily: SERIF, fontSize: "17px", color: COLORS.ink, margin: 0 }}>Kategori Seç</h3>
+          <button
+            onClick={onClose}
+            aria-label="Kapat"
+            style={{ background: "transparent", border: "none", cursor: "pointer", color: COLORS.inkSoft, padding: "4px", display: "flex" }}
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: "0 0 14px" }}>Bu tarifi hangi kategoriye kaydedelim?</p>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+          {CATEGORIES.map((cat) => (
+            <button
+              key={cat}
+              onClick={() => onSelect(cat)}
+              style={{
+                padding: "8px 14px",
+                borderRadius: "9999px",
+                fontSize: "13px",
+                fontWeight: 600,
+                border: `1px solid ${COLORS.line}`,
+                background: "transparent",
+                color: COLORS.inkSoft,
+                cursor: "pointer",
+              }}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

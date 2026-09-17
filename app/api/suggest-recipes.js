@@ -36,10 +36,18 @@ SADECE ve SADECE aşağıdaki şemaya uyan HAM JSON döndür. Markdown yok, aç�
       "why": string, // kullanıcının malzemeleriyle neden uyduğuna dair kısa bir cümle
       "extra_needed": [string], // kullanıcının listesinde olmayan, ekstra alması gereken malzemeler (yoksa boş dizi)
       "ingredients": [ { "name": string, "amount": string } ],
-      "instructions": [ string ]
+      "instructions": [ string ],
+      "nutrition": {
+        "calories": number,
+        "protein_g": number,
+        "carbs_g": number,
+        "fat_g": number
+      }
     }
   ]
 }
+
+Nutrition alanındaki değerler porsiyon başına DEĞİL, tarifteki TÜM malzemelerin toplamı olsun (tarifin bütünü için toplam kalori, protein, karbonhidrat, yağ). Bunlar kesin laboratuvar ölçümü değil, makul birer tahmin olabilir; ama kalori ile makrolar arasında matematiksel olarak tutarlı ol (yaklaşık: protein ve karbonhidrat 4 kcal/g, yağ 9 kcal/g) — aşırı mantıksız bir fark oluşturma.
 
 Tüm metinler Türkçe olsun. Gerçekçi ve ev mutfağında yapılabilecek yemekler öner.`;
 
