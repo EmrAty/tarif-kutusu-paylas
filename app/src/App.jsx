@@ -122,7 +122,7 @@ async function googleLink(user) {
   }
 }
 
-const COLORS = {
+export const COLORS = {
   paper: "#F3EFE6",
   panel: "#FFFFFF",
   ink: "#2A2620",
@@ -135,8 +135,8 @@ const COLORS = {
   danger: "#A23B2E",
 };
 
-const SERIF = "Charter, 'Iowan Old Style', 'Georgia', 'Times New Roman', serif";
-const BODY = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
+export const SERIF = "Charter, 'Iowan Old Style', 'Georgia', 'Times New Roman', serif";
+export const BODY = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
 const LABELSANS = "'Helvetica Neue Condensed', 'Arial Narrow', Arial, sans-serif";
 const CARD_SHADOW = "0 1px 2px rgba(42,38,32,0.05), 0 8px 24px rgba(42,38,32,0.06)";
 const SCREEN_EXIT_MS = 200; // mobil "ekran" kapanış animasyonunun süresi (gerçek view değişiminden önce)
@@ -155,13 +155,13 @@ const LEGACY_CATEGORY_MAP = {
   "Atıştırmalık & Soslar": "Atıştırmalıklar",
 };
 
-function uid() {
+export function uid() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 const STORAGE_PREFIX = "tarif-kutusu:";
 
-function storageGet(key) {
+export function storageGet(key) {
   try {
     const value = window.localStorage.getItem(STORAGE_PREFIX + key);
     return value === null ? null : { value };
@@ -197,7 +197,7 @@ function notifyResultMessage(result) {
 // Kişisel veriler ("personal") sadece o hesaba, aile verileri ("family:<id>")
 // o ailenin tüm üyelerine ait — hangisi olduğu her istekte scope/familyId ile
 // belirtiliyor. Kimlik doğrulaması Firebase ID token'ıyla yapılıyor.
-async function authedFetch(path, { method = "GET", body } = {}) {
+export async function authedFetch(path, { method = "GET", body } = {}) {
   const user = auth.currentUser;
   if (!user) throw new Error("Oturum bulunamadı.");
   const token = await user.getIdToken();
