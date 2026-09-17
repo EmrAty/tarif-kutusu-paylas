@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
-  ChefHat, Plus, Minus, Link2, ExternalLink, Trash2, Loader2, ArrowLeft, AlertCircle,
+  ChefHat, Plus, Minus, Link2, ExternalLink, Trash2, Loader2, ArrowLeft, ArrowRight, AlertCircle,
   FileText, Pencil, Check, ChevronDown, Star, Search, ShoppingCart, Clock, Gauge, Undo2, X, Package, Download,
   Mail, LogOut, Users, Crown, Settings, UserCircle, Copy, Sparkles, LogIn, Bell,
 } from "lucide-react";
@@ -141,7 +141,7 @@ const CARD_SHADOW = "0 1px 2px rgba(42,38,32,0.05), 0 8px 24px rgba(42,38,32,0.0
 const SCREEN_EXIT_MS = 200; // mobil "ekran" kapanış animasyonunun süresi (gerçek view değişiminden önce)
 // Mobilde/Capacitor'da tarif listesinin (Sidebar) üstünde kalmayıp onun yerine
 // tam ekran açılan, kendi giriş/çıkış animasyonu + scroll-üste-sıfırlama olan view'lar.
-const FULLSCREEN_VIEWS = ["detail", "add", "manual", "shopping", "pantry"];
+const FULLSCREEN_VIEWS = ["detail", "add", "manual", "shopping", "pantry", "cook"];
 
 const CATEGORIES = ["Kahvaltı", "Öğle Yemeği ve Akşam Yemeği", "Soslar", "Atıştırmalıklar", "Tatlılar"];
 // "Elimde Bunlar Var" AI önerileri kategori döndürmüyor (bkz. suggest-recipes.js
@@ -551,7 +551,7 @@ export default function TarifKutusu() {
       return;
     }
     if (closingScreenRef.current) return;
-    const backTarget = view === "shopping" ? shoppingReturnView : "list";
+    const backTarget = view === "shopping" ? shoppingReturnView : view === "cook" ? "detail" : "list";
     const reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const isMobileWidth = window.innerWidth < 768;
     if (reduceMotion || !isMobileWidth) {
@@ -1297,7 +1297,14 @@ export default function TarifKutusu() {
                 onEdit={() => setView("edit")}
                 onAddToShopping={() => addRecipeToShoppingList(active)}
                 onSendNotification={() => handleSendNotification(active)}
+                onStartCooking={() => setView("cook")}
               />
+            </div>
+          )}
+
+          {view === "cook" && active && (
+            <div className={screenTransitionClass}>
+              <CookMode recipe={active} onFinish={closeActiveScreen} />
             </div>
           )}
 
@@ -2955,7 +2962,7 @@ function AddForm({ link, caption, notes, images, category, busy, error, setLink,
   );
 }
 
-function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavorite, onChangeCategory, onEdit, onAddToShopping, onSendNotification }) {
+function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavorite, onChangeCategory, onEdit, onAddToShopping, onSendNotification, onStartCooking }) {
   const { title, servings, category, prep_time_minutes, difficulty, ingredients = [], instructions = [], nutrition = {}, assumptions, link, isFavorite, addedBy } = recipe;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(title || "");
@@ -3158,9 +3165,32 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
         )}
 
         <button
-          onClick={onEdit}
+          onClick={onStartCooking}
           style={{
             marginTop: "16px",
+            width: "100%",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: "8px",
+            padding: "12px 16px",
+            borderRadius: "8px",
+            fontSize: "14px",
+            fontWeight: 700,
+            background: COLORS.mustard,
+            color: COLORS.forestDark,
+            border: "none",
+            cursor: "pointer",
+          }}
+        >
+          <ChefHat size={16} />
+          Pişirmeye Başla
+        </button>
+
+        <button
+          onClick={onEdit}
+          style={{
+            marginTop: "8px",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -3574,6 +3604,177 @@ function ExpandableSection({ title, badge, defaultOpen = false, children }) {
             <div style={{ paddingTop: "16px" }}>{children}</div>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Adım adım pişirme modu: "detail" ekranındaki "Pişirmeye Başla" ile açılıyor.
+// Ekranın kendisi FULLSCREEN_VIEWS'in bir parçası (giriş/çıkış animasyonu,
+// sidebar gizleme, geri butonu App'teki ortak closeActiveScreen()'den geliyor
+// — burada tekrar yazılmadı). Buradaki "stage" (malzemeler → adım N → tamamlandı)
+// tamamen bu component'e özel, yerel bir state; App'in `view`'ıyla ilgisi yok.
+function CookMode({ recipe, onFinish }) {
+  const ingredients = recipe.ingredients || [];
+  const steps = useMemo(() => (recipe.instructions || []).filter((s) => typeof s === "string" && s.trim()), [recipe.instructions]);
+  const [stage, setStage] = useState("ingredients"); // "ingredients" | 0..steps.length-1 | "done"
+
+  const stepIndex = typeof stage === "number" ? stage : null;
+  const totalSteps = steps.length;
+  const isLastStep = stepIndex !== null && stepIndex === totalSteps - 1;
+
+  const goNext = () => {
+    if (stage === "ingredients") {
+      setStage(totalSteps > 0 ? 0 : "done");
+    } else if (stepIndex !== null) {
+      setStage(isLastStep ? "done" : stepIndex + 1);
+    }
+  };
+  const goPrev = () => {
+    if (stepIndex !== null) {
+      setStage(stepIndex === 0 ? "ingredients" : stepIndex - 1);
+    }
+  };
+
+  const bigButtonStyle = {
+    flex: 1,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "8px",
+    padding: "16px 20px",
+    borderRadius: "12px",
+    fontSize: "16px",
+    fontWeight: 700,
+    background: COLORS.forest,
+    color: "#F3EFE6",
+    border: "none",
+    cursor: "pointer",
+  };
+  const prevButtonStyle = {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "6px",
+    padding: "16px 16px",
+    borderRadius: "12px",
+    fontSize: "14px",
+    fontWeight: 600,
+    background: "transparent",
+    color: COLORS.inkSoft,
+    border: `1px solid ${COLORS.line}`,
+    cursor: "pointer",
+    flexShrink: 0,
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", minHeight: "60vh" }}>
+      <style>{`
+        @keyframes cookStageIn { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: translateX(0); } }
+        .cook-stage-enter { animation: cookStageIn 180ms ease-out both; }
+        @keyframes cookDoneIn { from { opacity: 0; transform: scale(0.85); } to { opacity: 1; transform: scale(1); } }
+        .cook-done-enter { animation: cookDoneIn 220ms ease-out both; }
+        @media (prefers-reduced-motion: reduce) {
+          .cook-stage-enter, .cook-done-enter { animation: none; }
+        }
+      `}</style>
+
+      {stage !== "done" && (
+        <div style={{ marginBottom: "24px" }}>
+          <div style={{ fontSize: "13px", fontWeight: 700, color: COLORS.mustardDark, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "10px" }}>
+            {stage === "ingredients" ? "Hazırlanmadan Önce" : totalSteps > 0 ? `Adım ${stepIndex + 1} / ${totalSteps}` : "Yapılış"}
+          </div>
+          {stepIndex !== null && totalSteps > 0 && (
+            <div style={{ height: "6px", borderRadius: "9999px", background: COLORS.line, overflow: "hidden" }}>
+              <div
+                style={{
+                  height: "100%",
+                  width: `${((stepIndex + 1) / totalSteps) * 100}%`,
+                  background: COLORS.forest,
+                  borderRadius: "9999px",
+                  transition: "width 200ms ease",
+                }}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
+      <div key={String(stage)} className={stage === "done" ? "cook-done-enter" : "cook-stage-enter"} style={{ flex: 1 }}>
+        {stage === "ingredients" && (
+          <div>
+            <h2 style={{ fontFamily: SERIF, fontSize: "22px", color: COLORS.ink, margin: "0 0 18px" }}>{recipe.title || "Tarif"}</h2>
+            {ingredients.length === 0 ? (
+              <p style={{ fontSize: "16px", color: COLORS.inkSoft }}>Malzeme bulunamadı.</p>
+            ) : (
+              <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "12px" }}>
+                {ingredients.map((ing, i) => (
+                  <li
+                    key={i}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: "12px",
+                      fontSize: "17px",
+                      color: COLORS.ink,
+                      borderBottom: `1px solid ${COLORS.line}`,
+                      paddingBottom: "10px",
+                    }}
+                  >
+                    <span>{ing.name}</span>
+                    <span style={{ color: COLORS.inkSoft, flexShrink: 0 }}>{ing.amount}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {stepIndex !== null && (
+          <p style={{ fontFamily: SERIF, fontSize: "22px", lineHeight: 1.55, color: COLORS.ink, margin: 0 }}>{steps[stepIndex]}</p>
+        )}
+
+        {stage === "done" && (
+          <div style={{ textAlign: "center", padding: "32px 0" }}>
+            <div
+              style={{
+                width: "64px",
+                height: "64px",
+                borderRadius: "9999px",
+                background: COLORS.forest,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                margin: "0 auto 20px",
+              }}
+            >
+              <Check size={30} color="#F3EFE6" />
+            </div>
+            <h2 style={{ fontFamily: SERIF, fontSize: "24px", color: COLORS.ink, margin: "0 0 8px" }}>Tebrikler!</h2>
+            <p style={{ fontSize: "15px", color: COLORS.inkSoft, margin: "0 0 18px" }}>Yemeğiniz hazır. Afiyet olsun! 🍽️</p>
+            <p style={{ fontFamily: SERIF, fontSize: "17px", color: COLORS.ink, margin: 0 }}>{recipe.title || "Tarif"}</p>
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: "flex", gap: "10px", marginTop: "28px" }}>
+        {stepIndex !== null && (
+          <button onClick={goPrev} style={prevButtonStyle}>
+            <ArrowLeft size={15} />
+            Önceki
+          </button>
+        )}
+        {stage !== "done" && (
+          <button onClick={goNext} style={bigButtonStyle}>
+            {stage === "ingredients" ? "Sonraki" : isLastStep ? "Tamamla ✓" : "Sonraki"}
+            {!(stage !== "ingredients" && isLastStep) && <ArrowRight size={16} />}
+          </button>
+        )}
+        {stage === "done" && (
+          <button onClick={onFinish} style={bigButtonStyle}>
+            Tarife Dön
+          </button>
+        )}
       </div>
     </div>
   );
