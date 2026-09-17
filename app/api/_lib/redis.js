@@ -51,25 +51,6 @@ export async function redisSet(key, value) {
   }
 }
 
-// Sadece key henüz yoksa yazar (Redis SET NX EX) — aynı share intent'in kısa
-// süre içinde iki kez işlenip iki ayrı job/tarif oluşturmasını engellemek için
-// kullanılıyor. true: bu çağrı yazdı (yeni). false: key zaten vardı (duplicate).
-export async function redisSetNX(key, value, ttlSeconds) {
-  assertConfigured();
-  const res = await fetch(BASE_URL, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
-    body: JSON.stringify(["SET", key, value, "NX", "EX", String(ttlSeconds)]),
-  });
-  if (!res.ok) {
-    const err = new Error("Veritabanına yazılamadı.");
-    err.status = 502;
-    throw err;
-  }
-  const data = await res.json();
-  return data.result === "OK";
-}
-
 export async function redisGetJSON(key, fallback) {
   const raw = await redisGet(key);
   if (raw == null) return fallback;
