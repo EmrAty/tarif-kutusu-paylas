@@ -3667,8 +3667,26 @@ function CookMode({ recipe, onFinish }) {
     flexShrink: 0,
   };
 
+  // Videosu olan tarifte Tarif Detay'daki "Videoyu Aç, Yapılışını İzle" linkiyle
+  // birebir aynı davranış (aynı href/target/rel) — yeni bir video sistemi değil.
+  const videoButtonStyle = {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "8px",
+    width: "100%",
+    padding: "12px 16px",
+    borderRadius: "8px",
+    fontSize: "14px",
+    fontWeight: 600,
+    background: COLORS.forest,
+    color: "#F3EFE6",
+    textDecoration: "none",
+    boxSizing: "border-box",
+  };
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", minHeight: "60vh" }}>
+    <div className="cook-screen" style={{ display: "flex", flexDirection: "column" }}>
       <style>{`
         @keyframes cookStageIn { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: translateX(0); } }
         .cook-stage-enter { animation: cookStageIn 180ms ease-out both; }
@@ -3677,6 +3695,11 @@ function CookMode({ recipe, onFinish }) {
         @media (prefers-reduced-motion: reduce) {
           .cook-stage-enter, .cook-done-enter { animation: none; }
         }
+        /* Kısa bir yapılış adımında bile Önceki/Sonraki + video butonu ekranın
+           altına yakın dursun diye minimum yükseklik — sadece bir taban, uzun
+           adımlarda içerik bunu aşıp normal şekilde sayfa kaydırmasına devam eder. */
+        .cook-screen { min-height: calc(100vh - 220px); }
+        .cook-screen { min-height: calc(100dvh - 220px); }
       `}</style>
 
       {stage !== "done" && (
@@ -3757,23 +3780,32 @@ function CookMode({ recipe, onFinish }) {
         )}
       </div>
 
-      <div style={{ display: "flex", gap: "10px", marginTop: "28px" }}>
-        {stepIndex !== null && (
-          <button onClick={goPrev} style={prevButtonStyle}>
-            <ArrowLeft size={15} />
-            Önceki
-          </button>
-        )}
-        {stage !== "done" && (
-          <button onClick={goNext} style={bigButtonStyle}>
-            {stage === "ingredients" ? "Sonraki" : isLastStep ? "Tamamla ✓" : "Sonraki"}
-            {!(stage !== "ingredients" && isLastStep) && <ArrowRight size={16} />}
-          </button>
-        )}
-        {stage === "done" && (
-          <button onClick={onFinish} style={bigButtonStyle}>
-            Tarife Dön
-          </button>
+      <div style={{ flexShrink: 0, marginTop: "28px", paddingBottom: "max(16px, env(safe-area-inset-bottom))" }}>
+        <div style={{ display: "flex", gap: "10px" }}>
+          {stepIndex !== null && (
+            <button onClick={goPrev} style={prevButtonStyle}>
+              <ArrowLeft size={15} />
+              Önceki
+            </button>
+          )}
+          {stage !== "done" && (
+            <button onClick={goNext} style={bigButtonStyle}>
+              {stage === "ingredients" ? "Sonraki" : isLastStep ? "Tamamla ✓" : "Sonraki"}
+              {!(stage !== "ingredients" && isLastStep) && <ArrowRight size={16} />}
+            </button>
+          )}
+          {stage === "done" && (
+            <button onClick={onFinish} style={bigButtonStyle}>
+              Tarife Dön
+            </button>
+          )}
+        </div>
+
+        {stage !== "done" && recipe.link && (
+          <a href={recipe.link} target="_blank" rel="noopener noreferrer" style={{ ...videoButtonStyle, marginTop: "10px" }}>
+            <ExternalLink size={16} />
+            Videoyu Aç, Yapılışını İzle
+          </a>
         )}
       </div>
     </div>
