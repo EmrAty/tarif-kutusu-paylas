@@ -1172,6 +1172,7 @@ export default function TarifKutusu() {
             .md-nutrition { width: 220px !important; flex-shrink: 0; }
             .list-sidebar-mobile-hidden { display: block; }
             .detail-screen-enter, .detail-screen-exit { animation: none; }
+            .detail-title-row { flex-direction: row !important; align-items: flex-start !important; justify-content: space-between !important; gap: 16px !important; }
           }
         `}</style>
 
@@ -3011,7 +3012,7 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
       <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "16px" }}>
+        <div className="detail-title-row" style={{ display: "flex", flexDirection: "column", alignItems: "stretch", justifyContent: "flex-start", gap: "12px" }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div
               style={{
@@ -3078,7 +3079,7 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
               </div>
             )}
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "4px", flexShrink: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "4px", flexShrink: 0 }}>
             {isFamilyRecipe && (
               <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
                 {notifyState !== "idle" && notifyState !== "sending" && (
