@@ -1,0 +1,86 @@
+apply plugin: 'com.android.application'
+
+def localProperties = new Properties()
+def localPropertiesFile = rootProject.file('local.properties')
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.withInputStream { localProperties.load(it) }
+}
+
+android {
+    namespace = "com.tarifkutusu.app"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "com.tarifkutusu.app"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        // android-twa'daki (eski TWA) sürümün devamı olarak 7'den başlıyor; aynı
+        // applicationId + aynı keystore ile imzalandığı için telefondaki mevcut
+        // kuruluma "güncelleme" olarak gidebiliyor. v8: native Google Sign-In eklendi.
+        // v9: Google hesabı zaten başka bir hesaba bağlıysa (credential-already-in-use)
+        // bağlamak yerine doğrudan o hesaba geçiş yapılıyor.
+        // v10: capacitor.config.json'a FirebaseAuthentication.providers=["google.com"]
+        // eklendi - bu olmadan native eklenti "Google sign-in provider is not enabled" hatası veriyordu.
+        // v11: açılış ekranı Android 12+ splash API'sine göre yeniden yapılandırıldı
+        // (koyu yeşil zemin + ortada marka ikonu; tam ekran splash.png bu API'de çalışmıyor).
+        // v12: TWA'daki tam ekran splash görseli MainActivity'de kendi ImageView'imizle geri getirildi.
+        // v13: "canı çekti" bildirimi tarayıcı web push yerine native Android FCM
+        // (@capacitor/push-notifications) kullanacak şekilde değiştirildi - WebView'in
+        // web push altyapısı arka planda güvenilir bildirim teslim etmiyordu.
+        versionCode 14
+        versionName "14.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    signingConfigs {
+        release {
+            if (localProperties.getProperty('RELEASE_STORE_FILE')) {
+                storeFile rootProject.file(localProperties.getProperty('RELEASE_STORE_FILE'))
+                storePassword localProperties.getProperty('RELEASE_STORE_PASSWORD')
+                keyAlias localProperties.getProperty('RELEASE_KEY_ALIAS')
+                keyPassword localProperties.getProperty('RELEASE_KEY_PASSWORD')
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (localProperties.getProperty('RELEASE_STORE_FILE')) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}

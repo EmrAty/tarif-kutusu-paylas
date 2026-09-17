@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Paylaşım paneli: üstte karartma (kaynak uygulama arkada görünür, dokununca
+     kapanır), altta ekranın ~%78'i kadar krem panel. Oranlar layout_weight ile
+     verildi; böylece ekran yüksekliği koda hiç yazılmıyor. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <View
+        android:id="@+id/share_scrim"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="22"
+        android:background="@color/shareScrim"
+        android:clickable="true"
+        android:focusable="true" />
+
+    <LinearLayout
+        android:id="@+id/share_sheet"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="78"
+        android:background="@drawable/share_sheet_bg"
+        android:orientation="vertical">
+
+        <View
+            android:layout_width="38dp"
+            android:layout_height="4dp"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginTop="10dp"
+            android:layout_marginBottom="6dp"
+            android:background="@drawable/share_handle" />
+
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1">
+
+            <WebView
+                android:id="@+id/share_webview"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+
+            <LinearLayout
+                android:id="@+id/share_loading"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="@color/sharePaper"
+                android:gravity="center"
+                android:orientation="vertical">
+
+                <ProgressBar
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/share_error"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="@color/sharePaper"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:padding="24dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/share_offline"
+                    android:textColor="@color/shareInk"
+                    android:textSize="15sp" />
+
+                <Button
+                    android:id="@+id/share_error_close"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:text="@string/share_close" />
+            </LinearLayout>
+        </FrameLayout>
+    </LinearLayout>
+</LinearLayout>

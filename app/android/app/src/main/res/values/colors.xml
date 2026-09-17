@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- TWA'daki splash görselinden örneklenen koyu yeşil (twa-manifest.json backgroundColor) -->
+    <color name="splashBackground">#27442D</color>
+
+    <!-- Paylaşım paneli (ShareActivity) - uygulamanın krem/koyu yeşil paleti -->
+    <color name="sharePaper">#F3EFE6</color>
+    <color name="shareScrim">#66000000</color>
+    <color name="shareHandle">#D8D0BE</color>
+    <color name="shareInk">#2A2620</color>
+</resources>

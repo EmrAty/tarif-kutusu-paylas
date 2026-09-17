@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Base application theme. -->
+    <style name="AppTheme" parent="Theme.AppCompat.Light.DarkActionBar">
+        <!-- Customize your theme here. -->
+        <item name="colorPrimary">@color/colorPrimary</item>
+        <item name="colorPrimaryDark">@color/colorPrimaryDark</item>
+        <item name="colorAccent">@color/colorAccent</item>
+    </style>
+
+    <style name="AppTheme.NoActionBar" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="windowActionBar">false</item>
+        <item name="windowNoTitle">true</item>
+        <item name="android:background">@null</item>
+    </style>
+
+
+    <!--
+        Paylaşım paneli (ShareActivity): pencere saydam, kendi penceresini
+        kaplamıyor - böylece panelin üstünde kaynak uygulama (TikTok vb.)
+        görünmeye devam ediyor. Giriş/çıkış animasyonu kodda yapıldığı için
+        sistem animasyonu kapalı.
+    -->
+    <style name="ShareSheetTheme" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+
+    <!--
+        Açılış ekranı. Android 12+ (ve androidx core-splashscreen ile daha eskiler)
+        tam ekran bir görsel değil, yalnızca bir arka plan rengi + ortada bir ikon
+        gösteriyor - bu yüzden @drawable/splash burada kullanılamıyor. Marka görünümü
+        koyu yeşil zemin + ortada (dairesel maskelenen) altın ikonla kuruluyor.
+    -->
+    <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splashBackground</item>
+        <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_maskable</item>
+        <item name="postSplashScreenTheme">@style/AppTheme.NoActionBar</item>
+        <item name="android:windowBackground">@color/splashBackground</item>
+    </style>
+</resources>

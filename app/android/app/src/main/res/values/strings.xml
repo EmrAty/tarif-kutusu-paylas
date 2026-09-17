@@ -1,0 +1,9 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Tarif Kutusu</string>
+    <string name="title_activity_main">Tarif Kutusu</string>
+    <string name="package_name">com.tarifkutusu.app</string>
+    <string name="custom_url_scheme">com.tarifkutusu.app</string>
+    <string name="share_offline">Bağlantı kurulamadı. İnternetini kontrol edip tekrar paylaş.</string>
+    <string name="share_close">Kapat</string>
+</resources>

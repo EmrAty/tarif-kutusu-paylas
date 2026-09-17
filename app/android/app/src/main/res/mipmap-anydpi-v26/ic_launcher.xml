@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background>
+        <inset
+            android:drawable="@android:color/white"
+            android:insetLeft="0dp"
+            android:insetTop="0dp"
+            android:insetRight="0dp"
+            android:insetBottom="0dp" />
+    </background>
+    <foreground>
+        <inset
+            android:drawable="@mipmap/ic_maskable"
+            android:insetLeft="8.5dp"
+            android:insetTop="8.5dp"
+            android:insetRight="8.5dp"
+            android:insetBottom="8.5dp" />
+    </foreground>
+</adaptive-icon>
