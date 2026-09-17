@@ -475,6 +475,63 @@ function UpdateBanner({ onUpdate }) {
   );
 }
 
+// Sadece Android share-intent akışında (TikTok/Instagram/YouTube -> Paylaş ->
+// Tarif Kutusu) gösterilen kısa durum ekranı - "preparing"/"queued" birkaç
+// saniye içinde App.exitApp() ile kapanır (bkz. yukarıdaki pendingShare
+// effect'i), "error" durumunda kullanıcı "Tamam"a basıp normal uygulamada
+// kalabilir (exitApp hiç çağrılmıyor).
+function ShareJobOverlay({ state, error, onDismiss }) {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 1000,
+        background: COLORS.forestDark,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: "12px",
+        padding: "24px",
+        textAlign: "center",
+      }}
+    >
+      {state === "error" ? (
+        <>
+          <AlertCircle size={32} color={COLORS.mustard} />
+          <p style={{ fontFamily: SERIF, fontSize: "18px", color: "#F3EFE6", margin: 0 }}>Tarif hazırlanamadı</p>
+          <p style={{ fontSize: "13px", color: "#D8CDB0", margin: 0, maxWidth: "320px" }}>{error}</p>
+          <button
+            onClick={onDismiss}
+            style={{
+              marginTop: "8px",
+              padding: "10px 22px",
+              borderRadius: "9999px",
+              background: COLORS.mustard,
+              color: COLORS.forestDark,
+              border: "none",
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            Tamam
+          </button>
+        </>
+      ) : (
+        <>
+          {state === "preparing" ? <Loader2 size={32} color="#F3EFE6" className="spin" /> : <Check size={32} color={COLORS.mustard} />}
+          <p style={{ fontFamily: SERIF, fontSize: "18px", color: "#F3EFE6", margin: 0 }}>Tarif hazırlanıyor…</p>
+          <p style={{ fontSize: "13px", color: "#D8CDB0", margin: 0 }}>
+            {state === "queued" ? "Uygulamaya dönebilirsin, hazır olunca bildirim gönderilecek." : "Bir saniye…"}
+          </p>
+          <style>{`.spin { animation: spin 1s linear infinite; } @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function TarifKutusu() {
   const [loaded, setLoaded] = useState(false);
   const [view, setView] = useState("list");
@@ -489,6 +546,13 @@ export default function TarifKutusu() {
   const [error, setError] = useState("");
   const [undoState, setUndoState] = useState(null); // { recipe, index }
   const undoTimerRef = React.useRef(null);
+  // Android share-intent (TikTok/Instagram/YouTube -> Paylaş -> Tarif Kutusu)
+  // ile gelen link, auth durumu belli olana kadar burada bekliyor (bkz. aşağıdaki
+  // iki effect) - sadece native share akışı için, web share_target ve manuel
+  // "Yeni Tarif Çıkar" ekranı hiç dokunulmuyor.
+  const [pendingShare, setPendingShare] = useState(null); // { sourceUrl, sharedText }
+  const [shareJobState, setShareJobState] = useState(null); // null | "preparing" | "queued" | "error"
+  const [shareJobError, setShareJobError] = useState("");
   const [personName, setPersonName] = useState("");
   const [nameLoaded, setNameLoaded] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
@@ -751,8 +815,10 @@ export default function TarifKutusu() {
       const sharedLink =
         found.find((u) => /tiktok\.com|youtu\.be|youtube\.com|instagram\.com/i.test(u)) || found[0];
       if (sharedLink) {
-        setLink(sharedLink);
-        setView("add");
+        // Eskiden burada doğrudan setLink+setView("add") çağrılıp "Yeni Tarif
+        // Çıkar" ekranı açılıyordu - artık link, aşağıdaki ayrı effect'in
+        // (auth hazır olunca) /api/recipe-jobs'a göndermesi için bekletiliyor.
+        setPendingShare({ sourceUrl: sharedLink, sharedText: combined });
       }
     };
     ShareReceiver.getInitialShare().then(applyShared).catch(() => {});
@@ -764,6 +830,56 @@ export default function TarifKutusu() {
       if (listenerHandle) listenerHandle.remove();
     };
   }, []);
+
+  useEffect(() => {
+    // Android share-intent akışı (SADECE bu - web share_target ve manuel
+    // "Yeni Tarif Çıkar" ekranı hiç etkilenmiyor): link /api/recipe-jobs'a
+    // gönderilip job kabul edilince (jobId dönünce) kullanıcı geldiği
+    // uygulamaya (TikTok/Instagram/YouTube) App.exitApp() ile doğal şekilde
+    // geri döndürülüyor - Claude/kaydetme işlemi server-side (waitUntil)
+    // devam ediyor, WebView'in açık kalması gerekmiyor. Job kabul edilmeden
+    // (fetch başarısız olursa) exitApp() ASLA çağrılmıyor, kullanıcı
+    // uygulamada kalıp hata mesajını görüyor.
+    if (!pendingShare) return;
+    if (!authChecked) return; // Firebase oturum durumu henüz belli değil, bekle
+    if (!authUser) return; // AuthGate gösteriliyor - kullanıcı giriş/misafir seçince authUser değişip effect tekrar tetiklenir
+
+    let cancelled = false;
+    const { sourceUrl, sharedText } = pendingShare;
+    setPendingShare(null);
+    setShareJobState("preparing");
+    setShareJobError("");
+
+    (async () => {
+      try {
+        const idToken = await auth.currentUser.getIdToken();
+        const response = await fetch("/api/recipe-jobs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+          body: JSON.stringify({ sourceUrl, sharedText }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.jobId) {
+          throw new Error(data.error || "Tarif hazırlama işlemi başlatılamadı.");
+        }
+        if (cancelled) return;
+        setShareJobState("queued");
+        if (Capacitor.isNativePlatform()) {
+          setTimeout(() => {
+            CapacitorApp.exitApp().catch(() => {});
+          }, 900);
+        }
+      } catch (e) {
+        if (cancelled) return;
+        setShareJobState("error");
+        setShareJobError(e.message || "Tarif hazırlama işlemi başlatılamadı.");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingShare, authChecked, authUser]);
 
   useEffect(() => {
     // "Canı çekti" bildirimine tıklanınca (uygulama kapalıyken/arka plandayken/
@@ -1117,6 +1233,7 @@ export default function TarifKutusu() {
         fontFamily: BODY,
       }}
     >
+      {shareJobState && <ShareJobOverlay state={shareJobState} error={shareJobError} onDismiss={() => setShareJobState(null)} />}
       {updateAvailable && <UpdateBanner onUpdate={() => window.location.reload()} />}
       <Header view={view} onBack={closeActiveScreen} authUser={authUser} onSignOut={handleSignOut} onOpenMenu={() => setMenuOpen(true)} />
 

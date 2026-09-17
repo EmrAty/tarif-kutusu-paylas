@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { redisGetJSON, redisSetJSON } from "./redis.js";
 
 // FCM'e (Firebase Cloud Messaging) sunucudan push göndermek normalde
 // firebase-admin paketini gerektirir, ama o da bir servis hesabı JWT'sini
@@ -97,4 +98,29 @@ export async function sendFcmMessage(token, { title, body, data }) {
     err.invalidToken = status === "NOT_FOUND" || status === "INVALID_ARGUMENT";
     throw err;
   }
+}
+
+// Bir kullanıcının kayıtlı TÜM cihazlarına (fcmTokensKey listesi) aynı bildirimi
+// gönderir, notify.js'teki family-broadcast döngüsüyle aynı "gönder + kalıcı
+// geçersiz token'ları temizle" mantığı — ama tek bir kullanıcı için (background
+// recipe-job'ın "Tarifin hazır" / "Tarif oluşturulamadı" bildirimleri bunu kullanıyor).
+export async function notifyUserDevices(uid, { title, body, data }) {
+  const tokens = (await redisGetJSON(fcmTokensKey(uid), [])) || [];
+  if (!tokens.length) return { sent: 0, attempted: 0 };
+
+  let sent = 0;
+  const stillValid = [];
+  for (const token of tokens) {
+    try {
+      await sendFcmMessage(token, { title, body, data });
+      sent++;
+      stillValid.push(token);
+    } catch (e) {
+      if (!e.invalidToken) stillValid.push(token);
+    }
+  }
+  if (stillValid.length !== tokens.length) {
+    await redisSetJSON(fcmTokensKey(uid), stillValid);
+  }
+  return { sent, attempted: tokens.length };
 }
