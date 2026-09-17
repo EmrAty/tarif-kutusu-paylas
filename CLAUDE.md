@@ -2,24 +2,22 @@
 
 Bu dosyayı her oturum başında otomatik okuyorum. Buradaki bilgiler güncel tutulmalı; büyük bir değişiklik yaptığımda bu dosyayı da güncellerim.
 
-## 🔖 KALDIĞIMIZ YER (10 Eylül 2026, oturum sonu)
+## 🔖 KALDIĞIMIZ YER (17 Eylül 2026, oturum sonu)
 
-Capacitor geçişi tamamlandı ve çalışıyor. Son durum ve açık kalan işler:
+Bugünkü oturumda büyük bir mobil UX turu yapıldı — üçü de sadece `app/src/App.jsx` (+ küçük bir `suggest-recipes.js` eki) değiştiren saf web/React değişiklikleri, hepsi GitHub'a push edilip Vercel'e gitti, **ama ÜÇÜ DE henüz gerçek telefonda uçtan uca test edilmedi:**
 
-**Kullanıcının telefonda test edip ONAYLADIĞI:**
-- Uygulama Chrome açmadan kendi WebView'inde çalışıyor (asıl amaç ✅)
-- TikTok/Instagram/YouTube paylaş → Tarif Kutusu → link "Yeni Tarif Çıkar"a düşüyor ✅
-- Google ile giriş/bağlama (native Google Sign-In üzerinden) ✅
-- v12/v13'teki tam ekran açılış (splash) görseli doğru görünüyor ✅
-- Yemekler listesinde bir aile tarifine basılı tutunca "canımın çekti" bildirim butonu doğru çıkıyor ✅
-- **"Canı çekti" bildirimi artık gerçekten ulaşıyor** (native FCM'e geçiş sonrası) ✅
-- **Açılış görseli ile ana uygulama arasındaki krem "yükleniyor" flaşı kalktı** (splash artık Firebase oturum kontrolü bitene kadar kapanmıyor) ✅
+1. **Mobilde ekran geçiş sistemi:** Tarif Detay, Yeni Tarif Çıkar, Tarifini Kendin Oluştur, Alışveriş Listesi, Elimde Bunlar Var artık Sidebar'ın altında açılmıyor — her biri ayrı "ekran" gibi (aşağıdan-yukarı giriş/çıkış animasyonu, scroll save/restore, ortak `closeActiveScreen()` fonksiyonuyla Android geri tuşu + Header ←) açılıyor. Tarif Detay → Alışveriş Listesi → geri akışı, geldiği tarif detayına dönüyor (`shoppingReturnView` state'i).
+2. **"Elimde Bunlar Var" AI önerileri artık gerçek tarif olarak kaydedilebiliyor:** "Tarifi Kaydet" önce (mevcut `CATEGORIES` listesini kullanan) bir kategori seçtiriyor, sonra normal `persistScope` akışıyla kişisel tariflere kalıcı kaydediyor. AI artık besin değerlerini de (`calories`/`protein_g`/`carbs_g`/`fat_g` — normal tariflerle aynı alan adları) TEK istekte üretiyor, ikinci bir Claude çağrısı yok. Free 50 tarif limiti ve duplicate koruması korunuyor.
+3. **Yeni "Pişirmeye Başla" adım adım pişirme modu:** Tarif Detay'da yeni bir buton — malzemeler → yapılış adımları (Önceki/Sonraki, ilerleme çubuğu) → tamamlama ekranı akışı, tamamen frontend (yeni API isteği/Redis yazımı yok). Kontroller (Önceki/Sonraki + varsa "Videoyu Aç, Yapılışını İzle") ekranın gerçek altına, tahmini piksel DEĞİL gerçek flex yükseklik zinciri (`main`'in `flex:1`'inden gelen `height:"100%"` → `minHeight:"100%"`) ile oturtuldu — bir önceki deneme (`calc(100vh-220px)` tahmini) kullanıcının gönderdiği ekran görüntüsüyle yanlış çıktığı için düzeltildi.
 
-**Bekleyen doğrulamalar (sonraki oturumun ilk işi):**
-1. Bildirimin "geç geliyor" şikayetine karşı FCM mesajına `android.priority: "high"` eklendi (bkz. aşağıdaki "Bildirim gecikmesi düzeltildi") ama **bunun gecikmeyi gerçekten kısalttığı henüz ayrıca doğrulanmadı.**
-2. **"Canı çekti" bildirimine tıklanınca doğrudan o tarifin açılması** eklendi (bkz. aşağıdaki "'Canı çekti' bildirimine tıklanınca doğrudan o tarif açılıyor") — **henüz hiç telefonda test edilmedi.** Bir aile üyesine bildirim gönderilip, tıklayınca gerçekten doğru tarifin açılıp açılmadığına bakılmalı.
+**Sonraki oturumun/kullanıcının ilk işi:** Yukarıdaki üçü telefonda uçtan uca dener misin? Özellikle: (a) pişirme modunun buton yerleşimi artık gerçekten ekranın dibinde mi, (b) ekran geçiş animasyonları Android'de akıcı hissettiriyor mu, (c) AI tarif kaydı kategori seçimi + 50 limiti doğru uyguluyor mu.
 
-En güncel APK: `android-capacitor-builds/tarif-kutusu-capacitor-v13.apk` (`versionCode 13`) — bu ikisi dahil sonraki tüm düzeltmeler (FCM önceliği, splash flaşı, bildirim deep-link'i) APK'ya değil doğrudan Vercel'e gitti, yani v13 kurulu bir telefon uygulamayı kapatıp açtığında otomatik güncel — yeni bir APK kurmaya gerek yok.
+Bu turdan ÖNCEKİ (10 Eylül 2026) hâlâ doğrulanmamış maddeler geçerliliğini koruyor, bu oturumda dokunulmadı:
+- FCM `android.priority:"high"` bildirim gecikmesini gerçekten kısalttı mı — hâlâ doğrulanmadı.
+- "Canı çekti" bildirimine tıklayınca doğru tarifin açılması — telefonda hiç test edilmedi.
+- `app/android/` klasörü hâlâ git'te değil (elle yazılmış, başka hiçbir yerde bulunmayan native kod içeriyor — silinirse baştan yazılır) — kullanıcıya sorulup git'e eklenmesi hâlâ öneriliyor.
+
+En güncel APK hâlâ `android-capacitor-builds/tarif-kutusu-capacitor-v13.apk` (`versionCode 13`) — bu oturumdaki tüm değişiklikler saf web/React olduğu için v13 kurulu bir telefon, uygulamayı kapatıp açtığında otomatik güncel; yeni bir APK kurmaya gerek yok.
 
 **Hiç test edilmemiş / doğrulanmamış diğer maddeler** (kullanıcı yukarıdakilerin dışındakileri henüz denemedi):
 - Android geri tuşu davranışı (modal → drawer → liste → arka plana alma)
