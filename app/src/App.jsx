@@ -138,6 +138,7 @@ const SERIF = "Charter, 'Iowan Old Style', 'Georgia', 'Times New Roman', serif";
 const BODY = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
 const LABELSANS = "'Helvetica Neue Condensed', 'Arial Narrow', Arial, sans-serif";
 const CARD_SHADOW = "0 1px 2px rgba(42,38,32,0.05), 0 8px 24px rgba(42,38,32,0.06)";
+const DETAIL_EXIT_MS = 200; // tarif detayı kapanış animasyonunun süresi (mobil, view="list"e geçmeden önce)
 
 const CATEGORIES = ["Kahvaltı", "Öğle Yemeği ve Akşam Yemeği", "Soslar", "Atıştırmalıklar", "Tatlılar"];
 
@@ -495,6 +496,8 @@ export default function TarifKutusu() {
   const updateAvailable = useUpdateAvailable();
   const listScrollYRef = React.useRef(0);
   const prevViewRef = React.useRef(view);
+  const [detailClosing, setDetailClosing] = useState(false);
+  const detailClosingRef = React.useRef(false);
 
   useEffect(() => {
     // Tarif kartına tıklayınca detay ekranı ayrı bir "sayfa" gibi açılsın: detaya
@@ -507,6 +510,38 @@ export default function TarifKutusu() {
     }
     prevViewRef.current = view;
   }, [view]);
+
+  // Detaydan listeye dönüşün ortak yolu: Header'daki ← butonu ve Android
+  // backButton'ı ikisi de bunu çağırıyor. Detaydayken önce kısa bir "kapanış"
+  // animasyonu oynatıp (mobilde, reduced-motion kapalıyken), animasyon
+  // bitince gerçek view="list" geçişini yapıyor ki scroll restore effect'i
+  // (yukarıda) doğru zamanda tetiklensin. Diğer view'lardan (add/edit/...)
+  // dönüş her zaman anında.
+  const closeDetailScreen = useCallback(() => {
+    if (view !== "detail") {
+      setView("list");
+      return;
+    }
+    if (detailClosingRef.current) return;
+    const reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const isMobileWidth = window.innerWidth < 768;
+    if (reduceMotion || !isMobileWidth) {
+      setView("list");
+      return;
+    }
+    detailClosingRef.current = true;
+    setDetailClosing(true);
+  }, [view]);
+
+  useEffect(() => {
+    if (!detailClosing) return;
+    const timer = setTimeout(() => {
+      detailClosingRef.current = false;
+      setDetailClosing(false);
+      setView("list");
+    }, DETAIL_EXIT_MS);
+    return () => clearTimeout(timer);
+  }, [detailClosing]);
 
   useEffect(() => {
     // Misafir girişi artık Firebase'in anonim oturum açma yöntemiyle yapılıyor:
@@ -730,7 +765,7 @@ export default function TarifKutusu() {
       } else if (menuOpen) {
         setMenuOpen(false);
       } else if (view !== "list") {
-        setView("list");
+        closeDetailScreen();
       } else {
         CapacitorApp.minimizeApp();
       }
@@ -740,7 +775,7 @@ export default function TarifKutusu() {
     return () => {
       if (listenerHandle) listenerHandle.remove();
     };
-  }, [view, menuOpen, modalView]);
+  }, [view, menuOpen, modalView, closeDetailScreen]);
 
   const [recipeBuckets, setRecipeBuckets] = useState({ [PERSONAL]: [] });
   const [saveTargets, setSaveTargets] = useState([PERSONAL]);
@@ -1018,7 +1053,7 @@ export default function TarifKutusu() {
       }}
     >
       {updateAvailable && <UpdateBanner onUpdate={() => window.location.reload()} />}
-      <Header view={view} onBack={() => setView("list")} authUser={authUser} onSignOut={handleSignOut} onOpenMenu={() => setMenuOpen(true)} />
+      <Header view={view} onBack={closeDetailScreen} authUser={authUser} onSignOut={handleSignOut} onOpenMenu={() => setMenuOpen(true)} />
 
       <SideMenu
         open={menuOpen}
@@ -1053,9 +1088,14 @@ export default function TarifKutusu() {
             from { opacity: 0; transform: translateY(24px); }
             to { opacity: 1; transform: translateY(0); }
           }
+          @keyframes detailScreenOut {
+            from { opacity: 1; transform: translateY(0); }
+            to { opacity: 0; transform: translateY(24px); }
+          }
           .detail-screen-enter { animation: detailScreenIn 220ms ease-out both; }
+          .detail-screen-exit { animation: detailScreenOut ${DETAIL_EXIT_MS}ms ease-out both; }
           @media (prefers-reduced-motion: reduce) {
-            .detail-screen-enter { animation: none; }
+            .detail-screen-enter, .detail-screen-exit { animation: none; }
           }
           @media (min-width: 768px) {
             .md-row { flex-direction: row !important; align-items: flex-start; }
@@ -1063,7 +1103,7 @@ export default function TarifKutusu() {
             .md-detail-row { flex-direction: row !important; }
             .md-nutrition { width: 220px !important; flex-shrink: 0; }
             .list-sidebar-mobile-hidden { display: block; }
-            .detail-screen-enter { animation: none; }
+            .detail-screen-enter, .detail-screen-exit { animation: none; }
           }
         `}</style>
 
@@ -1156,7 +1196,7 @@ export default function TarifKutusu() {
           )}
 
           {view === "detail" && active && (
-            <div className="detail-screen-enter">
+            <div className={detailClosing ? "detail-screen-exit" : "detail-screen-enter"}>
               <RecipeDetail
                 recipe={active}
                 familyNameById={familyNameById}
