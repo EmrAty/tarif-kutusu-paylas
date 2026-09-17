@@ -493,6 +493,20 @@ export default function TarifKutusu() {
   const [modalView, setModalView] = useState(null); // "account" | "families" | "plus" | "settings" | null
   const [manualPrefill, setManualPrefill] = useState(null);
   const updateAvailable = useUpdateAvailable();
+  const listScrollYRef = React.useRef(0);
+  const prevViewRef = React.useRef(view);
+
+  useEffect(() => {
+    // Tarif kartına tıklayınca detay ekranı ayrı bir "sayfa" gibi açılsın: detaya
+    // girerken en üste kaydır, listeye dönünce listede bırakılan konuma geri dön.
+    const prevView = prevViewRef.current;
+    if (view === "detail" && prevView !== "detail") {
+      window.scrollTo(0, 0);
+    } else if (prevView === "detail" && view === "list") {
+      window.scrollTo(0, listScrollYRef.current);
+    }
+    prevViewRef.current = view;
+  }, [view]);
 
   useEffect(() => {
     // Misafir girişi artık Firebase'in anonim oturum açma yöntemiyle yapılıyor:
@@ -1034,15 +1048,20 @@ export default function TarifKutusu() {
         className="md-row"
       >
         <style>{`
+          .list-sidebar-mobile-hidden { display: none; }
           @media (min-width: 768px) {
             .md-row { flex-direction: row !important; align-items: flex-start; }
             .md-sidebar { width: 260px !important; flex-shrink: 0; }
             .md-detail-row { flex-direction: row !important; }
             .md-nutrition { width: 220px !important; flex-shrink: 0; }
+            .list-sidebar-mobile-hidden { display: block; }
           }
         `}</style>
 
-        <div className="md-sidebar" style={{ width: "100%" }}>
+        <div
+          className={`md-sidebar${view === "detail" ? " list-sidebar-mobile-hidden" : ""}`}
+          style={{ width: "100%" }}
+        >
           <Sidebar
             recipes={recipes}
             loaded={loaded}
@@ -1050,6 +1069,7 @@ export default function TarifKutusu() {
             isPlus={isPlus}
             familyNameById={familyNameById}
             onSelect={(id) => {
+              listScrollYRef.current = window.scrollY;
               setActiveId(id);
               setView("detail");
             }}

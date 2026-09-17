@@ -33,6 +33,15 @@ Eski `android-twa/` bubblewrap'ten yeniden üretilebildiği için git'e alınmam
 **Hatırlatma — hangi düzeltme için yeni APK gerekir:**
 WebView canlı `tarif-kutusu-paylas.vercel.app`'i yüklediği için **JS/React değişiklikleri APK'sız, sadece Vercel'e push ile telefona ulaşıyor** (uygulamayı kapatıp açmak yeterli). Ama **native taraf değişince (yeni Capacitor plugin, `capacitor.config.json`, Android tema/kaynak/Java kodu) mutlaka yeni APK gerekiyor.** Bu ayrım bu oturumda birkaç kez kafa karışıklığı yarattı.
 
+### Tarif detayı artık ayrı bir ekran gibi açılıyor (17 Eylül 2026)
+
+Kullanıcı isteği: tarif kartına tıklanınca detay, ana sayfanın altında açılıp scroll gerektirmesin; ayrı bir "ekran" gibi açılsın, geri butonu/Android geri listeye (önceki scroll konumuna) dönsün. Sadece `app/src/App.jsx` değiştirildi, yeni bir routing sistemi eklenmedi — mevcut `view === "detail"` state'i zaten vardı, sorun tamamen CSS'teydi: mobilde (`md-row` sınıfı `flex-direction: column` olduğunda) Sidebar (tarif listesi) her zaman `main` (detay) içeriğinin üstünde render oluyordu.
+
+- **Çözüm:** Sidebar'ın sarmalayıcı `div`'ine `view === "detail"` iken `list-sidebar-mobile-hidden` sınıfı ekleniyor (`display: none`, yalnızca `min-width: 768px` altında — masaüstündeki yan yana liste+detay görünümü hiç değişmedi). Böylece mobilde detaya girince liste tamamen ekrandan kalkıyor, detay `Header`'ın hemen altında tam ekran görünüyor.
+- **Scroll:** `listScrollYRef` (ref) + `prevViewRef` (ref) ile bir `useEffect([view])`: `view` "detail"e geçince (`prevView !== "detail"`) `window.scrollTo(0,0)`; `detail`'den `list`'e dönünce Sidebar'ın `onSelect`'inde tıklama anında kaydedilmiş `window.scrollY`'e geri dönülüyor. Bu mantık özellikle liste→detay→liste akışına özel; `add`/`edit`/`pantry`/`shopping`/`favorites` gibi diğer view geçişlerine dokunmuyor (o view'lar zaten `view === "detail"` olmadığı için hem gizleme sınıfı hem scroll restore effect'i onlarda tetiklenmiyor).
+- **Geri butonu / Android geri:** Zaten mevcuttu, değiştirilmedi — Header'daki ok (`onBack={() => setView("list")}`, satır ~1007) ve `backButton` native listener'ı (satır ~713-729, `view !== "list"` ise `setView("list")`) her zaman `view`'ı "list"e çeviriyordu; bu state değişimi artık yukarıdaki `useEffect` tarafından yakalanıp scroll geri yükleniyor.
+- **Sadece web/React değişikliği** — yeni APK gerekmiyor, Vercel push + uygulamayı kapatıp açmak yeterli. `npx vite build` temiz derlendi ama **gerçek cihazda/telefonda henüz test edilmedi.**
+
 ## TWA'dan Capacitor'a geçiş yapıldı (10 Eylül 2026)
 
 Android uygulaması **TWA**'dan (Chrome'u arka planda kullanan yöntem) **Capacitor**'a (kendi gömülü WebView'i) geçirildi — kullanıcı telefonda "Chrome'da çalıştırılıyor" bildirimini gördüğü için istemişti. Mevcut React/Vite kodu (`app/src/App.jsx`) sıfırdan yazılmadı, sadece yeni bir native kabuk eklendi.
