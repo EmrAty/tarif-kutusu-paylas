@@ -1219,7 +1219,7 @@ export default function TarifKutusu() {
           />
         </div>
 
-        <main style={{ minWidth: 0, flex: 1 }}>
+        <main style={{ minWidth: 0, flex: 1, display: "flex", flexDirection: "column" }}>
           {view === "list" && (
             <EmptyState
               onAdd={() => {
@@ -1303,7 +1303,7 @@ export default function TarifKutusu() {
           )}
 
           {view === "cook" && active && (
-            <div className={screenTransitionClass} style={{ height: "100%" }}>
+            <div className={screenTransitionClass} style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
               <CookMode recipe={active} onFinish={closeActiveScreen} />
             </div>
           )}
@@ -3686,7 +3686,7 @@ function CookMode({ recipe, onFinish }) {
   };
 
   return (
-    <div className="cook-screen" style={{ display: "flex", flexDirection: "column", minHeight: "100%" }}>
+    <div className="cook-screen" style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
       <style>{`
         @keyframes cookStageIn { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: translateX(0); } }
         .cook-stage-enter { animation: cookStageIn 180ms ease-out both; }
