@@ -2,7 +2,9 @@
 
 Bu dosyayı her oturum başında otomatik okuyorum. Buradaki bilgiler güncel tutulmalı; büyük bir değişiklik yaptığımda bu dosyayı da güncellerim.
 
-## 🔖 KALDIĞIMIZ YER (17 Eylül 2026, ikinci oturum sonu)
+## 🔖 KALDIĞIMIZ YER (18 Eylül 2026)
+
+**TikTok altyazı/ses fallback'i (18 Eylül 2026) — kod hazır, GitHub'a PUSH EDİLMEDİ, canlıya ÇIKMADI, `OPENAI_API_KEY` Vercel'de TANIMLI DEĞİL:** Paylaşılan TikTok videosunun açıklaması tarif için yetersizse artık job, TikTok'un kendi altyazısını (varsa) ya da videonun konuşmasını OpenAI ile metne çevirip Claude'a onu veriyor; hiçbiri yeterli metin vermezse tarif uydurmak yerine job `failed` oluyor ve kullanıcıya "Bu videodan yeterli tarif bilgisi çıkaramadık." bildirimi gidiyor. Açıklaması zaten yeterli olan videolarda akış hiç değişmiyor. Sadece TikTok — Instagram ve YouTube'a dokunulmadı. Ayrıntı: aşağıdaki "TikTok altyazı/ses fallback'i" bölümü. **Yapılması gerekenler: (1) Vercel'e `OPENAI_API_KEY` ekle, (2) GitHub'a push et, (3) altyazısız konuşmalı bir TikTok'la ses yolunu gerçekten test et** (altyazı yolu gerçek videolarla doğrulandı, ses yolu yalnızca indirme adımına kadar doğrulandı — transkripsiyon çağrısı anahtar olmadığı için hiç çalıştırılamadı). Yeni APK GEREKMİYOR (saf sunucu değişikliği).
 
 **Android paylaşım paneli + arka plan tarif job'u (17 Eylül 2026, ikinci oturum) — canlıda, telefonda HENÜZ TEST EDİLMEDİ:** TikTok/Instagram/YouTube → Paylaş → Tarif Kutusu artık tam ekran uygulamayı açmıyor. Kaynak uygulamanın üstünde ekranın ~%78'ini kaplayan bir panel açılıyor (yeni native `ShareActivity` + `app/src/SharePanel.jsx`): link, otomatik çekilen video açıklaması (düzenlenebilir), mevcut `CATEGORIES` listesi ve "Tarife Ekle". Butona basılınca `/api/recipe-jobs` job'ı kabul ediyor, panel kapanıyor, Android kullanıcıyı geldiği uygulamaya kendiliğinden döndürüyor; tarif sunucuda hazırlanıyor, bitince "Tarifin hazır 🍝" bildirimi gidiyor ve bildirime basınca Tarif Detay açılıyor. **Ayrıntı için aşağıdaki "Android paylaşım paneli ve güvenilir arka plan job'u" bölümüne bak.** En güncel APK artık `android-capacitor-builds/tarif-kutusu-capacitor-v14.apk` (`versionCode 14`) — native değişiklik olduğu için **yeni APK şart**, web tarafı v13'le de uyumlu (v13'te paylaşım eski tam ekran akışıyla çalışmaya devam eder).
 
@@ -50,6 +52,41 @@ En güncel APK hâlâ `android-capacitor-builds/tarif-kutusu-capacitor-v13.apk` 
 
 **Hatırlatma — hangi düzeltme için yeni APK gerekir:**
 WebView canlı `tarif-kutusu-paylas.vercel.app`'i yüklediği için **JS/React değişiklikleri APK'sız, sadece Vercel'e push ile telefona ulaşıyor** (uygulamayı kapatıp açmak yeterli). Ama **native taraf değişince (yeni Capacitor plugin, `capacitor.config.json`, Android tema/kaynak/Java kodu) mutlaka yeni APK gerekiyor.** Bu ayrım bu oturumda birkaç kez kafa karışıklığı yarattı.
+
+### TikTok altyazı/ses fallback'i (18 Eylül 2026)
+
+Kullanıcı isteği: TikTok açıklaması tarif için yetersiz kaldığında (çok yaygın — "Fırında soslu mantı makarna 😋 tam tarifi youtube kanalımda #makarna..." gibi) Claude'un malzemeleri uydurması yerine videonun kendi içeriğinden gerçek bilgi çıkarılsın. **Bu turda SADECE TikTok yapıldı**; Instagram bilerek mevcut caption sistemiyle bırakıldı, YouTube'a da dokunulmadı.
+
+**Akış (`app/api/recipe-jobs.js` → `processRecipeJob`):** caption yeterliyse hiçbir şey değişmiyor, eski hızlı yol çalışıyor. Yetersizse VE link TikTok'sa: TikTok altyazısı → yoksa/kısaysa videoyu indirip OpenAI ile transkripsiyon → ikisi de 200 karakterin altında kalırsa `insufficientSourceError()` ile job `failed` ve bildirim gövdesi "Bu videodan yeterli tarif bilgisi çıkaramadık." (normal hata bildirimi ayrı, `e.notifyBody` ile ayrılıyor). Transkript bulunursa caption'ın altına `--- Videonun konuşma metni (otomatik çıkarıldı) ---` başlığıyla eklenip mevcut `extractRecipeFromCaption`'a veriliyor — **`_lib/extractRecipe.js`, `shared/recipeExtraction.js` ve prompt hiç değişmedi.**
+
+**Paylaşım paneli hiç beklemiyor:** `SharePanel.jsx` ve `ShareActivity` dosyalarına dokunulmadı; fallback tamamen `waitUntil` ile dönen arka plan job'unun içinde. Panel eskisi gibi caption → kategori → "Tarife Ekle" → job kabul → kapanış.
+
+**Caption "yeterli mi" kararı (`captionLooksSufficient`, recipe-jobs.js):** link/hashtag/mention atıldıktan sonra temizlenmiş metin ≥400 karakterse yeterli; değilse ≥3 ölçü birimi eşleşmesi (`2 yemek kaşığı`, `250 gr`, `1 su bardağı`…) ve ≥120 karakter aranıyor. Yanlışlıkla "yeterli" demek Claude'un uydurmasına yol açacağı için eşikler muhafazakâr tutuldu. **Türkçe tuzağı:** birimler ASCII olmayan harfle bittiği için (`diş`, `kaşık`) regex'te `\b` çalışmıyor (JavaScript'te `\b` ASCII tabanlı) — `(?![\p{L}])` ileri bakışı ve `u` bayrağı kullanıldı. Gerçek TikTok açıklamalarından 9 örnekle test edildi (hashtag yığınıyla uzatılmış açıklama dahil), hepsi doğru sınıflandı.
+
+**`app/api/_lib/tiktok.js` (yeni, TikTok'a bağlı TEK dosya):** TikTok HTML/JSON yapısını değiştirirse sadece bu fallback bozulur; caption'lı normal akış, `/api/extract`, Instagram ve YouTube etkilenmez — bu yüzden buradaki her adım hata fırlatmak yerine boş transkript dönüyor. Gerçek videolarla ölçülen ve koda gömülen üç kritik bulgu:
+- **Masaüstü User-Agent'ı TikTok'un WAF'ına takılıyor** ("Please wait..." + `_wafchallengeid`, 1,4 KB'lık sayfa). **iPhone UA'sı ile sayfa normal geliyor** (`fetch-caption.js`'in Instagram için kullandığı UA ile aynı).
+- Video verisi mobil sayfada ayrı bir `<script id="api-data">` içinde `videoDetail.itemInfo.itemStruct` yolunda; masaüstü sayfada aynı nesne `__UNIVERSAL_DATA_FOR_REHYDRATION__` içinde. Yol sabitlenmedi, `itemStruct.video` taşıyan düğüm ağaçta aranıyor — ikisi de çalışıyor.
+- **`playAddr`/`downloadAddr` yalnızca sayfanın `Set-Cookie`'si VE `Referer: https://www.tiktok.com/` BİRLİKTE gönderilirse iniyor**; biri eksikse 403 "Access Denied". (Çerezler sayfa yanıtından `getSetCookie()` ile alınıyor.)
+- Altyazı `itemStruct.video.subtitleInfos[]` içinde: `{LanguageCodeName:"tur-TR", Format:"webvtt", Source:"ASR", Url, UrlExpire}`. Türkçe olan tercih ediliyor, VTT düz metne çevrilirken zaman damgaları/cue numaraları/etiketler atılıyor ve ASR'ın tekrarladığı ardışık satırlar teke indiriliyor.
+
+**`app/api/_lib/transcribe.js` (yeni):** `gpt-4o-mini-transcribe` — resmi OpenAI fiyat listesinde dakikası ~$0,003 ile en ucuz transcription modeli (`gpt-transcribe` $0,0045; `gpt-4o-transcribe` ve Whisper $0,006). Uç nokta **mp4'ü doğrudan kabul ettiği için ffmpeg'e gerek yok** (Vercel'de zaten yok), sesi ayırmadan videoyu gönderiyoruz. Dosya sınırı 25 MB. Yanıttaki `usage` job kaydına ve loglara yazılıyor ki gerçek maliyet ölçülebilsin.
+
+**Sınırlar (kontrolsüz bellek/süre kullanımına karşı):** video süresi >180 sn ise ses yoluna hiç girilmiyor (altyazı yolu süreden bağımsız, 621 sn'lik videoda da çalıştı); indirme 20 MB'ta kesiliyor (hem `Content-Length`'ten hem akarken sayarak — ~30 sn'lik TikTok 6 MB geliyor); sayfa/altyazı 15 sn, indirme 60 sn zaman aşımı. Fallback bütçesi `getDeadline()`'dan hesaplanıp Claude'a en az 60 sn bırakıyor; kalan süre 20 sn'nin altındaysa fallback hiç denenmiyor. **Hiçbir sınır aşımı tarif uydurmaya ya da fonksiyonun öldürülmesine yol açmıyor — hepsi job `failed`.**
+
+**Yeni npm bağımlılığı YOK** (`FormData`/`Blob` Node'un kendi globalleri). **Yeni env değişkeni: `OPENAI_API_KEY`** — Vercel'de elle eklenmeli (Claude gizli anahtarı forma girmez). Tanımlı değilse altyazı yolu çalışmaya devam eder, ses yolu sessizce atlanır (`transcribeSkipped: "OPENAI_API_KEY yok"`).
+
+**Teşhis:** her adım `logStep` ile Vercel loglarına (`tag:"recipe-job"`, `step: tiktokPage|tiktokSubtitle|tiktokDownload|transcribe`) ve job kaydına `timings` + `transcriptMeta` (`method`, `durationSeconds`, `videoBytes`, `transcribeModel`, `transcribeUsage`) olarak yazılıyor; `GET /api/recipe-jobs?id=` ile okunabiliyor.
+
+**Test edilenler (18 Eylül 2026, gerçek TikTok videolarıyla, yerelden):**
+- Altyazı yolu: 138 sn'lik kek videosundan 1859 karakterlik gerçek tarif metni, **toplam 865 ms** (sayfa 774 ms + altyazı 91 ms), OpenAI maliyeti sıfır.
+- Video indirme: altyazısız 29 sn'lik video 6.039.160 bayt, **350 ms**.
+- Boyut sınırı: limit geçici olarak 1 MB'a çekilip doğrulandı — 96 ms'de `tooLarge`, video belleğe alınmadan.
+- Geçersiz anahtarla OpenAI çağrısı: 401 düzgün yakalanıyor, job `failed`'a düşüyor (multipart isteğin şekli doğru).
+- **Test EDİLEMEYEN: gerçek transkripsiyon sonucu, süresi ve maliyeti** — `OPENAI_API_KEY` bu makinede yok.
+
+**Değişen dosyalar (push edilirken `C:\Users\emrea\tk-clone`'a kopyalanacaklar):** `app/api/_lib/tiktok.js` (yeni), `app/api/_lib/transcribe.js` (yeni), `app/api/recipe-jobs.js` (değişti) ve bu `CLAUDE.md`. **Başka HİÇBİR dosya değişmedi** — `app/` ağacının tamamı taranarak doğrulandı: `fetch-caption.js` (Instagram), `extract.js`, `notify.js`, `data.js`, `suggest-recipes.js`, `SharePanel.jsx`, `App.jsx`, `shared/recipeExtraction.js`, `package.json`, `capacitor.config.json` ve `app/android/` hepsi eski tarihlerinde duruyor. `npx vite build` ve tüm `api/*.js` için `node --check` temiz.
+
+**Bilinen riskler:** (1) TikTok, Vercel'in veri merkezi IP'lerinde iPhone UA'sına rağmen WAF uygulayabilir — bu durumda fallback sessizce başarısız olur, caption'lı videolar etkilenmez; canlıda doğrulanmalı. (2) Transkript 200 karakteri geçiyorsa ama içerik aslında tarif değilse (şarkı, sohbet) Claude yine de bir tarif üretebilir — uzunluk eşiği bunu tamamen engellemez. (3) Instagram için ses/DASH fallback'i kullanıcı isteğiyle bilerek YAPILMADI — Instagram hâlâ yalnızca caption ile çalışıyor; ileride istenirse ayrı bir faz.
 
 ### Android paylaşım paneli ve güvenilir arka plan job'u (17 Eylül 2026, ikinci oturum)
 
@@ -279,6 +316,8 @@ Kullanıcının isteği üzerine `tarif-kutusu-paylas.vercel.app` sitesi, Google
   - `app/api/recipe-jobs.js` — Android paylaşım panelinin arka plan tarif job'u (17 Eylül 2026). `POST` job'ı kabul edip hemen `{jobId}` döner, asıl işi `waitUntil` ile sürdürür; `GET ?id=` durum döndürür. `maxDuration: 300`. Ayrıntı: "Android paylaşım paneli ve güvenilir arka plan job'u" bölümü.
   - `app/api/_lib/extractRecipe.js` — `recipe-jobs.js` için sunucu tarafı Claude çağrısı: `/api/extract` ile aynı model ve prompt, ama json_schema ile garanti JSON, `max_tokens: 16000`, `stop_reason` kontrolü ve zaman aşımı.
   - `app/api/_lib/jobRecipes.js` — job'un eklediği ama istemcinin henüz görmediği tariflerin işaretçisi; `data.js` bu sayede istemcinin bayat listesi yüzünden tarif kaybetmiyor.
+  - `app/api/_lib/tiktok.js` — TikTok sayfa/JSON ayrıştırma + altyazı indirme + video indirme (18 Eylül 2026). TikTok'a bağlı TEK dosya: yapıları değişirse sadece buradaki fallback bozulur. Ayrıntı: "TikTok altyazı/ses fallback'i" bölümü.
+  - `app/api/_lib/transcribe.js` — OpenAI `gpt-4o-mini-transcribe` ile konuşmayı metne çevirme (`OPENAI_API_KEY` gerekir). mp4'ü doğrudan gönderiyor, ffmpeg yok.
   - `app/shared/recipeExtraction.js` — tarif system prompt'u, kullanıcı mesajı üreticisi ve `CATEGORIES`. Hem `app/src/App.jsx` hem `app/api/_lib/extractRecipe.js` buradan okuyor (tek kaynak, iki farklı tarif sistemi yok).
   - `app/src/SharePanel.jsx` — Android paylaşım panelinin arayüzü (`?sharePanel=1` + native köprü varsa `main.jsx` normal uygulama yerine bunu render ediyor).
   - `app/api/_lib/auth.js`, `redis.js`, `profile.js` — ortak yardımcılar. Kimlik doğrulama, Firebase ID token'ını Google'ın herkese açık anahtarlarıyla (`jose` paketiyle) doğruluyor — `firebase-admin` ya da yeni bir gizli servis hesabı anahtarı gerekmedi.
@@ -371,6 +410,7 @@ Kullanıcı TikTok'ta zaten çalışan "paylaş → link+açıklama otomatik dol
 - Anthropic API anahtarı gibi gizli bilgileri tarayıcı formlarına Claude asla giremez — o adımı hep kullanıcı kendisi yapıyor.
 - **Canlı API'yi test etmenin yolu (17 Eylül 2026'da kullanıldı):** Firebase Identity Toolkit REST'iyle (`accounts:signUp`, public web API key) geçici bir **anonim** hesap açılıp `Authorization: Bearer <idToken>` ile gerçek uç noktalar çağrılıyor; test bitince hesap `accounts:delete` ile siliniyor ve test verisi (`/api/data`'ya boş liste yazarak) temizleniyor. Bu oturumda açılan iki geçici hesap silindi.
 - **Vercel ayarları (17 Eylül 2026'da panelden doğrulandı):** Fluid Compute **açık**, plan Hobby. Yani fonksiyon süre sınırı 300 sn (ölçülen gerçek bütçe 299.832 ms). Vercel'de bu iş için yeni env değişkeni ya da ayar gerekmedi.
+- **Env değişkenleri (hepsi Vercel proje ayarlarında, asla kodda değil):** `ANTHROPIC_API_KEY`, `KV_REST_API_URL`, `KV_REST_API_TOKEN`, `FIREBASE_SERVICE_ACCOUNT_KEY` ve **18 Eylül 2026'dan itibaren `OPENAI_API_KEY`** (TikTok ses transkripsiyonu için — kullanıcının kendi eliyle eklemesi gereken bir adım; eklenmezse altyazı yolu çalışır, ses yolu sessizce atlanır). Env değişkeni eklendikten sonra Vercel'de bir redeploy gerekiyor (yeni değişkenler yalnızca yeni deploy'lara uygulanıyor).
 - **`gh` (GitHub CLI) bu makinede kurulu değil** — APK için hazır bir "release" linki üretilemiyor. Kullanıcı APK'yı sohbetteki dosya kartından/yerel `android-capacitor-builds/` klasöründen kendisi alıp telefona aktarmayı tercih ediyor (17 Eylül 2026'da soruldu).
 
 ## Giriş / hesap sistemi (Firebase Authentication)

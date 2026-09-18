@@ -6,6 +6,7 @@ import { getProfile, FREE_RECIPE_LIMIT } from "./_lib/profile.js";
 import { extractRecipeFromCaption } from "./_lib/extractRecipe.js";
 import { fcmTokensKey, notifyUserDevices } from "./_lib/fcm.js";
 import { addPendingJobRecipe } from "./_lib/jobRecipes.js";
+import { isTikTokLink, tiktokTranscript } from "./_lib/tiktok.js";
 import { CATEGORIES } from "../shared/recipeExtraction.js";
 
 // Android paylaşım paneli (ShareActivity) buraya POST atıyor: link, kullanıcının
@@ -26,9 +27,42 @@ const URL_LOCK_TTL = 330;
 const STALE_MS = 6 * 60 * 1000;
 const RESERVE_MS = 20_000;
 const MAX_CLAUDE_MS = 240_000;
+const MIN_CLAUDE_MS = 60_000;
+const MIN_FALLBACK_MS = 20_000;
 const MAX_CAPTION_CHARS = 20000;
+const MAX_TRANSCRIPT_CHARS = 12000;
 const SUPPORTED_LINK = /tiktok\.com|youtu\.be|youtube\.com|instagram\.com/i;
 const LIMIT_MESSAGE = `Ücretsiz hesaplar en fazla ${FREE_RECIPE_LIMIT} kişisel tarif ekleyebilir. Sınırsız eklemek için Plus'a geç.`;
+const INSUFFICIENT_MESSAGE = "Bu videodan yeterli tarif bilgisi çıkaramadık.";
+
+// Caption'ın tek başına tarif için yeterli olup olmadığı: hashtag/mention/link
+// atıldıktan sonraki uzunluk ve ölçü birimi sayısı. Yanlışlıkla "yeterli" demek
+// Claude'un malzemeleri uydurmasına yol açacağı için eşikler muhafazakâr; yanlış
+// "yetersiz" demenin bedeli ise sadece gereksiz bir altyazı denemesi.
+// Türkçe birimler ASCII olmayan harflerle bittiği için \b yerine harf-değil
+// ileri bakışı kullanılıyor (\b JavaScript'te ASCII tabanlı).
+const MEASURE_RE =
+  /\d+[.,]?\d*\s*(?:gram|gr|g|kilo|kg|litre|lt|ml|cl|adet|tane|paket|diş|dilim|demet|tutam|su bardağı|çay bardağı|bardak|yemek kaşığı|çorba kaşığı|tatlı kaşığı|çay kaşığı|kaşık|fincan|porsiyon)(?![\p{L}])/giu;
+const RICH_CAPTION_CHARS = 400;
+const MEASURED_CAPTION_CHARS = 120;
+const MEASURE_HITS = 3;
+
+function captionLooksSufficient(caption) {
+  const cleaned = caption
+    .replace(/https?:\/\/\S+/g, " ")
+    .replace(/[#@][\p{L}\p{N}_]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (cleaned.length >= RICH_CAPTION_CHARS) return true;
+  const hits = cleaned.match(MEASURE_RE)?.length ?? 0;
+  return hits >= MEASURE_HITS && cleaned.length >= MEASURED_CAPTION_CHARS;
+}
+
+function insufficientSourceError() {
+  const err = new Error(INSUFFICIENT_MESSAGE);
+  err.notifyBody = INSUFFICIENT_MESSAGE;
+  return err;
+}
 
 const recipesKey = (uid) => `user:${uid}:recipes`;
 const jobKey = (uid, jobId) => `job:${uid}:${jobId}`;
@@ -85,21 +119,42 @@ async function processRecipeJob({ uid, jobId, sourceUrl, caption, category, adde
   const startedAt = Date.now();
   const timings = {};
   let recipe = null;
+  let transcriptMeta = null;
 
   try {
     const deadline = getDeadline();
     const budgetMs = deadline ? deadline.getTime() - Date.now() : null;
+    const remainingMs = () => (deadline ? deadline.getTime() - Date.now() : MAX_CLAUDE_MS + RESERVE_MS);
     await patchJob(uid, jobId, { status: "processing", startedAt, budgetMs });
 
-    const claudeTimeout = Math.max(
-      15_000,
-      Math.min(MAX_CLAUDE_MS, (budgetMs == null ? MAX_CLAUDE_MS + RESERVE_MS : budgetMs) - RESERVE_MS)
-    );
+    // Caption tarif için yeterliyse akış hiç değişmiyor (eski hızlı yol).
+    // Yetersizse ve link TikTok'sa önce altyazı, sonra konuşma metni deneniyor;
+    // ikisi de yoksa job başarısız oluyor — eksik bilgiyle tarif uydurulmuyor.
+    let recipeText = caption;
+    if (isTikTokLink(sourceUrl) && !captionLooksSufficient(caption)) {
+      const fallbackBudget = remainingMs() - RESERVE_MS - MIN_CLAUDE_MS;
+      const fallback =
+        fallbackBudget >= MIN_FALLBACK_MS
+          ? await tiktokTranscript(sourceUrl, {
+              budgetMs: fallbackBudget,
+              log: (step, ms, extra) => logStep(jobId, step, ms, extra),
+            })
+          : { transcript: "", method: "none", timings: {}, meta: { skipped: "süre kalmadı" } };
+      Object.assign(timings, fallback.timings);
+      transcriptMeta = { method: fallback.method, ...fallback.meta };
+      if (!fallback.transcript) throw insufficientSourceError();
+      recipeText = `${caption}\n\n--- Videonun konuşma metni (otomatik çıkarıldı) ---\n${fallback.transcript.slice(
+        0,
+        MAX_TRANSCRIPT_CHARS
+      )}`;
+    }
+
+    const claudeTimeout = Math.max(15_000, Math.min(MAX_CLAUDE_MS, remainingMs() - RESERVE_MS));
 
     let t = Date.now();
     const { recipe: parsed, usage, stopReason } = await extractRecipeFromCaption({
       link: sourceUrl,
-      caption,
+      caption: recipeText,
       timeoutMs: claudeTimeout,
     });
     timings.claude = Date.now() - t;
@@ -128,12 +183,17 @@ async function processRecipeJob({ uid, jobId, sourceUrl, caption, category, adde
     logStep(jobId, "save", timings.save);
   } catch (e) {
     timings.total = Date.now() - startedAt;
-    logStep(jobId, "failed", timings.total, { error: e.message });
-    await patchJob(uid, jobId, { status: "failed", error: e.message || "Bilinmeyen hata", timings }).catch(() => {});
+    logStep(jobId, "failed", timings.total, { error: e.message, transcriptMeta });
+    await patchJob(uid, jobId, {
+      status: "failed",
+      error: e.message || "Bilinmeyen hata",
+      timings,
+      transcriptMeta,
+    }).catch(() => {});
     await redisDel(lockKey).catch(() => {});
     await notifyUserDevices(uid, {
       title: "Tarif oluşturulamadı",
-      body: "Paylaştığın videodan tarif çıkarılamadı. Dokun, uygulamada tekrar deneyelim.",
+      body: e.notifyBody || "Paylaştığın videodan tarif çıkarılamadı. Dokun, uygulamada tekrar deneyelim.",
       data: { type: "recipe_failed", link: sourceUrl },
     }).catch(() => {});
     return;
@@ -146,6 +206,7 @@ async function processRecipeJob({ uid, jobId, sourceUrl, caption, category, adde
     recipeTitle: recipe.title,
     completedAt: Date.now(),
     timings,
+    transcriptMeta,
   }).catch(() => {});
 
   const t = Date.now();
