@@ -142,7 +142,7 @@ const CARD_SHADOW = "0 1px 2px rgba(42,38,32,0.05), 0 8px 24px rgba(42,38,32,0.0
 const SCREEN_EXIT_MS = 200; // mobil "ekran" kapanış animasyonunun süresi (gerçek view değişiminden önce)
 // Mobilde/Capacitor'da tarif listesinin (Sidebar) üstünde kalmayıp onun yerine
 // tam ekran açılan, kendi giriş/çıkış animasyonu + scroll-üste-sıfırlama olan view'lar.
-const FULLSCREEN_VIEWS = ["detail", "add", "manual", "shopping", "pantry", "cook"];
+const FULLSCREEN_VIEWS = ["detail", "add", "manual", "shopping", "pantry", "cook", "favorites"];
 
 // "Elimde Bunlar Var" AI önerileri kategori döndürmüyor (bkz. suggest-recipes.js
 // şeması); normal recipe şemasında kategori zorunlu olduğu için kaydederken bu
@@ -468,6 +468,12 @@ export default function TarifKutusu() {
   const [familiesLoaded, setFamiliesLoaded] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [modalView, setModalView] = useState(null); // "account" | "families" | "plus" | "settings" | null
+  // modalView'ın (Aileler/Plus/Ayarlar/Hesabım) kapanışı da diğer "tam ekran"
+  // view'larla aynı ortak çıkış animasyonunu (detail-screen-exit) kullanıyor —
+  // true iken ModalSheet hâlâ render'da ama çıkış animasyonu oynuyor, animasyon
+  // bitince gerçek modalView(null) burada uygulanıyor (aşağıdaki effect).
+  const [modalClosing, setModalClosing] = useState(false);
+  const modalClosingRef = React.useRef(false);
   const [manualPrefill, setManualPrefill] = useState(null);
   const updateAvailable = useUpdateAvailable();
   const listScrollYRef = React.useRef(0);
@@ -541,6 +547,30 @@ export default function TarifKutusu() {
     }, SCREEN_EXIT_MS);
     return () => clearTimeout(timer);
   }, [closingScreen]);
+
+  // ModalSheet (Aileler/Plus/Ayarlar/Hesabım) kapanışı: X butonu, arka plana
+  // tıklama ve Android backButton'ın hepsi bunu çağırıyor. Aynı closeActiveScreen
+  // deseni — önce çıkış animasyonunu oynat, animasyon bitince modalView'ı null'a çek.
+  const closeModal = useCallback(() => {
+    if (!modalView || modalClosingRef.current) return;
+    const reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduceMotion) {
+      setModalView(null);
+      return;
+    }
+    modalClosingRef.current = true;
+    setModalClosing(true);
+  }, [modalView]);
+
+  useEffect(() => {
+    if (!modalClosing) return;
+    const timer = setTimeout(() => {
+      modalClosingRef.current = false;
+      setModalClosing(false);
+      setModalView(null);
+    }, SCREEN_EXIT_MS);
+    return () => clearTimeout(timer);
+  }, [modalClosing]);
 
   useEffect(() => {
     // Misafir girişi artık Firebase'in anonim oturum açma yöntemiyle yapılıyor:
@@ -767,7 +797,7 @@ export default function TarifKutusu() {
     let listenerHandle;
     CapacitorApp.addListener("backButton", () => {
       if (modalView) {
-        setModalView(null);
+        closeModal();
       } else if (menuOpen) {
         setMenuOpen(false);
       } else if (view !== "list") {
@@ -781,7 +811,7 @@ export default function TarifKutusu() {
     return () => {
       if (listenerHandle) listenerHandle.remove();
     };
-  }, [view, menuOpen, modalView, closeActiveScreen]);
+  }, [view, menuOpen, modalView, closeActiveScreen, closeModal]);
 
   const [recipeBuckets, setRecipeBuckets] = useState({ [PERSONAL]: [] });
   const [saveTargets, setSaveTargets] = useState([PERSONAL]);
@@ -1151,6 +1181,7 @@ export default function TarifKutusu() {
         isPlus={isPlus}
         onNavigate={(target) => {
           if (target === "favorites") {
+            if (view !== "favorites") listScrollYRef.current = window.scrollY;
             setView(target);
           } else {
             setModalView(target);
@@ -1358,20 +1389,22 @@ export default function TarifKutusu() {
           )}
 
           {view === "favorites" && (
-            <FavoritesView
-              recipes={recipes}
-              familyNameById={familyNameById}
-              onSelect={(id) => {
-                setActiveId(id);
-                setView("detail");
-              }}
-            />
+            <div className={screenTransitionClass}>
+              <FavoritesView
+                recipes={recipes}
+                familyNameById={familyNameById}
+                onSelect={(id) => {
+                  setActiveId(id);
+                  setView("detail");
+                }}
+              />
+            </div>
           )}
         </main>
       </div>
 
       {modalView === "families" && (
-        <ModalSheet title="Aileler" onClose={() => setModalView(null)}>
+        <ModalSheet title="Aileler" onClose={closeModal} closing={modalClosing}>
           <FamiliesView
             isPlus={isPlus}
             families={families}
@@ -1385,7 +1418,7 @@ export default function TarifKutusu() {
       )}
 
       {modalView === "plus" && (
-        <ModalSheet title="Plus" onClose={() => setModalView(null)}>
+        <ModalSheet title="Plus" onClose={closeModal} closing={modalClosing}>
           <PlusView
             isPlus={isPlus}
             onToggle={async (next) => {
@@ -1397,7 +1430,7 @@ export default function TarifKutusu() {
       )}
 
       {modalView === "account" && (
-        <ModalSheet title="Hesabım" onClose={() => setModalView(null)}>
+        <ModalSheet title="Hesabım" onClose={closeModal} closing={modalClosing}>
           <AccountView
             authUser={authUser}
             personName={personName}
@@ -1408,7 +1441,7 @@ export default function TarifKutusu() {
       )}
 
       {modalView === "settings" && (
-        <ModalSheet title="Ayarlar" onClose={() => setModalView(null)}>
+        <ModalSheet title="Ayarlar" onClose={closeModal} closing={modalClosing}>
           <SettingsView personName={personName} nameDraft={nameDraft} setNameDraft={setNameDraft} onSaveName={handleSaveName} />
         </ModalSheet>
       )}
@@ -1735,7 +1768,13 @@ function SideMenu({ open, onClose, isPlus, onNavigate }) {
   );
 }
 
-function ModalSheet({ title, onClose, children }) {
+function ModalSheet({ title, onClose, closing, children }) {
+  // Blur/overlay/kart boyutu/renkler hiç değişmedi — tek eklenen şey, panelin
+  // FULLSCREEN_VIEWS ekranlarıyla (detay/add/shopping/...) AYNI ortak
+  // detail-screen-enter/-exit animasyon sınıfları. `closing` true olduğu sürece
+  // panel hâlâ DOM'da (çıkış animasyonu oynuyor); gerçek kapanma (modalView(null))
+  // App'teki closeModal()'ın SCREEN_EXIT_MS sonrası tetiklediği state güncellemesiyle olur.
+  const sheetTransitionClass = closing ? "detail-screen-exit" : "detail-screen-enter";
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 80, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
       <div
@@ -1761,7 +1800,7 @@ function ModalSheet({ title, onClose, children }) {
           flexDirection: "column",
           overflow: "hidden",
         }}
-        className="md-modal-sheet"
+        className={`md-modal-sheet ${sheetTransitionClass}`}
       >
         <style>{`
           @media (min-width: 768px) {
