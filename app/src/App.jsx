@@ -26,6 +26,7 @@ import { FirebaseAuthentication } from "@capacitor-firebase/authentication";
 import ShareReceiver from "./capacitorShare.js";
 import NativeSplash from "./capacitorSplash.js";
 import { CATEGORIES, RECIPE_SYSTEM_PROMPT, buildRecipeUserText } from "../shared/recipeExtraction.js";
+import { useLanguage, LANGUAGES, translate } from "./i18n.jsx";
 
 // ShareReceiver/NativeSplash sadece Android tarafında yazılmış özel native plugin'ler
 // (bkz. app/android/.../ShareReceiverPlugin.java, NativeSplashPlugin.java) - iOS'ta
@@ -52,7 +53,7 @@ async function nativeGoogleCredential() {
     throw new Error(`Google Sign-In: ${e.message || e.code || JSON.stringify(e)}`);
   }
   const idToken = result?.credential?.idToken;
-  if (!idToken) throw new Error("Google girişi iptal edildi ya da id token alınamadı.");
+  if (!idToken) throw new Error(translate("errors.googleSignInCancelled"));
   return GoogleAuthProvider.credential(idToken);
 }
 
@@ -192,13 +193,13 @@ function isFamilyRecipeScope(recipe) {
 // handleSendNotification'ın döndürdüğü {sent, attempted, recipientCount, error}
 // özetini kullanıcıya anlamlı bir Türkçe mesaja çeviriyor — "gönderildi" ile
 // "kimseye ulaşmadı" arasındaki farkı görünür kılmak için (bkz. api/notify.js).
-function notifyResultMessage(result) {
-  if (!result) return "Bildirim gönderildi";
-  if (result.recipientCount === 0) return "Ailede başka üye yok";
-  if (result.attempted === 0) return "Kimsenin bildirim kaydı yok";
-  if (result.sent === 0) return result.error ? `Gönderilemedi: ${result.error}` : "Gönderilemedi";
-  if (result.sent < result.attempted) return `Kısmen gönderildi (${result.sent}/${result.attempted})`;
-  return "Bildirim gönderildi";
+function notifyResultMessage(result, t) {
+  if (!result) return t("notify.sent");
+  if (result.recipientCount === 0) return t("notify.noOtherMembers");
+  if (result.attempted === 0) return t("notify.noOneRegistered");
+  if (result.sent === 0) return result.error ? t("notify.failedWithReason", { reason: result.error }) : t("notify.failed");
+  if (result.sent < result.attempted) return t("notify.partial", { sent: result.sent, attempted: result.attempted });
+  return t("notify.sent");
 }
 
 // Kişisel veriler ("personal") sadece o hesaba, aile verileri ("family:<id>")
@@ -206,7 +207,7 @@ function notifyResultMessage(result) {
 // belirtiliyor. Kimlik doğrulaması Firebase ID token'ıyla yapılıyor.
 export async function authedFetch(path, { method = "GET", body } = {}) {
   const user = auth.currentUser;
-  if (!user) throw new Error("Oturum bulunamadı.");
+  if (!user) throw new Error(translate("errors.sessionNotFound"));
   const token = await user.getIdToken();
   const res = await fetch(path, {
     method,
@@ -217,7 +218,7 @@ export async function authedFetch(path, { method = "GET", body } = {}) {
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "İstek başarısız oldu.");
+  if (!res.ok) throw new Error(data.error || translate("errors.requestFailed"));
   return data;
 }
 
@@ -338,7 +339,7 @@ async function extractRecipe({ link, caption, notes, images }) {
     }),
   });
 
-  if (!response.ok) throw new Error("API isteği başarısız oldu");
+  if (!response.ok) throw new Error(translate("errors.apiRequestFailed"));
   const data = await response.json();
   const text = (data.content || [])
     .map((b) => (b.type === "text" ? b.text : ""))
@@ -349,28 +350,28 @@ async function extractRecipe({ link, caption, notes, images }) {
   try {
     parsed = JSON.parse(clean);
   } catch (e) {
-    throw new Error("Tarif ayrıştırılamadı, lütfen açıklama metnini kontrol edip tekrar dene.");
+    throw new Error(translate("errors.parseFailed"));
   }
   return parsed;
 }
 
-function mapAuthError(code) {
+function mapAuthError(code, t) {
   switch (code) {
     case "auth/invalid-email":
-      return "E-posta adresi geçersiz görünüyor.";
+      return t("auth.errorInvalidEmail");
     case "auth/user-not-found":
     case "auth/wrong-password":
     case "auth/invalid-credential":
-      return "E-posta veya şifre hatalı.";
+      return t("auth.errorWrongCredentials");
     case "auth/email-already-in-use":
-      return "Bu e-posta ile zaten bir hesap var, giriş yapmayı dene.";
+      return t("auth.errorEmailInUse");
     case "auth/weak-password":
-      return "Şifre en az 6 karakter olmalı.";
+      return t("auth.errorWeakPassword");
     case "auth/popup-closed-by-user":
     case "auth/cancelled-popup-request":
       return "";
     default:
-      return "Bir şeyler ters gitti, tekrar dener misin?";
+      return t("common.genericError");
   }
 }
 
@@ -411,6 +412,7 @@ function useUpdateAvailable() {
 }
 
 function UpdateBanner({ onUpdate }) {
+  const { t } = useLanguage();
   return (
     <div
       style={{
@@ -427,7 +429,7 @@ function UpdateBanner({ onUpdate }) {
         flexWrap: "wrap",
       }}
     >
-      <span>Yeni bir güncelleme mevcut.</span>
+      <span>{t("update.available")}</span>
       <button
         onClick={onUpdate}
         style={{
@@ -445,13 +447,14 @@ function UpdateBanner({ onUpdate }) {
         }}
       >
         <Download size={14} />
-        Şimdi Güncelle
+        {t("update.button")}
       </button>
     </div>
   );
 }
 
 export default function TarifKutusu() {
+  const { t, categoryLabel } = useLanguage();
   const [loaded, setLoaded] = useState(false);
   const [view, setView] = useState("list");
   const [activeId, setActiveId] = useState(null);
@@ -516,6 +519,12 @@ export default function TarifKutusu() {
   // ekstra re-render/senkronizasyon olmadan anlık okunabiliyor).
   const pantryModalOpenRef = React.useRef(false);
   const pantryModalCloseRef = React.useRef(() => {});
+
+  // Ayarlar içindeki "Dil Seç" modalı açıkken Header ←/Android backButton önce
+  // SADECE bu modalı kapatsın, Ayarlar'ı kapatmasın - pantryModalOpenRef ile
+  // birebir aynı desen (bkz. yukarıdaki yorum).
+  const languageModalOpenRef = React.useRef(false);
+  const languageModalCloseRef = React.useRef(() => {});
 
   // Herhangi bir "tam ekran" view'dan geri dönüşün ortak yolu: Header'daki ←
   // butonu ve Android backButton'ı ikisi de bunu çağırıyor. FULLSCREEN_VIEWS
@@ -814,7 +823,9 @@ export default function TarifKutusu() {
     if (!isAndroidNative) return;
     let listenerHandle;
     CapacitorApp.addListener("backButton", () => {
-      if (modalView) {
+      if (languageModalOpenRef.current) {
+        languageModalCloseRef.current();
+      } else if (modalView) {
         closeModal();
       } else if (menuOpen) {
         setMenuOpen(false);
@@ -1001,15 +1012,15 @@ export default function TarifKutusu() {
   const handleExtract = async () => {
     setError("");
     if (!caption.trim() && !notes.trim() && images.length === 0) {
-      setError("Açıklamayı yapıştıramıyorsan sorun değil — en azından bir ekran görüntüsü yükle ya da birkaç kelime not yaz.");
+      setError(t("errors.needDescriptionOrImage"));
       return;
     }
     if (!category) {
-      setError("Yemeğin hangi kategoriye ait olduğunu seçmen lazım.");
+      setError(t("errors.needCategory"));
       return;
     }
     if (saveTargets.includes(PERSONAL) && !isPlus && (recipeBuckets[PERSONAL] || []).length >= FREE_RECIPE_LIMIT) {
-      setError(`Ücretsiz hesaplarda en fazla ${FREE_RECIPE_LIMIT} kişisel tarif olabilir. Sınırsız eklemek için Plus'a geç.`);
+      setError(t("errors.freeLimit", { limit: FREE_RECIPE_LIMIT }));
       return;
     }
     setBusy(true);
@@ -1033,7 +1044,7 @@ export default function TarifKutusu() {
       setActiveId(recipe.id);
       setView("detail");
     } catch (e) {
-      setError(e.message || "Bir şeyler ters gitti, tekrar dener misin?");
+      setError(e.message || t("common.genericError"));
     } finally {
       setBusy(false);
     }
@@ -1104,13 +1115,13 @@ export default function TarifKutusu() {
   // taraf (PantryFinder) view/activeId'ye dokunmuyor.
   const handleSavePantrySuggestion = async (suggestion, category) => {
     if (!isPlus && (recipeBuckets[PERSONAL] || []).length >= FREE_RECIPE_LIMIT) {
-      throw new Error(`Ücretsiz hesaplarda en fazla ${FREE_RECIPE_LIMIT} kişisel tarif olabilir. Sınırsız eklemek için Plus'a geç.`);
+      throw new Error(t("errors.freeLimit", { limit: FREE_RECIPE_LIMIT }));
     }
     const n = suggestion.nutrition || {};
     const recipe = {
       id: uid(),
       createdAt: Date.now(),
-      title: suggestion.title || "İsimsiz tarif",
+      title: suggestion.title || t("common.untitledRecipe"),
       category: category || DEFAULT_PANTRY_CATEGORY,
       link: "",
       ingredients: (suggestion.ingredients || []).map((i) => ({ name: i.name || "", amount: i.amount || "" })),
@@ -1332,7 +1343,7 @@ export default function TarifKutusu() {
           {view === "manual" && (
             <div className={screenTransitionClass}>
               <RecipeEditor
-                heading="Yeni Tarif Oluştur"
+                heading={t("editor.headingNew")}
                 initial={manualPrefill}
                 isNew
                 saveTargets={saveTargets}
@@ -1351,7 +1362,7 @@ export default function TarifKutusu() {
 
           {view === "edit" && active && (
             <RecipeEditor
-              heading="Tarifi Düzenle"
+              heading={t("editor.headingEdit")}
               initial={active}
               isPlus={isPlus}
               families={families}
@@ -1422,7 +1433,7 @@ export default function TarifKutusu() {
       </div>
 
       {modalView === "families" && (
-        <ModalSheet title="Aileler" onClose={closeModal} closing={modalClosing}>
+        <ModalSheet title={t("menu.families")} onClose={closeModal} closing={modalClosing}>
           <FamiliesView
             isPlus={isPlus}
             families={families}
@@ -1436,7 +1447,7 @@ export default function TarifKutusu() {
       )}
 
       {modalView === "plus" && (
-        <ModalSheet title="Plus" onClose={closeModal} closing={modalClosing}>
+        <ModalSheet title={t("menu.plus")} onClose={closeModal} closing={modalClosing}>
           <PlusView
             isPlus={isPlus}
             onToggle={async (next) => {
@@ -1448,7 +1459,7 @@ export default function TarifKutusu() {
       )}
 
       {modalView === "account" && (
-        <ModalSheet title="Hesabım" onClose={closeModal} closing={modalClosing}>
+        <ModalSheet title={t("menu.account")} onClose={closeModal} closing={modalClosing}>
           <AccountView
             authUser={authUser}
             personName={personName}
@@ -1459,8 +1470,15 @@ export default function TarifKutusu() {
       )}
 
       {modalView === "settings" && (
-        <ModalSheet title="Ayarlar" onClose={closeModal} closing={modalClosing}>
-          <SettingsView personName={personName} nameDraft={nameDraft} setNameDraft={setNameDraft} onSaveName={handleSaveName} />
+        <ModalSheet title={t("menu.settings")} onClose={closeModal} closing={modalClosing}>
+          <SettingsView
+            personName={personName}
+            nameDraft={nameDraft}
+            setNameDraft={setNameDraft}
+            onSaveName={handleSaveName}
+            languageModalOpenRef={languageModalOpenRef}
+            languageModalCloseRef={languageModalCloseRef}
+          />
         </ModalSheet>
       )}
 
@@ -1489,11 +1507,10 @@ export default function TarifKutusu() {
             }}
           >
             <h2 style={{ fontFamily: SERIF, fontSize: "20px", color: COLORS.ink, margin: "0 0 8px" }}>
-              Merhaba!
+              {t("welcome.title")}
             </h2>
             <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: "0 0 20px" }}>
-              Ailenle paylaştığın bu Tarif Kutusu'nda eklediğin tarifler senin isminle görünsün.
-              Bu, sadece bu cihazda bir kere sorulur.
+              {t("welcome.body")}
             </p>
             <input
               type="text"
@@ -1502,7 +1519,7 @@ export default function TarifKutusu() {
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleSaveName();
               }}
-              placeholder="Adın"
+              placeholder={t("welcome.placeholder")}
               autoFocus
               style={{
                 width: "100%",
@@ -1534,7 +1551,7 @@ export default function TarifKutusu() {
                 opacity: nameDraft.trim() ? 1 : 0.5,
               }}
             >
-              Devam Et
+              {t("welcome.continue")}
             </button>
           </div>
         </div>
@@ -1559,7 +1576,7 @@ export default function TarifKutusu() {
             fontSize: "14px",
           }}
         >
-          <span>"{undoState.title || "İsimsiz tarif"}" silindi.</span>
+          <span>{t("undo.deleted", { title: undoState.title || t("common.untitledRecipe") })}</span>
           <button
             onClick={handleUndoDelete}
             style={{
@@ -1577,11 +1594,11 @@ export default function TarifKutusu() {
             }}
           >
             <Undo2 size={14} />
-            Geri Al
+            {t("undo.button")}
           </button>
           <button
             onClick={() => setUndoState(null)}
-            aria-label="Kapat"
+            aria-label={t("common.close")}
             style={{ background: "transparent", border: "none", color: "#C9C2AE", cursor: "pointer", padding: "4px" }}
           >
             <X size={14} />
@@ -1593,6 +1610,7 @@ export default function TarifKutusu() {
 }
 
 function Header({ view, onBack, authUser, onSignOut, onOpenMenu }) {
+  const { t } = useLanguage();
   return (
     <header style={{ width: "100%", background: COLORS.forest, position: "relative" }}>
       <div
@@ -1609,8 +1627,8 @@ function Header({ view, onBack, authUser, onSignOut, onOpenMenu }) {
           {authUser && !authUser.isAnonymous && (
             <button
               onClick={onSignOut}
-              aria-label="Çıkış yap"
-              title={authUser.email ? `${authUser.email} · Çıkış yap` : "Çıkış yap"}
+              aria-label={t("header.signOut")}
+              title={authUser.email ? `${authUser.email} · ${t("header.signOut")}` : t("header.signOut")}
               style={{
                 position: "absolute",
                 top: "16px",
@@ -1633,7 +1651,7 @@ function Header({ view, onBack, authUser, onSignOut, onOpenMenu }) {
           {view !== "list" ? (
             <button
               onClick={onBack}
-              aria-label="Listeye dön"
+              aria-label={t("header.backToList")}
               style={{
                 padding: "8px",
                 borderRadius: "9999px",
@@ -1647,7 +1665,7 @@ function Header({ view, onBack, authUser, onSignOut, onOpenMenu }) {
           ) : (
             <button
               onClick={onOpenMenu}
-              aria-label="Menüyü aç"
+              aria-label={t("header.openMenu")}
               style={{ padding: "9px", borderRadius: "9999px", background: COLORS.mustard, border: "none", cursor: "pointer", display: "flex" }}
             >
               <ChefHat size={17} color={COLORS.forestDark} />
@@ -1677,7 +1695,7 @@ function Header({ view, onBack, authUser, onSignOut, onOpenMenu }) {
                 letterSpacing: "0.01em",
               }}
             >
-              Videoyu kaydetme, tarifini çıkar
+              {t("header.tagline")}
             </p>
           </div>
         </div>
@@ -1688,12 +1706,13 @@ function Header({ view, onBack, authUser, onSignOut, onOpenMenu }) {
 }
 
 function SideMenu({ open, onClose, isPlus, onNavigate }) {
+  const { t } = useLanguage();
   const items = [
-    { key: "account", label: "Hesabım", icon: UserCircle },
-    { key: "favorites", label: "Favoriler", icon: Star },
-    { key: "families", label: "Aileler", icon: Users },
-    { key: "plus", label: "Plus", icon: Crown },
-    { key: "settings", label: "Ayarlar", icon: Settings },
+    { key: "account", label: t("menu.account"), icon: UserCircle },
+    { key: "favorites", label: t("menu.favorites"), icon: Star },
+    { key: "families", label: t("menu.families"), icon: Users },
+    { key: "plus", label: t("menu.plus"), icon: Crown },
+    { key: "settings", label: t("menu.settings"), icon: Settings },
   ];
 
   return (
@@ -1787,6 +1806,7 @@ function SideMenu({ open, onClose, isPlus, onNavigate }) {
 }
 
 function ModalSheet({ title, onClose, closing, children }) {
+  const { t } = useLanguage();
   // Blur/overlay/kart boyutu/renkler hiç değişmedi — tek eklenen şey, panelin
   // FULLSCREEN_VIEWS ekranlarıyla (detay/add/shopping/...) AYNI ortak
   // detail-screen-enter/-exit animasyon sınıfları. `closing` true olduğu sürece
@@ -1839,7 +1859,7 @@ function ModalSheet({ title, onClose, closing, children }) {
             <h2 style={{ fontFamily: SERIF, fontSize: "19px", color: "#F8F5EC", margin: 0 }}>{title}</h2>
             <button
               onClick={onClose}
-              aria-label="Kapat"
+              aria-label={t("common.close")}
               style={{ background: "rgba(243,239,230,0.12)", border: "none", borderRadius: "9999px", cursor: "pointer", color: "#F3EFE6", padding: "6px", display: "flex" }}
             >
               <X size={18} />
@@ -1854,6 +1874,7 @@ function ModalSheet({ title, onClose, closing, children }) {
 }
 
 function AuthGate({ onGuest }) {
+  const { t } = useLanguage();
   const [mode, setMode] = useState("login"); // "login" | "signup"
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -1879,7 +1900,7 @@ function AuthGate({ onGuest }) {
     try {
       await googleSignIn();
     } catch (e) {
-      setError(e.code ? mapAuthError(e.code) : e.message);
+      setError(e.code ? mapAuthError(e.code, t) : e.message);
     } finally {
       setBusy(false);
     }
@@ -1891,7 +1912,7 @@ function AuthGate({ onGuest }) {
     try {
       await onGuest();
     } catch (e) {
-      setError("Misafir girişi başarısız oldu, tekrar dener misin?");
+      setError(t("auth.errorGuestFailed"));
     } finally {
       setBusy(false);
     }
@@ -1901,7 +1922,7 @@ function AuthGate({ onGuest }) {
     e.preventDefault();
     setError("");
     if (!email.trim() || !password) {
-      setError("E-posta ve şifreni gir.");
+      setError(t("auth.errorEmailRequired"));
       return;
     }
     setBusy(true);
@@ -1912,7 +1933,7 @@ function AuthGate({ onGuest }) {
         await signInWithEmailAndPassword(auth, email.trim(), password);
       }
     } catch (e) {
-      setError(mapAuthError(e.code));
+      setError(mapAuthError(e.code, t));
     } finally {
       setBusy(false);
     }
@@ -1960,7 +1981,7 @@ function AuthGate({ onGuest }) {
           Tarif Kutusu
         </h1>
         <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: "0 0 22px" }}>
-          {mode === "login" ? "Hesabınla giriş yap." : "Google ile ya da e-postayla hemen bir hesap aç."}
+          {mode === "login" ? t("auth.subtitleLogin") : t("auth.subtitleSignup")}
         </p>
 
         {mode === "signup" && (
@@ -1993,11 +2014,11 @@ function AuthGate({ onGuest }) {
                 <path fill="#4CAF50" d="M24 44c5.5 0 10.4-1.9 14.3-5.1l-6.6-5.4C29.6 35.4 26.9 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.6 5.1C9.4 39.6 16.1 44 24 44z"/>
                 <path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.2 4.2-4 5.5l6.6 5.4C41.5 36 44 30.5 44 24c0-1.3-.1-2.7-.4-3.5z"/>
               </svg>
-              Google ile Kaydol
+              {t("auth.googleSignup")}
             </button>
             <div style={{ display: "flex", alignItems: "center", gap: "10px", margin: "0 0 14px" }}>
               <div style={{ flex: 1, height: "1px", background: COLORS.line }} />
-              <span style={{ fontSize: "11px", color: COLORS.inkSoft }}>veya e-postayla</span>
+              <span style={{ fontSize: "11px", color: COLORS.inkSoft }}>{t("auth.orEmail")}</span>
               <div style={{ flex: 1, height: "1px", background: COLORS.line }} />
             </div>
           </>
@@ -2008,7 +2029,7 @@ function AuthGate({ onGuest }) {
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="E-posta"
+            placeholder={t("auth.emailPlaceholder")}
             autoComplete="email"
             style={inputStyle}
           />
@@ -2016,7 +2037,7 @@ function AuthGate({ onGuest }) {
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="Şifre"
+            placeholder={t("auth.passwordPlaceholder")}
             autoComplete={mode === "signup" ? "new-password" : "current-password"}
             style={inputStyle}
           />
@@ -2062,7 +2083,7 @@ function AuthGate({ onGuest }) {
             }}
           >
             {busy ? <Loader2 size={16} className="spin" /> : <Mail size={15} />}
-            {mode === "signup" ? "E-posta ile Kaydol" : "Giriş Yap"}
+            {mode === "signup" ? t("auth.emailSignup") : t("auth.login")}
           </button>
         </form>
 
@@ -2083,7 +2104,7 @@ function AuthGate({ onGuest }) {
             textDecoration: "underline",
           }}
         >
-          {mode === "login" ? "Hesabın yok mu? Kaydol" : "Zaten hesabın var mı? Giriş yap"}
+          {mode === "login" ? t("auth.switchToSignup") : t("auth.switchToLogin")}
         </button>
 
         <div style={{ height: "1px", background: COLORS.line, margin: "20px 0 14px" }} />
@@ -2105,7 +2126,7 @@ function AuthGate({ onGuest }) {
             opacity: busy ? 0.6 : 1,
           }}
         >
-          Misafir Olarak Gir
+          {t("auth.guest")}
         </button>
       </div>
       <style>{`.spin { animation: spin 1s linear infinite; } @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
@@ -2115,12 +2136,13 @@ function AuthGate({ onGuest }) {
 
 // Bir tarif hem kişisel hem bir ya da iki ailede kayıtlı olabilir — hepsini
 // okunabilir isimlere çeviriyor (örn. ["Kişisel", "Yılmazlar"]).
-function scopeLabels(recipe, familyNameById) {
+function scopeLabels(recipe, familyNameById, t) {
   const scopes = recipe._scopes || [recipe._scope];
-  return scopes.map((s) => (s === PERSONAL ? "Kişisel" : familyNameById?.[s] || "Aile"));
+  return scopes.map((s) => (s === PERSONAL ? t("common.personal") : familyNameById?.[s] || t("families.fallbackName")));
 }
 
 function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, onAdd, onManual, onPantry, onShopping, onToggleFavorite, onDelete, onSendNotification }) {
+  const { t, language, categoryLabel } = useLanguage();
   const [listOpen, setListOpen] = useState(true);
   const [openCats, setOpenCats] = useState({});
   const [favOpen, setFavOpen] = useState(false);
@@ -2150,13 +2172,13 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
     try {
       const result = await onSendNotification(r);
       const status = result && result.sent > 0 ? "done" : "empty";
-      setQuickNotify({ id: r.id, status, message: notifyResultMessage(result) });
+      setQuickNotify({ id: r.id, status, message: notifyResultMessage(result, t) });
       setTimeout(() => {
         setQuickNotify({ id: null, status: "idle", message: "" });
         setLongPressId(null);
       }, 3000);
     } catch (e) {
-      setQuickNotify({ id: r.id, status: "error", message: e.message || "Bildirim gönderilemedi" });
+      setQuickNotify({ id: r.id, status: "error", message: e.message || t("errors.notifyFailed") });
       setTimeout(() => setQuickNotify({ id: null, status: "idle", message: "" }), 3000);
     }
   };
@@ -2215,15 +2237,15 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
             }}
           >
             <div style={{ fontSize: "13px", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {r.title || "İsimsiz tarif"}
+              {r.title || t("common.untitledRecipe")}
             </div>
             <div style={{ fontSize: "11px", marginTop: "2px", color: isActive ? "#C9C2AE" : COLORS.inkSoft }}>
               {(() => {
-                const labels = scopeLabels(r, familyNameById).filter((l) => l !== "Kişisel");
+                const labels = scopeLabels(r, familyNameById, t).filter((l) => l !== t("common.personal"));
                 return labels.length > 0 ? `${labels.join(" + ")} · ` : "";
               })()}
               {r.addedBy ? `${r.addedBy} · ` : ""}
-              {new Date(r.createdAt).toLocaleDateString("tr-TR")}
+              {new Date(r.createdAt).toLocaleDateString(language === "en" ? "en-US" : "tr-TR")}
             </div>
           </button>
           <button
@@ -2231,7 +2253,7 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
               e.stopPropagation();
               onToggleFavorite(r.id);
             }}
-            aria-label="Favori"
+            aria-label={t("sidebar.favorite")}
             style={{ padding: "8px", background: "transparent", border: "none", cursor: "pointer", flexShrink: 0 }}
           >
             <Star
@@ -2245,7 +2267,7 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
               e.stopPropagation();
               onDelete(r.id);
             }}
-            aria-label="Tarifi sil"
+            aria-label={t("sidebar.deleteRecipe")}
             style={{ padding: "8px", background: "transparent", border: "none", cursor: "pointer", flexShrink: 0 }}
           >
             <Trash2 size={14} color={isActive ? "#C9C2AE" : COLORS.inkSoft} />
@@ -2293,12 +2315,12 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
                     <Bell size={15} />
                   )}
                   {notifyStatus === "idle" || notifyStatus === "sending"
-                    ? "Canımın çektiğini bildir"
+                    ? t("sidebar.notifyFamily")
                     : quickNotify.message}
                 </button>
                 <button
                   onClick={() => setLongPressId(null)}
-                  aria-label="Kapat"
+                  aria-label={t("common.close")}
                   style={{ marginLeft: "auto", padding: "6px", background: "transparent", border: "none", color: COLORS.inkSoft, cursor: "pointer" }}
                 >
                   <X size={13} />
@@ -2330,13 +2352,13 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Tarif ara…"
+          placeholder={t("sidebar.searchPlaceholder")}
           style={{ flex: 1, minWidth: 0, background: "transparent", border: "none", outline: "none", fontSize: "13px", color: COLORS.ink }}
         />
         {query && (
           <button
             onClick={() => setQuery("")}
-            aria-label="Aramayı temizle"
+            aria-label={t("sidebar.clearSearch")}
             style={{ background: "transparent", border: "none", cursor: "pointer", color: COLORS.inkSoft, padding: "2px" }}
           >
             <X size={13} />
@@ -2366,7 +2388,7 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
               color: COLORS.ink,
             }}
           >
-            Yemekler{" "}
+            {t("sidebar.mealsTitle")}{" "}
             {isPlus ? (
               recipes.length > 0 ? <span style={{ color: COLORS.inkSoft, fontSize: "15px" }}>({recipes.length})</span> : ""
             ) : (
@@ -2394,7 +2416,7 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
 
         <div style={{ display: "grid", gridTemplateRows: listExpanded ? "1fr" : "0fr", transition: "grid-template-rows 300ms ease" }}>
           <div style={{ overflow: "hidden" }}>
-            {!loaded && <div style={{ fontSize: "14px", color: COLORS.inkSoft, padding: "0 4px 8px" }}>Yükleniyor…</div>}
+            {!loaded && <div style={{ fontSize: "14px", color: COLORS.inkSoft, padding: "0 4px 8px" }}>{t("common.loading")}</div>}
 
             {loaded && recipes.length === 0 && (
               <div
@@ -2407,7 +2429,7 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
                   marginBottom: "2px",
                 }}
               >
-                Henüz tarif yok. İlk tarifini eklemek için yukarıdaki butona bas.
+                {t("sidebar.emptyList")}
               </div>
             )}
 
@@ -2432,7 +2454,7 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
                     >
                       <span style={{ fontSize: "13px", fontWeight: 600, color: COLORS.ink, display: "flex", alignItems: "center", gap: "6px" }}>
                         <Star size={13} color={COLORS.mustard} fill={COLORS.mustard} />
-                        Favoriler <span style={{ fontWeight: 400, color: COLORS.inkSoft }}>({favorites.length})</span>
+                        {t("sidebar.favoritesSection")} <span style={{ fontWeight: 400, color: COLORS.inkSoft }}>({favorites.length})</span>
                       </span>
                       <ChevronDown
                         size={15}
@@ -2454,7 +2476,7 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
                       <div style={{ overflow: "hidden" }}>
                         <div style={{ display: "flex", flexDirection: "column", gap: "4px", padding: "0 6px 8px" }}>
                           {favorites.length === 0 ? (
-                            <div style={{ fontSize: "12px", color: COLORS.inkSoft, padding: "0 6px 8px" }}>Sonuç yok.</div>
+                            <div style={{ fontSize: "12px", color: COLORS.inkSoft, padding: "0 6px 8px" }}>{t("common.noResults")}</div>
                           ) : (
                             favorites.map(renderRecipeButton)
                           )}
@@ -2486,7 +2508,7 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
                         }}
                       >
                         <span style={{ fontSize: "13px", fontWeight: 600, color: COLORS.ink }}>
-                          {cat} <span style={{ fontWeight: 400, color: COLORS.inkSoft }}>({items.length})</span>
+                          {categoryLabel(cat)} <span style={{ fontWeight: 400, color: COLORS.inkSoft }}>({items.length})</span>
                         </span>
                         <ChevronDown
                           size={15}
@@ -2503,7 +2525,7 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
                         <div style={{ overflow: "hidden" }}>
                           {items.length === 0 ? (
                             <div style={{ fontSize: "12px", color: COLORS.inkSoft, padding: "0 12px 10px" }}>
-                              {isSearching ? "Sonuç yok." : "Bu kategoride henüz tarif yok."}
+                              {isSearching ? t("common.noResults") : t("sidebar.categoryEmpty")}
                             </div>
                           ) : (
                             <div style={{ display: "flex", flexDirection: "column", gap: "4px", padding: "0 6px 8px" }}>
@@ -2534,7 +2556,7 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
                       }}
                     >
                       <span style={{ fontSize: "13px", fontWeight: 600, color: COLORS.danger }}>
-                        Diğer (kategorisiz) <span style={{ fontWeight: 400, color: COLORS.inkSoft }}>({uncategorized.length})</span>
+                        {t("sidebar.otherCategory")} <span style={{ fontWeight: 400, color: COLORS.inkSoft }}>({uncategorized.length})</span>
                       </span>
                       <ChevronDown
                         size={15}
@@ -2555,7 +2577,7 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
                     >
                       <div style={{ overflow: "hidden" }}>
                         <div style={{ fontSize: "11px", color: COLORS.inkSoft, padding: "0 12px 6px" }}>
-                          Kategori seçiminden önce eklendiler — açıp kategori atayabilirsin.
+                          {t("sidebar.otherCategoryHint")}
                         </div>
                         <div style={{ display: "flex", flexDirection: "column", gap: "4px", padding: "0 6px 8px" }}>
                           {uncategorized.map(renderRecipeButton)}
@@ -2591,7 +2613,7 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
         }}
       >
         <Plus size={16} strokeWidth={2.5} />
-        Yeni Tarif Çıkar
+        {t("sidebar.addRecipe")}
       </button>
 
       <button
@@ -2614,7 +2636,7 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
         }}
       >
         <Pencil size={15} />
-        Tarifi Kendin Oluştur
+        {t("sidebar.createManually")}
       </button>
 
       <button
@@ -2637,7 +2659,7 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
         }}
       >
         <ShoppingCart size={16} />
-        Alışveriş Listesi
+        {t("sidebar.shoppingList")}
       </button>
 
       <button
@@ -2660,7 +2682,7 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
         }}
       >
         <Package size={16} />
-        Elimde Bunlar Var
+        {t("sidebar.pantry")}
       </button>
 
     </aside>
@@ -2668,6 +2690,7 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
 }
 
 function EmptyState({ onAdd }) {
+  const { t } = useLanguage();
   return (
     <div
       style={{
@@ -2685,10 +2708,9 @@ function EmptyState({ onAdd }) {
       <div style={{ padding: "12px", borderRadius: "9999px", background: "#EAE3D2", marginBottom: "16px" }}>
         <FileText size={22} color={COLORS.forest} />
       </div>
-      <h2 style={{ fontFamily: SERIF, fontSize: "18px", color: COLORS.ink, margin: "0 0 4px" }}>Kutun henüz boş</h2>
+      <h2 style={{ fontFamily: SERIF, fontSize: "18px", color: COLORS.ink, margin: "0 0 4px" }}>{t("empty.title")}</h2>
       <p style={{ fontSize: "14px", color: COLORS.inkSoft, maxWidth: "360px", margin: "0 0 20px" }}>
-        Beğendiğin bir tarif videosunun linkini ve açıklama metnini yapıştır, malzemeleri ve besin
-        değerlerini senin yerine ben çıkarayım.
+        {t("empty.body")}
       </p>
       <button
         onClick={onAdd}
@@ -2707,15 +2729,16 @@ function EmptyState({ onAdd }) {
         }}
       >
         <Plus size={16} strokeWidth={2.5} />
-        Tarif Ekle
+        {t("empty.button")}
       </button>
     </div>
   );
 }
 
 function SaveTargetPicker({ saveTargets, setSaveTargets, isPlus, families }) {
+  const { t } = useLanguage();
   const options = [
-    { key: PERSONAL, label: "Kişisel Tariflerim" },
+    { key: PERSONAL, label: t("saveTarget.personal") },
     ...(isPlus ? families.map((f) => ({ key: f.id, label: f.name })) : []),
   ];
 
@@ -2742,7 +2765,7 @@ function SaveTargetPicker({ saveTargets, setSaveTargets, isPlus, families }) {
           marginBottom: "6px",
         }}
       >
-        Kaydetme yeri {options.length > 1 && <span style={{ textTransform: "none", fontWeight: 400 }}>(birden fazla seçebilirsin)</span>}
+        {t("saveTarget.label")} {options.length > 1 && <span style={{ textTransform: "none", fontWeight: 400 }}>{t("saveTarget.multiHint")}</span>}
       </label>
       <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "16px" }}>
         {options.map((opt) => {
@@ -2777,6 +2800,7 @@ function SaveTargetPicker({ saveTargets, setSaveTargets, isPlus, families }) {
 }
 
 function AddForm({ link, caption, notes, images, category, busy, error, setLink, setCaption, setNotes, setImages, setCategory, saveTargets, setSaveTargets, isPlus, families, onSubmit, onCancel }) {
+  const { t, categoryLabel } = useLanguage();
   const [fetchingCaption, setFetchingCaption] = useState(false);
   const [captionFetchError, setCaptionFetchError] = useState("");
   const fetchedForLinkRef = React.useRef("");
@@ -2794,10 +2818,10 @@ function AddForm({ link, caption, notes, images, category, busy, error, setLink,
       if (res.ok && data.caption) {
         setCaption((prev) => (prev && prev.trim() ? prev : data.caption));
       } else if (!res.ok) {
-        setCaptionFetchError("Açıklama otomatik alınamadı, elle yapıştırabilirsin.");
+        setCaptionFetchError(t("errors.captionFetchFailed"));
       }
     } catch (e) {
-      setCaptionFetchError("Açıklama otomatik alınamadı, elle yapıştırabilirsin.");
+      setCaptionFetchError(t("errors.captionFetchFailed"));
     } finally {
       setFetchingCaption(false);
     }
@@ -2849,14 +2873,12 @@ function AddForm({ link, caption, notes, images, category, busy, error, setLink,
 
   return (
     <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>
-      <h2 style={{ fontFamily: SERIF, fontSize: "18px", color: COLORS.ink, margin: "0 0 4px" }}>Yeni Tarif Çıkar</h2>
+      <h2 style={{ fontFamily: SERIF, fontSize: "18px", color: COLORS.ink, margin: "0 0 4px" }}>{t("addForm.title")}</h2>
       <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: "0 0 20px" }}>
-        En kolay yol: TikTok'ta gördüğün açıklama ya da malzeme yazısının <strong>ekran görüntüsünü</strong> al ve
-        aşağıya yükle — kopyala-yapıştır uğraşına gerek yok. İstersen açıklamayı yapıştırabilir ya da gördüklerini
-        birkaç kelimeyle not olarak yazabilirsin.
+        {t("addForm.introPart1")} <strong>{t("addForm.introStrong")}</strong> {t("addForm.introPart2")}
       </p>
 
-      <label style={labelStyle}>Video linki</label>
+      <label style={labelStyle}>{t("addForm.videoLink")}</label>
       <div
         style={{
           display: "flex",
@@ -2875,12 +2897,12 @@ function AddForm({ link, caption, notes, images, category, busy, error, setLink,
           value={link}
           onChange={(e) => setLink(e.target.value)}
           onBlur={(e) => tryAutoFetchCaption(e.target.value)}
-          placeholder="https://www.tiktok.com/... veya instagram.com/... veya youtube.com/..."
+          placeholder={t("addForm.linkPlaceholder")}
           style={{ flex: 1, background: "transparent", border: "none", outline: "none", fontSize: "14px", color: COLORS.ink }}
         />
       </div>
 
-      <label style={labelStyle}>Ekran görüntüsü (önerilen)</label>
+      <label style={labelStyle}>{t("addForm.screenshotLabel")}</label>
       <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", marginBottom: "16px" }}>
         {images.map((img) => (
           <div key={img.id} style={{ position: "relative", width: "72px", height: "72px", flexShrink: 0 }}>
@@ -2891,7 +2913,7 @@ function AddForm({ link, caption, notes, images, category, busy, error, setLink,
             />
             <button
               onClick={() => removeImage(img.id)}
-              aria-label="Görseli kaldır"
+              aria-label={t("addForm.removeImage")}
               style={{
                 position: "absolute",
                 top: "-6px",
@@ -2929,16 +2951,16 @@ function AddForm({ link, caption, notes, images, category, busy, error, setLink,
           }}
         >
           <Plus size={18} />
-          <span style={{ fontSize: "10px", fontWeight: 600 }}>Ekle</span>
+          <span style={{ fontSize: "10px", fontWeight: 600 }}>{t("addForm.addImage")}</span>
           <input type="file" accept="image/*" multiple onChange={handleImageSelect} style={{ display: "none" }} />
         </label>
       </div>
 
       <label style={labelStyle}>
-        Açıklama / altyazı metni (opsiyonel)
+        {t("addForm.captionLabel")}
         {fetchingCaption && (
           <span style={{ marginLeft: "8px", fontWeight: 400, textTransform: "none", color: COLORS.mustardDark }}>
-            Otomatik getiriliyor…
+            {t("addForm.autoFetching")}
           </span>
         )}
       </label>
@@ -2948,21 +2970,21 @@ function AddForm({ link, caption, notes, images, category, busy, error, setLink,
       <textarea
         value={caption}
         onChange={(e) => setCaption(e.target.value)}
-        placeholder="Videonun altındaki açıklamayı ya da altyazı metnini buraya yapıştır…"
+        placeholder={t("addForm.captionPlaceholder")}
         rows={4}
         style={{ ...inputStyle, marginBottom: "16px", resize: "vertical" }}
       />
 
-      <label style={labelStyle}>Gördüğün malzemeler (opsiyonel)</label>
+      <label style={labelStyle}>{t("addForm.notesLabel")}</label>
       <textarea
         value={notes}
         onChange={(e) => setNotes(e.target.value)}
-        placeholder="Örn. tavuklu, yumurtalı, galeta unlu kızartma…"
+        placeholder={t("addForm.notesPlaceholder")}
         rows={2}
         style={{ ...inputStyle, marginBottom: "16px", resize: "vertical" }}
       />
 
-      <label style={labelStyle}>Kategori</label>
+      <label style={labelStyle}>{t("addForm.categoryLabel")}</label>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "8px" }}>
         {CATEGORIES.map((cat) => {
@@ -2983,7 +3005,7 @@ function AddForm({ link, caption, notes, images, category, busy, error, setLink,
                 cursor: "pointer",
               }}
             >
-              {cat}
+              {categoryLabel(cat)}
             </button>
           );
         })}
@@ -3030,14 +3052,14 @@ function AddForm({ link, caption, notes, images, category, busy, error, setLink,
           }}
         >
           {busy ? <Loader2 size={16} className="spin" /> : <ChefHat size={16} />}
-          {busy ? "Çıkarılıyor…" : "Tarifi Çıkar"}
+          {busy ? t("addForm.extracting") : t("addForm.extract")}
         </button>
         <button
           onClick={onCancel}
           disabled={busy}
           style={{ padding: "10px 16px", borderRadius: "8px", fontSize: "14px", fontWeight: 500, background: "transparent", color: COLORS.inkSoft, border: "none", cursor: "pointer" }}
         >
-          Vazgeç
+          {t("common.cancel")}
         </button>
       </div>
       <style>{`.spin { animation: spin 1s linear infinite; } @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
@@ -3046,6 +3068,7 @@ function AddForm({ link, caption, notes, images, category, busy, error, setLink,
 }
 
 function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavorite, onChangeCategory, onEdit, onAddToShopping, onSendNotification, onStartCooking }) {
+  const { t, categoryLabel, difficultyLabel } = useLanguage();
   const { title, servings, category, prep_time_minutes, difficulty, ingredients = [], instructions = [], nutrition = {}, assumptions, link, isFavorite, addedBy } = recipe;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(title || "");
@@ -3059,11 +3082,11 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
     setNotifyState("sending");
     try {
       const result = await onSendNotification();
-      setNotifyMessage(notifyResultMessage(result));
+      setNotifyMessage(notifyResultMessage(result, t));
       setNotifyState(result && result.sent > 0 ? "done" : "empty");
       setTimeout(() => setNotifyState("idle"), 3500);
     } catch (e) {
-      setNotifyMessage(e.message || "Bildirim gönderilemedi");
+      setNotifyMessage(e.message || t("errors.notifyFailed"));
       setNotifyState("error");
       setTimeout(() => setNotifyState("idle"), 3500);
     }
@@ -3080,14 +3103,14 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
   };
 
   const hasValidCategory = CATEGORIES.includes(category);
-  const scopeLabel = scopeLabels(recipe, familyNameById).join(" + ");
+  const scopeLabel = scopeLabels(recipe, familyNameById, t).join(" + ");
 
   const metaParts = [
-    servings ? `${servings} porsiyon` : null,
-    hasValidCategory ? category : null,
-    prep_time_minutes ? `${prep_time_minutes} dk` : null,
-    difficulty || null,
-    addedBy ? `Ekleyen: ${addedBy}` : null,
+    servings ? t("detail.servings", { n: servings }) : null,
+    hasValidCategory ? categoryLabel(category) : null,
+    prep_time_minutes ? t("detail.prepTime", { n: prep_time_minutes }) : null,
+    difficulty ? difficultyLabel(difficulty) : null,
+    addedBy ? t("detail.addedBy", { name: addedBy }) : null,
     scopeLabel,
   ].filter(Boolean);
 
@@ -3110,7 +3133,7 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
                 flexWrap: "wrap",
               }}
             >
-              {metaParts.length > 0 ? metaParts.join(" · ") : "Tarif"}
+              {metaParts.length > 0 ? metaParts.join(" · ") : t("detail.fallbackTitle")}
             </div>
             {editing ? (
               <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
@@ -3140,7 +3163,7 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
                 />
                 <button
                   onClick={commit}
-                  aria-label="Adı kaydet"
+                  aria-label={t("detail.saveName")}
                   style={{ padding: "6px", borderRadius: "8px", background: COLORS.forest, border: "none", color: "#F3EFE6", cursor: "pointer", flexShrink: 0 }}
                 >
                   <Check size={16} />
@@ -3149,11 +3172,11 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
             ) : (
               <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                 <h2 style={{ fontFamily: SERIF, fontSize: "26px", color: COLORS.ink, margin: 0, lineHeight: 1.2 }}>
-                  {title || "İsimsiz tarif"}
+                  {title || t("common.untitledRecipe")}
                 </h2>
                 <button
                   onClick={() => setEditing(true)}
-                  aria-label="Adı düzenle"
+                  aria-label={t("detail.editName")}
                   style={{ padding: "6px", borderRadius: "8px", background: "transparent", border: "none", color: COLORS.inkSoft, cursor: "pointer", flexShrink: 0 }}
                 >
                   <Pencil size={15} />
@@ -3179,8 +3202,8 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
                 <button
                   onClick={handleNotifyClick}
                   disabled={notifyState === "sending"}
-                  aria-label="Bildirim gönder"
-                  title="Ailene bu yemeği canının çektiğini bildir"
+                  aria-label={t("detail.notifyButton")}
+                  title={t("detail.notifyTitle")}
                   style={{
                     padding: "8px",
                     borderRadius: "8px",
@@ -3204,14 +3227,14 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
             )}
             <button
               onClick={onToggleFavorite}
-              aria-label="Favori"
+              aria-label={t("sidebar.favorite")}
               style={{ padding: "8px", borderRadius: "8px", background: "transparent", border: "none", color: COLORS.mustard, cursor: "pointer" }}
             >
               <Star size={18} fill={isFavorite ? COLORS.mustard : "none"} />
             </button>
             <button
               onClick={onDelete}
-              aria-label="Tarifi sil"
+              aria-label={t("sidebar.deleteRecipe")}
               style={{ padding: "8px", borderRadius: "8px", background: "transparent", border: "none", color: COLORS.danger, cursor: "pointer" }}
             >
               <Trash2 size={17} />
@@ -3222,7 +3245,7 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
         {!hasValidCategory && (
           <div style={{ marginTop: "16px", padding: "12px", borderRadius: "8px", background: "#F5E4E0" }}>
             <div style={{ fontSize: "13px", color: COLORS.danger, marginBottom: "8px" }}>
-              Bu tarifin kategorisi yok, bu yüzden "Yemekler" listesinde ve aramada görünmüyordu. Bir kategori seç:
+              {t("detail.noCategoryWarning")}
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
               {CATEGORIES.map((cat) => (
@@ -3240,7 +3263,7 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
                     cursor: "pointer",
                   }}
                 >
-                  {cat}
+                  {categoryLabel(cat)}
                 </button>
               ))}
             </div>
@@ -3267,7 +3290,7 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
           }}
         >
           <ChefHat size={16} />
-          Pişirmeye Başla
+          {t("detail.startCooking")}
         </button>
 
         <button
@@ -3289,7 +3312,7 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
           }}
         >
           <Pencil size={14} />
-          Tarifi Düzenle (malzeme, yapılış, besin değerleri)
+          {t("detail.editRecipe")}
         </button>
 
         <button
@@ -3312,15 +3335,15 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
           }}
         >
           <ShoppingCart size={14} />
-          Alışveriş Listesine Ekle
+          {t("detail.addToShopping")}
         </button>
       </div>
 
       <div className="md-detail-row" style={{ display: "flex", flexDirection: "column", gap: "20px", alignItems: "flex-start" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: "20px", flex: 1, width: "100%", minWidth: 0 }}>
-          <ExpandableSection title="Malzemeler" badge={`${ingredients.length}`}>
+          <ExpandableSection title={t("detail.ingredients")} badge={`${ingredients.length}`}>
             {ingredients.length === 0 ? (
-              <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: 0 }}>Malzeme bulunamadı.</p>
+              <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: 0 }}>{t("detail.noIngredients")}</p>
             ) : (
               <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "8px" }}>
                 {ingredients.map((ing, i) => (
@@ -3333,10 +3356,10 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
             )}
           </ExpandableSection>
 
-          <ExpandableSection title="Yapılışı" badge={instructions.length ? `${instructions.length} adım` : null}>
+          <ExpandableSection title={t("detail.instructions")} badge={instructions.length ? t("detail.stepsCount", { n: instructions.length }) : null}>
             {instructions.length === 0 ? (
               <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: 0 }}>
-                Açıklama metninde yapılış adımları yoktu — aşağıdaki linkten videoyu izleyebilirsin.
+                {t("detail.noInstructions")}
               </p>
             ) : (
               <ol style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "12px" }}>
@@ -3386,7 +3409,7 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
               }}
             >
               <ExternalLink size={16} />
-              Videoyu Aç, Yapılışını İzle
+              {t("detail.watchVideo")}
             </a>
           )}
         </div>
@@ -3461,7 +3484,8 @@ function mergeIngredients(chosenRecipes) {
 }
 
 function ContextTabs({ context, setContext, isPlus, families }) {
-  const contexts = [{ key: PERSONAL, label: "Kişisel" }, ...(isPlus ? families.map((f) => ({ key: f.id, label: f.name })) : [])];
+  const { t } = useLanguage();
+  const contexts = [{ key: PERSONAL, label: t("common.personal") }, ...(isPlus ? families.map((f) => ({ key: f.id, label: f.name })) : [])];
   if (contexts.length <= 1) return null;
   return (
     <div style={{ display: "flex", gap: "6px", marginBottom: "16px", flexWrap: "wrap" }}>
@@ -3491,6 +3515,7 @@ function ContextTabs({ context, setContext, isPlus, families }) {
 }
 
 function ShoppingList({ recipes, isPlus, families, initialContext }) {
+  const { t } = useLanguage();
   const [context, setContext] = useState(initialContext || PERSONAL);
   const [selected, setSelected] = useState([]);
   const [checked, setChecked] = useState({});
@@ -3555,18 +3580,18 @@ function ShoppingList({ recipes, isPlus, families, initialContext }) {
       <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>
         <h2 style={{ fontFamily: SERIF, fontSize: "20px", color: COLORS.ink, margin: "0 0 4px", display: "flex", alignItems: "center", gap: "8px" }}>
           <ShoppingCart size={19} color={COLORS.forest} />
-          Alışveriş Listesi
+          {t("shopping.title")}
         </h2>
         <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: "0 0 16px" }}>
-          Listeye eklemek istediğin tarifleri seç, malzemelerini tek bir listede birleştireyim.
+          {t("shopping.intro")}
         </p>
 
         <ContextTabs context={context} setContext={setContext} isPlus={isPlus} families={families} />
 
         {!loaded ? (
-          <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: 0 }}>Yükleniyor…</p>
+          <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: 0 }}>{t("common.loading")}</p>
         ) : contextRecipes.length === 0 ? (
-          <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: 0 }}>Bu listede henüz kayıtlı tarif yok.</p>
+          <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: 0 }}>{t("shopping.emptyContext")}</p>
         ) : (
           <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
             {contextRecipes.map((r) => {
@@ -3590,7 +3615,7 @@ function ShoppingList({ recipes, isPlus, families, initialContext }) {
                   }}
                 >
                   {isSel && <Check size={13} />}
-                  {r.title || "İsimsiz tarif"}
+                  {r.title || t("common.untitledRecipe")}
                 </button>
               );
             })}
@@ -3602,16 +3627,16 @@ function ShoppingList({ recipes, isPlus, families, initialContext }) {
         <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
             <h3 style={{ fontFamily: SERIF, fontSize: "17px", color: COLORS.ink, margin: 0 }}>
-              Malzemeler{" "}
+              {t("shopping.ingredientsTitle")}{" "}
               <span style={{ fontFamily: BODY, fontSize: "13px", fontWeight: 400, color: COLORS.inkSoft }}>
-                ({checkedCount}/{mergedIngredients.length} alındı)
+                {t("shopping.pickedCount", { checked: checkedCount, total: mergedIngredients.length })}
               </span>
             </h3>
             <button
               onClick={clearChecked}
               style={{ fontSize: "12px", color: COLORS.inkSoft, background: "transparent", border: "none", cursor: "pointer", textDecoration: "underline" }}
             >
-              İşaretleri temizle
+              {t("shopping.clearChecks")}
             </button>
           </div>
 
@@ -3698,6 +3723,7 @@ function ExpandableSection({ title, badge, defaultOpen = false, children }) {
 // — burada tekrar yazılmadı). Buradaki "stage" (malzemeler → adım N → tamamlandı)
 // tamamen bu component'e özel, yerel bir state; App'in `view`'ıyla ilgisi yok.
 function CookMode({ recipe, onFinish }) {
+  const { t } = useLanguage();
   const ingredients = recipe.ingredients || [];
   const steps = useMemo(() => (recipe.instructions || []).filter((s) => typeof s === "string" && s.trim()), [recipe.instructions]);
   const [stage, setStage] = useState("ingredients"); // "ingredients" | 0..steps.length-1 | "done"
@@ -3783,7 +3809,7 @@ function CookMode({ recipe, onFinish }) {
       {stage !== "done" && (
         <div style={{ marginBottom: "24px" }}>
           <div style={{ fontSize: "13px", fontWeight: 700, color: COLORS.mustardDark, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "10px" }}>
-            {stage === "ingredients" ? "Hazırlanmadan Önce" : totalSteps > 0 ? `Adım ${stepIndex + 1} / ${totalSteps}` : "Yapılış"}
+            {stage === "ingredients" ? t("cook.beforeStart") : totalSteps > 0 ? t("cook.stepCounter", { current: stepIndex + 1, total: totalSteps }) : t("cook.instructionsFallback")}
           </div>
           {stepIndex !== null && totalSteps > 0 && (
             <div style={{ height: "6px", borderRadius: "9999px", background: COLORS.line, overflow: "hidden" }}>
@@ -3804,9 +3830,9 @@ function CookMode({ recipe, onFinish }) {
       <div key={String(stage)} className={stage === "done" ? "cook-done-enter" : "cook-stage-enter"} style={{ flex: 1 }}>
         {stage === "ingredients" && (
           <div>
-            <h2 style={{ fontFamily: SERIF, fontSize: "22px", color: COLORS.ink, margin: "0 0 18px" }}>{recipe.title || "Tarif"}</h2>
+            <h2 style={{ fontFamily: SERIF, fontSize: "22px", color: COLORS.ink, margin: "0 0 18px" }}>{recipe.title || t("common.recipeWord")}</h2>
             {ingredients.length === 0 ? (
-              <p style={{ fontSize: "16px", color: COLORS.inkSoft }}>Malzeme bulunamadı.</p>
+              <p style={{ fontSize: "16px", color: COLORS.inkSoft }}>{t("detail.noIngredients")}</p>
             ) : (
               <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "12px" }}>
                 {ingredients.map((ing, i) => (
@@ -3851,9 +3877,9 @@ function CookMode({ recipe, onFinish }) {
             >
               <Check size={30} color="#F3EFE6" />
             </div>
-            <h2 style={{ fontFamily: SERIF, fontSize: "24px", color: COLORS.ink, margin: "0 0 8px" }}>Tebrikler!</h2>
-            <p style={{ fontSize: "15px", color: COLORS.inkSoft, margin: "0 0 18px" }}>Yemeğiniz hazır. Afiyet olsun! 🍽️</p>
-            <p style={{ fontFamily: SERIF, fontSize: "17px", color: COLORS.ink, margin: 0 }}>{recipe.title || "Tarif"}</p>
+            <h2 style={{ fontFamily: SERIF, fontSize: "24px", color: COLORS.ink, margin: "0 0 8px" }}>{t("cook.congrats")}</h2>
+            <p style={{ fontSize: "15px", color: COLORS.inkSoft, margin: "0 0 18px" }}>{t("cook.mealReady")}</p>
+            <p style={{ fontFamily: SERIF, fontSize: "17px", color: COLORS.ink, margin: 0 }}>{recipe.title || t("common.recipeWord")}</p>
           </div>
         )}
       </div>
@@ -3863,18 +3889,18 @@ function CookMode({ recipe, onFinish }) {
           {stepIndex !== null && (
             <button onClick={goPrev} style={prevButtonStyle}>
               <ArrowLeft size={15} />
-              Önceki
+              {t("cook.prev")}
             </button>
           )}
           {stage !== "done" && (
             <button onClick={goNext} style={bigButtonStyle}>
-              {stage === "ingredients" ? "Sonraki" : isLastStep ? "Tamamla ✓" : "Sonraki"}
+              {stage === "ingredients" ? t("cook.next") : isLastStep ? t("cook.complete") : t("cook.next")}
               {!(stage !== "ingredients" && isLastStep) && <ArrowRight size={16} />}
             </button>
           )}
           {stage === "done" && (
             <button onClick={onFinish} style={bigButtonStyle}>
-              Tarife Dön
+              {t("cook.backToRecipe")}
             </button>
           )}
         </div>
@@ -3882,7 +3908,7 @@ function CookMode({ recipe, onFinish }) {
         {stage !== "done" && recipe.link && (
           <a href={recipe.link} target="_blank" rel="noopener noreferrer" style={{ ...videoButtonStyle, marginTop: "10px" }}>
             <ExternalLink size={16} />
-            Videoyu Aç, Yapılışını İzle
+            {t("detail.watchVideo")}
           </a>
         )}
       </div>
@@ -3891,6 +3917,7 @@ function CookMode({ recipe, onFinish }) {
 }
 
 function NutritionLabel({ nutrition, servings }) {
+  const { t } = useLanguage();
   const [open, setOpen] = useState(false);
   const cal = nutrition.calories ?? "—";
   const protein = nutrition.protein_g ?? "—";
@@ -3915,7 +3942,7 @@ function NutritionLabel({ nutrition, servings }) {
         }}
         aria-expanded={open}
       >
-        <span style={{ fontSize: "18px", fontWeight: 800, color: COLORS.ink, lineHeight: 1 }}>Besin Değerleri</span>
+        <span style={{ fontSize: "18px", fontWeight: 800, color: COLORS.ink, lineHeight: 1 }}>{t("nutrition.title")}</span>
         <ChevronDown
           size={18}
           style={{ color: COLORS.ink, flexShrink: 0, transform: open ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 250ms ease" }}
@@ -3933,22 +3960,22 @@ function NutritionLabel({ nutrition, servings }) {
           borderBottom: open ? `6px solid ${COLORS.ink}` : "none",
         }}
       >
-        <span style={{ fontSize: "14px", fontWeight: 700, color: COLORS.ink }}>Kalori</span>
+        <span style={{ fontSize: "14px", fontWeight: 700, color: COLORS.ink }}>{t("nutrition.calories")}</span>
         <span style={{ fontSize: "20px", fontWeight: 800, color: COLORS.ink }}>{cal}</span>
       </div>
 
       <div style={{ display: "grid", gridTemplateRows: open ? "1fr" : "0fr", transition: "grid-template-rows 280ms ease" }}>
         <div style={{ overflow: "hidden" }}>
           <div style={{ fontSize: "11px", padding: "6px 0 4px", borderBottom: `1px solid ${COLORS.ink}`, color: COLORS.ink }}>
-            Tarifin tamamı {servings ? `(${servings} porsiyonluk tarif)` : ""}
+            {t("nutrition.wholeRecipe")} {servings ? t("nutrition.servingsNote", { servings }) : ""}
           </div>
 
-          <NutritionRow label="Protein" value={protein} unit="g" />
-          <NutritionRow label="Karbonhidrat" value={carbs} unit="g" />
-          <NutritionRow label="Yağ" value={fat} unit="g" last />
+          <NutritionRow label={t("nutrition.protein")} value={protein} unit="g" />
+          <NutritionRow label={t("nutrition.carbs")} value={carbs} unit="g" />
+          <NutritionRow label={t("nutrition.fat")} value={fat} unit="g" last />
 
           <div style={{ fontSize: "10px", paddingTop: "8px", marginTop: "4px", color: COLORS.inkSoft, lineHeight: 1.4 }}>
-            * Değerler yapay zeka tahminidir, kesin ölçüm değildir.
+            {t("nutrition.disclaimer")}
           </div>
         </div>
       </div>
@@ -3977,6 +4004,7 @@ function NutritionRow({ label, value, unit, last }) {
 }
 
 function RecipeEditor({ heading, initial, isNew, saveTargets, setSaveTargets, isPlus, families, personalCount, onSave, onCancel }) {
+  const { t, categoryLabel, difficultyLabel } = useLanguage();
   const [title, setTitle] = useState(initial?.title || "");
   const [category, setCategory] = useState(initial?.category || "");
   const [servings, setServings] = useState(initial?.servings != null ? String(initial.servings) : "");
@@ -4034,15 +4062,15 @@ function RecipeEditor({ heading, initial, isNew, saveTargets, setSaveTargets, is
 
   const handleSave = () => {
     if (!title.trim()) {
-      setError("Tarife bir isim vermen lazım.");
+      setError(t("editor.errorNeedTitle"));
       return;
     }
     if (!category) {
-      setError("Bir kategori seçmen lazım.");
+      setError(t("editor.errorNeedCategory"));
       return;
     }
     if (isNew && saveTargets.includes(PERSONAL) && !isPlus && personalCount >= FREE_RECIPE_LIMIT) {
-      setError(`Ücretsiz hesaplarda en fazla ${FREE_RECIPE_LIMIT} kişisel tarif olabilir. Sınırsız eklemek için Plus'a geç.`);
+      setError(t("errors.freeLimit", { limit: FREE_RECIPE_LIMIT }));
       return;
     }
     setError("");
@@ -4073,19 +4101,19 @@ function RecipeEditor({ heading, initial, isNew, saveTargets, setSaveTargets, is
       <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>
         <h2 style={{ fontFamily: SERIF, fontSize: "20px", color: COLORS.ink, margin: "0 0 4px" }}>{heading}</h2>
         <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: "0 0 20px" }}>
-          Alanları istediğin gibi doldur ya da düzenle. Boş bıraktığın satırlar kaydedilmez.
+          {t("editor.hint")}
         </p>
 
-        <label style={labelStyle}>Tarif Adı</label>
+        <label style={labelStyle}>{t("editor.nameLabel")}</label>
         <input
           type="text"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="Örn. Çıtır Tavuk"
+          placeholder={t("editor.namePlaceholder")}
           style={{ ...inputStyle, marginBottom: "16px" }}
         />
 
-        <label style={labelStyle}>Kategori</label>
+        <label style={labelStyle}>{t("addForm.categoryLabel")}</label>
         <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "16px" }}>
           {CATEGORIES.map((cat) => {
             const selected = category === cat;
@@ -4104,7 +4132,7 @@ function RecipeEditor({ heading, initial, isNew, saveTargets, setSaveTargets, is
                   cursor: "pointer",
                 }}
               >
-                {cat}
+                {categoryLabel(cat)}
               </button>
             );
           })}
@@ -4114,7 +4142,7 @@ function RecipeEditor({ heading, initial, isNew, saveTargets, setSaveTargets, is
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "16px" }}>
           <div>
-            <label style={labelStyle}>Porsiyon</label>
+            <label style={labelStyle}>{t("editor.servingsLabel")}</label>
             <input
               type="number"
               min="0"
@@ -4125,7 +4153,7 @@ function RecipeEditor({ heading, initial, isNew, saveTargets, setSaveTargets, is
             />
           </div>
           <div>
-            <label style={labelStyle}>Hazırlık Süresi (dk)</label>
+            <label style={labelStyle}>{t("editor.prepTimeLabel")}</label>
             <input
               type="number"
               min="0"
@@ -4137,7 +4165,7 @@ function RecipeEditor({ heading, initial, isNew, saveTargets, setSaveTargets, is
           </div>
         </div>
 
-        <label style={labelStyle}>Zorluk</label>
+        <label style={labelStyle}>{t("editor.difficultyLabel")}</label>
         <div style={{ display: "flex", gap: "8px", marginBottom: "16px" }}>
           {["Kolay", "Orta", "Zor"].map((d) => {
             const selected = difficulty === d;
@@ -4156,13 +4184,13 @@ function RecipeEditor({ heading, initial, isNew, saveTargets, setSaveTargets, is
                   cursor: "pointer",
                 }}
               >
-                {d}
+                {difficultyLabel(d)}
               </button>
             );
           })}
         </div>
 
-        <label style={labelStyle}>Video linki (opsiyonel)</label>
+        <label style={labelStyle}>{t("editor.videoLinkLabel")}</label>
         <input
           type="text"
           value={link}
@@ -4174,7 +4202,7 @@ function RecipeEditor({ heading, initial, isNew, saveTargets, setSaveTargets, is
 
       <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "14px" }}>
-          <h3 style={{ fontFamily: SERIF, fontSize: "17px", color: COLORS.ink, margin: 0 }}>Malzemeler</h3>
+          <h3 style={{ fontFamily: SERIF, fontSize: "17px", color: COLORS.ink, margin: 0 }}>{t("detail.ingredients")}</h3>
           <button
             onClick={addIngredient}
             style={{
@@ -4189,7 +4217,7 @@ function RecipeEditor({ heading, initial, isNew, saveTargets, setSaveTargets, is
               cursor: "pointer",
             }}
           >
-            <Plus size={13} /> Malzeme Ekle
+            <Plus size={13} /> {t("editor.addIngredient")}
           </button>
         </div>
 
@@ -4200,19 +4228,19 @@ function RecipeEditor({ heading, initial, isNew, saveTargets, setSaveTargets, is
                 type="text"
                 value={ing.name}
                 onChange={(e) => updateIngredient(ing._key, "name", e.target.value)}
-                placeholder="Malzeme (örn. Tavuk göğsü)"
+                placeholder={t("editor.ingredientNamePlaceholder")}
                 style={{ ...inputStyle, flex: 2 }}
               />
               <input
                 type="text"
                 value={ing.amount}
                 onChange={(e) => updateIngredient(ing._key, "amount", e.target.value)}
-                placeholder="Miktar (örn. 500 g)"
+                placeholder={t("editor.ingredientAmountPlaceholder")}
                 style={{ ...inputStyle, flex: 1 }}
               />
               <button
                 onClick={() => removeIngredient(ing._key)}
-                aria-label="Malzemeyi kaldır"
+                aria-label={t("common.removeIngredient")}
                 style={{ padding: "8px", background: "transparent", border: "none", color: COLORS.danger, cursor: "pointer", flexShrink: 0 }}
               >
                 <Trash2 size={16} />
@@ -4224,7 +4252,7 @@ function RecipeEditor({ heading, initial, isNew, saveTargets, setSaveTargets, is
 
       <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "14px" }}>
-          <h3 style={{ fontFamily: SERIF, fontSize: "17px", color: COLORS.ink, margin: 0 }}>Yapılışı</h3>
+          <h3 style={{ fontFamily: SERIF, fontSize: "17px", color: COLORS.ink, margin: 0 }}>{t("detail.instructions")}</h3>
           <button
             onClick={addInstruction}
             style={{
@@ -4239,7 +4267,7 @@ function RecipeEditor({ heading, initial, isNew, saveTargets, setSaveTargets, is
               cursor: "pointer",
             }}
           >
-            <Plus size={13} /> Adım Ekle
+            <Plus size={13} /> {t("editor.addStep")}
           </button>
         </div>
 
@@ -4267,13 +4295,13 @@ function RecipeEditor({ heading, initial, isNew, saveTargets, setSaveTargets, is
               <textarea
                 value={step.text}
                 onChange={(e) => updateInstruction(step._key, e.target.value)}
-                placeholder={`${i + 1}. adımı yaz…`}
+                placeholder={t("editor.stepPlaceholder", { n: i + 1 })}
                 rows={2}
                 style={{ ...inputStyle, flex: 1, resize: "vertical" }}
               />
               <button
                 onClick={() => removeInstruction(step._key)}
-                aria-label="Adımı kaldır"
+                aria-label={t("editor.removeStep")}
                 style={{ padding: "8px", background: "transparent", border: "none", color: COLORS.danger, cursor: "pointer", flexShrink: 0, marginTop: "2px" }}
               >
                 <Trash2 size={16} />
@@ -4284,22 +4312,22 @@ function RecipeEditor({ heading, initial, isNew, saveTargets, setSaveTargets, is
       </div>
 
       <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>
-        <h3 style={{ fontFamily: SERIF, fontSize: "17px", color: COLORS.ink, margin: "0 0 14px" }}>Besin Değerleri (tarifin tamamı)</h3>
+        <h3 style={{ fontFamily: SERIF, fontSize: "17px", color: COLORS.ink, margin: "0 0 14px" }}>{t("editor.nutritionTitle")}</h3>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
           <div>
-            <label style={labelStyle}>Kalori</label>
+            <label style={labelStyle}>{t("nutrition.calories")}</label>
             <input type="number" min="0" value={calories} onChange={(e) => setCalories(e.target.value)} placeholder="0" style={inputStyle} />
           </div>
           <div>
-            <label style={labelStyle}>Protein (g)</label>
+            <label style={labelStyle}>{t("editor.protein")}</label>
             <input type="number" min="0" value={protein} onChange={(e) => setProtein(e.target.value)} placeholder="0" style={inputStyle} />
           </div>
           <div>
-            <label style={labelStyle}>Karbonhidrat (g)</label>
+            <label style={labelStyle}>{t("editor.carbs")}</label>
             <input type="number" min="0" value={carbs} onChange={(e) => setCarbs(e.target.value)} placeholder="0" style={inputStyle} />
           </div>
           <div>
-            <label style={labelStyle}>Yağ (g)</label>
+            <label style={labelStyle}>{t("editor.fat")}</label>
             <input type="number" min="0" value={fat} onChange={(e) => setFat(e.target.value)} placeholder="0" style={inputStyle} />
           </div>
         </div>
@@ -4341,13 +4369,13 @@ function RecipeEditor({ heading, initial, isNew, saveTargets, setSaveTargets, is
           }}
         >
           <Check size={16} />
-          Kaydet
+          {t("common.save")}
         </button>
         <button
           onClick={onCancel}
           style={{ padding: "10px 16px", borderRadius: "8px", fontSize: "14px", fontWeight: 500, background: "transparent", color: COLORS.inkSoft, border: "none", cursor: "pointer" }}
         >
-          Vazgeç
+          {t("common.cancel")}
         </button>
       </div>
     </div>
@@ -4369,6 +4397,7 @@ function ingredientIsAvailable(ingredientName, pantryItems) {
 }
 
 function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onSaveSuggestion, pantryModalOpenRef, pantryModalCloseRef }) {
+  const { t } = useLanguage();
   const [context, setContext] = useState(PERSONAL);
   const [items, setItems] = useState([]);
   const [draft, setDraft] = useState("");
@@ -4431,7 +4460,7 @@ function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onSaveSuggest
       const data = await suggestFromPantry(items);
       setSuggestions(data.suggestions || []);
     } catch (e) {
-      setSuggestError(e.message || "Öneriler alınamadı, tekrar dener misin?");
+      setSuggestError(e.message || t("pantry.suggestError"));
     } finally {
       setSuggesting(false);
     }
@@ -4445,7 +4474,7 @@ function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onSaveSuggest
       await onSaveSuggestion(suggestion, category);
       setSuggestionSaveState((prev) => ({ ...prev, [index]: { status: "saved" } }));
     } catch (e) {
-      setSuggestionSaveState((prev) => ({ ...prev, [index]: { status: "error", message: e.message || "Kaydedilemedi, tekrar dener misin?" } }));
+      setSuggestionSaveState((prev) => ({ ...prev, [index]: { status: "error", message: e.message || t("pantry.saveError") } }));
     }
   };
 
@@ -4495,10 +4524,10 @@ function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onSaveSuggest
       <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>
         <h2 style={{ fontFamily: SERIF, fontSize: "20px", color: COLORS.ink, margin: "0 0 4px", display: "flex", alignItems: "center", gap: "8px" }}>
           <Package size={19} color={COLORS.mustardDark} />
-          Elimde Bunlar Var
+          {t("pantry.title")}
         </h2>
         <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: "0 0 16px" }}>
-          Evde olan malzemeleri tek tek yaz (Enter'a bas ya da virgül koy), bu malzemelerle yapabileceğin kayıtlı tarifleri bulayım.
+          {t("pantry.intro")}
         </p>
 
         <ContextTabs context={context} setContext={setContext} isPlus={isPlus} families={families} />
@@ -4520,7 +4549,7 @@ function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onSaveSuggest
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Örn. tavuk, yumurta, soğan…"
+            placeholder={t("pantry.itemPlaceholder")}
             style={{ flex: 1, minWidth: 0, background: "transparent", border: "none", outline: "none", fontSize: "14px", color: COLORS.ink }}
           />
           <button
@@ -4541,14 +4570,14 @@ function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onSaveSuggest
             }}
           >
             <Plus size={13} />
-            Ekle
+            {t("pantry.add")}
           </button>
         </div>
 
         {!loaded ? (
-          <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: 0 }}>Yükleniyor…</p>
+          <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: 0 }}>{t("common.loading")}</p>
         ) : items.length === 0 ? (
-          <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: 0 }}>Henüz malzeme eklemedin.</p>
+          <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: 0 }}>{t("pantry.noItems")}</p>
         ) : (
           <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
             {items.map((item) => (
@@ -4569,7 +4598,7 @@ function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onSaveSuggest
                 {item}
                 <button
                   onClick={() => removeItem(item)}
-                  aria-label="Malzemeyi kaldır"
+                  aria-label={t("common.removeIngredient")}
                   style={{ background: "transparent", border: "none", cursor: "pointer", color: "#C9C2AE", padding: "2px", display: "flex" }}
                 >
                   <X size={12} />
@@ -4585,7 +4614,7 @@ function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onSaveSuggest
           {results.length === 0 ? (
             <div style={{ borderRadius: "10px", border: `1px dashed ${COLORS.line}`, padding: "24px", textAlign: "center" }}>
               <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: 0 }}>
-                Bu malzemelerle eşleşen kayıtlı tarif bulamadım. Başka malzeme eklemeyi dener misin?
+                {t("pantry.noMatches")}
               </p>
             </div>
           ) : (
@@ -4606,7 +4635,7 @@ function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onSaveSuggest
                     }}
                   >
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: missing.length > 0 ? "8px" : 0 }}>
-                      <div style={{ fontFamily: SERIF, fontSize: "16px", color: COLORS.ink }}>{recipe.title || "İsimsiz tarif"}</div>
+                      <div style={{ fontFamily: SERIF, fontSize: "16px", color: COLORS.ink }}>{recipe.title || t("common.untitledRecipe")}</div>
                       <span
                         style={{
                           flexShrink: 0,
@@ -4618,12 +4647,12 @@ function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onSaveSuggest
                           color: isFull ? "#F3EFE6" : COLORS.mustardDark,
                         }}
                       >
-                        {isFull ? "Tam eşleşme" : `${matchedCount}/${total} malzeme var`}
+                        {isFull ? t("pantry.fullMatch") : t("pantry.partialMatch", { matched: matchedCount, total })}
                       </span>
                     </div>
                     {missing.length > 0 && (
                       <div style={{ fontSize: "12px", color: COLORS.inkSoft }}>
-                        Eksik: {missing.map((m) => m.name).join(", ")}
+                        {t("pantry.missing", { list: missing.map((m) => m.name).join(", ") })}
                       </div>
                     )}
                   </button>
@@ -4638,10 +4667,10 @@ function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onSaveSuggest
         <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.mustard}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>
           <h3 style={{ fontFamily: SERIF, fontSize: "17px", color: COLORS.ink, margin: "0 0 4px", display: "flex", alignItems: "center", gap: "8px" }}>
             <Sparkles size={16} color={COLORS.mustardDark} />
-            AI'dan Tarif Fikri İste
+            {t("pantry.aiTitle")}
           </h3>
           <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: "0 0 14px" }}>
-            Kayıtlı tariflerinle eşleşme bulunmasa da, elindeki malzemelerle yapay zekadan yeni fikirler isteyebilirsin.
+            {t("pantry.aiIntro")}
           </p>
           <button
             onClick={handleSuggest}
@@ -4662,7 +4691,7 @@ function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onSaveSuggest
             }}
           >
             {suggesting ? <Loader2 size={15} className="spin" /> : <Sparkles size={15} />}
-            {suggesting ? "Düşünülüyor…" : "Fikir İste"}
+            {suggesting ? t("pantry.thinking") : t("pantry.getIdeas")}
           </button>
 
           {suggestError && (
@@ -4681,15 +4710,15 @@ function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onSaveSuggest
                     {s.why && <div style={{ fontSize: "13px", color: COLORS.inkSoft, marginBottom: "6px" }}>{s.why}</div>}
                     {s.extra_needed && s.extra_needed.length > 0 && (
                       <div style={{ fontSize: "12px", color: COLORS.mustardDark, marginBottom: "8px" }}>
-                        Ekstra gerekli: {s.extra_needed.join(", ")}
+                        {t("pantry.extraNeeded", { list: s.extra_needed.join(", ") })}
                       </div>
                     )}
                     {s.nutrition && (
                       <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", fontSize: "11px", color: COLORS.inkSoft, marginBottom: "10px" }}>
-                        <span><strong style={{ color: COLORS.ink }}>{s.nutrition.calories ?? "—"}</strong> kcal</span>
-                        <span><strong style={{ color: COLORS.ink }}>{s.nutrition.protein_g ?? "—"}</strong> g protein</span>
-                        <span><strong style={{ color: COLORS.ink }}>{s.nutrition.carbs_g ?? "—"}</strong> g karb</span>
-                        <span><strong style={{ color: COLORS.ink }}>{s.nutrition.fat_g ?? "—"}</strong> g yağ</span>
+                        <span><strong style={{ color: COLORS.ink }}>{s.nutrition.calories ?? "—"}</strong> {t("pantry.kcal")}</span>
+                        <span><strong style={{ color: COLORS.ink }}>{s.nutrition.protein_g ?? "—"}</strong> {t("pantry.proteinShort")}</span>
+                        <span><strong style={{ color: COLORS.ink }}>{s.nutrition.carbs_g ?? "—"}</strong> {t("pantry.carbShort")}</span>
+                        <span><strong style={{ color: COLORS.ink }}>{s.nutrition.fat_g ?? "—"}</strong> {t("pantry.fatShort")}</span>
                       </div>
                     )}
                     <button
@@ -4711,7 +4740,7 @@ function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onSaveSuggest
                       }}
                     >
                       {isSaving && <Loader2 size={13} className="spin" />}
-                      {isSaved ? "Kaydedildi ✓" : isSaving ? "Kaydediliyor…" : "Tarifi Kaydet"}
+                      {isSaved ? t("pantry.saved") : isSaving ? t("pantry.saving") : t("pantry.saveRecipe")}
                     </button>
                     {saveState.status === "error" && (
                       <div style={{ fontSize: "12px", color: COLORS.danger, marginTop: "6px" }}>{saveState.message}</div>
@@ -4732,6 +4761,7 @@ function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onSaveSuggest
 }
 
 function CategoryPickerModal({ onSelect, onClose }) {
+  const { t, categoryLabel } = useLanguage();
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 80, display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" }}>
       <div
@@ -4750,16 +4780,16 @@ function CategoryPickerModal({ onSelect, onClose }) {
         }}
       >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
-          <h3 style={{ fontFamily: SERIF, fontSize: "17px", color: COLORS.ink, margin: 0 }}>Kategori Seç</h3>
+          <h3 style={{ fontFamily: SERIF, fontSize: "17px", color: COLORS.ink, margin: 0 }}>{t("categoryModal.title")}</h3>
           <button
             onClick={onClose}
-            aria-label="Kapat"
+            aria-label={t("common.close")}
             style={{ background: "transparent", border: "none", cursor: "pointer", color: COLORS.inkSoft, padding: "4px", display: "flex" }}
           >
             <X size={18} />
           </button>
         </div>
-        <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: "0 0 14px" }}>Bu tarifi hangi kategoriye kaydedelim?</p>
+        <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: "0 0 14px" }}>{t("categoryModal.subtitle")}</p>
         <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
           {CATEGORIES.map((cat) => (
             <button
@@ -4776,7 +4806,7 @@ function CategoryPickerModal({ onSelect, onClose }) {
                 cursor: "pointer",
               }}
             >
-              {cat}
+              {categoryLabel(cat)}
             </button>
           ))}
         </div>
@@ -4786,16 +4816,17 @@ function CategoryPickerModal({ onSelect, onClose }) {
 }
 
 function FavoritesView({ recipes, familyNameById, onSelect }) {
+  const { t } = useLanguage();
   const favorites = recipes.filter((r) => r.isFavorite);
   return (
     <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>
       <h2 style={{ fontFamily: SERIF, fontSize: "20px", color: COLORS.ink, margin: "0 0 4px", display: "flex", alignItems: "center", gap: "8px" }}>
         <Star size={19} color={COLORS.mustard} fill={COLORS.mustard} />
-        Favoriler
+        {t("favorites.title")}
       </h2>
-      <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: "0 0 16px" }}>Yıldızladığın tüm tarifler burada.</p>
+      <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: "0 0 16px" }}>{t("favorites.subtitle")}</p>
       {favorites.length === 0 ? (
-        <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: 0 }}>Henüz favori tarifin yok.</p>
+        <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: 0 }}>{t("favorites.empty")}</p>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
           {favorites.map((r) => (
@@ -4815,9 +4846,9 @@ function FavoritesView({ recipes, familyNameById, onSelect }) {
                 cursor: "pointer",
               }}
             >
-              <span style={{ fontFamily: SERIF, fontSize: "15px", color: COLORS.ink }}>{r.title || "İsimsiz tarif"}</span>
+              <span style={{ fontFamily: SERIF, fontSize: "15px", color: COLORS.ink }}>{r.title || t("common.untitledRecipe")}</span>
               <span style={{ fontSize: "12px", color: COLORS.inkSoft, flexShrink: 0 }}>
-                {scopeLabels(r, familyNameById).join(" + ")}
+                {scopeLabels(r, familyNameById, t).join(" + ")}
               </span>
             </button>
           ))}
@@ -4828,6 +4859,7 @@ function FavoritesView({ recipes, familyNameById, onSelect }) {
 }
 
 function FamiliesView({ isPlus, families, personName, currentUid, onReload, onOpenPlus, onImportFamily }) {
+  const { t } = useLanguage();
   const [nameDraft, setNameDraft] = useState("");
   const [codeDraft, setCodeDraft] = useState("");
   const [busy, setBusy] = useState(false);
@@ -4841,15 +4873,15 @@ function FamiliesView({ isPlus, families, personName, currentUid, onReload, onOp
     return (
       <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "28px", boxShadow: CARD_SHADOW, textAlign: "center" }}>
         <Users size={26} color={COLORS.forest} style={{ marginBottom: "10px" }} />
-        <h2 style={{ fontFamily: SERIF, fontSize: "18px", color: COLORS.ink, margin: "0 0 8px" }}>Aile özelliği Plus'a özel</h2>
+        <h2 style={{ fontFamily: SERIF, fontSize: "18px", color: COLORS.ink, margin: "0 0 8px" }}>{t("families.plusOnlyTitle")}</h2>
         <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: "0 0 16px" }}>
-          Bir aile oluşturup tariflerini ev halkınla paylaşmak için Plus'a geçmen gerekiyor.
+          {t("families.plusOnlyBody")}
         </p>
         <button
           onClick={onOpenPlus}
           style={{ padding: "10px 18px", borderRadius: "8px", fontWeight: 700, background: COLORS.mustard, color: COLORS.forestDark, border: "none", cursor: "pointer" }}
         >
-          Plus'ı İncele
+          {t("families.reviewPlus")}
         </button>
       </div>
     );
@@ -4872,7 +4904,7 @@ function FamiliesView({ isPlus, families, personName, currentUid, onReload, onOp
   const handleCreate = async () => {
     setError("");
     if (!nameDraft.trim()) {
-      setError("Aileye bir isim ver.");
+      setError(t("families.errorNameRequired"));
       return;
     }
     setBusy(true);
@@ -4890,7 +4922,7 @@ function FamiliesView({ isPlus, families, personName, currentUid, onReload, onOp
   const handleJoin = async () => {
     setError("");
     if (!codeDraft.trim()) {
-      setError("Davet kodunu gir.");
+      setError(t("families.errorCodeRequired"));
       return;
     }
     setBusy(true);
@@ -4950,19 +4982,19 @@ function FamiliesView({ isPlus, families, personName, currentUid, onReload, onOp
             {f.ownerUid === currentUid ? (
               confirmDeleteId === f.id ? (
                 <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                  <span style={{ fontSize: "12px", color: COLORS.danger }}>Emin misin?</span>
+                  <span style={{ fontSize: "12px", color: COLORS.danger }}>{t("families.confirmDelete")}</span>
                   <button
                     onClick={() => handleDelete(f.id)}
                     disabled={busy}
                     style={{ fontSize: "12px", fontWeight: 700, color: "#fff", background: COLORS.danger, border: "none", borderRadius: "6px", padding: "4px 10px", cursor: "pointer" }}
                   >
-                    Evet, Sil
+                    {t("families.confirmDeleteYes")}
                   </button>
                   <button
                     onClick={() => setConfirmDeleteId(null)}
                     style={{ fontSize: "12px", color: COLORS.inkSoft, background: "transparent", border: "none", cursor: "pointer" }}
                   >
-                    Vazgeç
+                    {t("common.cancel")}
                   </button>
                 </div>
               ) : (
@@ -4971,7 +5003,7 @@ function FamiliesView({ isPlus, families, personName, currentUid, onReload, onOp
                   disabled={busy}
                   style={{ fontSize: "12px", color: COLORS.danger, background: "transparent", border: "none", cursor: "pointer" }}
                 >
-                  Aileyi Sil
+                  {t("families.deleteFamily")}
                 </button>
               )
             ) : (
@@ -4980,12 +5012,12 @@ function FamiliesView({ isPlus, families, personName, currentUid, onReload, onOp
                 disabled={busy}
                 style={{ fontSize: "12px", color: COLORS.danger, background: "transparent", border: "none", cursor: "pointer" }}
               >
-                Aileden Ayrıl
+                {t("families.leaveFamily")}
               </button>
             )}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px", flexWrap: "wrap" }}>
-            <span style={{ fontSize: "12px", color: COLORS.inkSoft }}>Davet kodu:</span>
+            <span style={{ fontSize: "12px", color: COLORS.inkSoft }}>{t("families.inviteCode")}</span>
             <code
               style={{
                 fontSize: "14px",
@@ -5001,14 +5033,14 @@ function FamiliesView({ isPlus, families, personName, currentUid, onReload, onOp
             </code>
             <button
               onClick={() => navigator.clipboard?.writeText(f.inviteCode)}
-              aria-label="Kodu kopyala"
+              aria-label={t("families.copyCode")}
               style={{ background: "transparent", border: "none", cursor: "pointer", color: COLORS.inkSoft, display: "flex" }}
             >
               <Copy size={13} />
             </button>
           </div>
           <div style={{ fontSize: "13px", color: COLORS.inkSoft, marginBottom: "12px" }}>
-            Üyeler: {f.members.map((m) => m.name || m.email || (m.isAnonymous ? "Misafir kullanıcı" : "Kullanıcı")).join(", ")}
+            {t("families.members", { list: f.members.map((m) => m.name || m.email || (m.isAnonymous ? t("families.guestUser") : t("families.genericUser"))).join(", ") })}
           </div>
           <button
             onClick={() => handleImport(f.id)}
@@ -5023,39 +5055,39 @@ function FamiliesView({ isPlus, families, personName, currentUid, onReload, onOp
               cursor: "pointer",
             }}
           >
-            {importState[f.id] === "checking" ? "Kontrol ediliyor…" : "Eski paylaşılan tarifleri bu aileye aktar"}
+            {importState[f.id] === "checking" ? t("common.checking") : t("families.importButton")}
           </button>
-          {importState[f.id] === "done" && <div style={{ fontSize: "12px", color: COLORS.forest, marginTop: "6px" }}>Aktarıldı (varsa).</div>}
-          {importState[f.id] === "hata" && <div style={{ fontSize: "12px", color: COLORS.danger, marginTop: "6px" }}>İçe aktarma başarısız oldu.</div>}
+          {importState[f.id] === "done" && <div style={{ fontSize: "12px", color: COLORS.forest, marginTop: "6px" }}>{t("families.imported")}</div>}
+          {importState[f.id] === "hata" && <div style={{ fontSize: "12px", color: COLORS.danger, marginTop: "6px" }}>{t("families.importFailed")}</div>}
         </div>
       ))}
 
       {!isPlus && (
         <div style={{ borderRadius: "14px", border: `1px dashed ${COLORS.mustard}`, background: COLORS.panel, padding: "20px", textAlign: "center" }}>
           <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: "0 0 10px" }}>
-            Plus kapalıyken mevcut ailelerinden ayrılabilirsin, ama yeni bir aile kuramaz ya da katılamazsın.
+            {t("families.plusOffHint")}
           </p>
           <button
             onClick={onOpenPlus}
             style={{ padding: "8px 14px", borderRadius: "8px", fontWeight: 700, fontSize: "13px", background: COLORS.mustard, color: COLORS.forestDark, border: "none", cursor: "pointer" }}
           >
-            Plus'ı İncele
+            {t("families.reviewPlus")}
           </button>
         </div>
       )}
 
       {isPlus && (
       <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>
-        <h3 style={{ fontFamily: SERIF, fontSize: "17px", color: COLORS.ink, margin: "0 0 4px" }}>Yeni Aile</h3>
+        <h3 style={{ fontFamily: SERIF, fontSize: "17px", color: COLORS.ink, margin: "0 0 4px" }}>{t("families.newFamilyTitle")}</h3>
         <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: "0 0 12px" }}>
-          En fazla {MAX_FAMILIES} aileye üye olabilirsin{atLimit ? " — şu an sınırdasın." : "."}
+          {t("families.maxHint", { max: MAX_FAMILIES })}{atLimit ? t("families.atLimitSuffix") : t("families.notAtLimitSuffix")}
         </p>
 
         <div style={{ display: "flex", gap: "8px", marginBottom: "12px" }}>
           <input
             value={nameDraft}
             onChange={(e) => setNameDraft(e.target.value)}
-            placeholder="Aile adı (örn. Yılmazlar)"
+            placeholder={t("families.namePlaceholder")}
             style={inputStyle}
             disabled={atLimit}
           />
@@ -5074,7 +5106,7 @@ function FamiliesView({ isPlus, families, personName, currentUid, onReload, onOp
               flexShrink: 0,
             }}
           >
-            Oluştur
+            {t("families.create")}
           </button>
         </div>
 
@@ -5082,7 +5114,7 @@ function FamiliesView({ isPlus, families, personName, currentUid, onReload, onOp
           <input
             value={codeDraft}
             onChange={(e) => setCodeDraft(e.target.value.toUpperCase())}
-            placeholder="Davet kodunu gir"
+            placeholder={t("families.codePlaceholder")}
             style={inputStyle}
             disabled={atLimit}
           />
@@ -5101,7 +5133,7 @@ function FamiliesView({ isPlus, families, personName, currentUid, onReload, onOp
               flexShrink: 0,
             }}
           >
-            Katıl
+            {t("families.join")}
           </button>
         </div>
 
@@ -5130,6 +5162,7 @@ function FamiliesView({ isPlus, families, personName, currentUid, onReload, onOp
 }
 
 function PlusView({ isPlus, onToggle }) {
+  const { t } = useLanguage();
   const [busy, setBusy] = useState(false);
 
   const handleToggle = async () => {
@@ -5141,11 +5174,7 @@ function PlusView({ isPlus, onToggle }) {
     }
   };
 
-  const benefits = [
-    "Kişisel tariflerinde 50 sınırı tamamen kalkar",
-    "En fazla 2 aile oluşturabilir ya da davetle katılabilirsin",
-    "Aile tarifleri, o ailenin tüm üyeleri tarafından görülür",
-  ];
+  const benefits = [t("plus.benefit1"), t("plus.benefit2"), t("plus.benefit3")];
 
   return (
     <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.mustard}`, background: COLORS.panel, padding: "28px", boxShadow: CARD_SHADOW, textAlign: "center" }}>
@@ -5186,7 +5215,7 @@ function PlusView({ isPlus, onToggle }) {
         ))}
       </ul>
       <p style={{ fontSize: "12px", color: COLORS.inkSoft, marginBottom: "16px" }}>
-        Ödeme sistemi henüz eklenmedi — şimdilik bu bir test anahtarı.
+        {t("plus.testNote")}
       </p>
       <button
         onClick={handleToggle}
@@ -5203,13 +5232,14 @@ function PlusView({ isPlus, onToggle }) {
           opacity: busy ? 0.6 : 1,
         }}
       >
-        {isPlus ? "Plus'ı Kapat (test)" : "Plus'ı Etkinleştir (test)"}
+        {isPlus ? t("plus.disable") : t("plus.enable")}
       </button>
     </div>
   );
 }
 
 function AccountView({ authUser, personName, onSignOut, onImportPersonal }) {
+  const { t } = useLanguage();
   const [linking, setLinking] = useState(false);
   const [linkError, setLinkError] = useState("");
   const [importState, setImportState] = useState(null);
@@ -5225,7 +5255,7 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal }) {
     try {
       await googleLink(authUser);
     } catch (e) {
-      setLinkError(e.message || mapAuthError(e.code) || "Bağlanamadı, tekrar dener misin?");
+      setLinkError(e.message || mapAuthError(e.code, t) || t("account.linkFailed"));
     } finally {
       setLinking(false);
     }
@@ -5241,7 +5271,7 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal }) {
   const handleEmailSubmit = async (e) => {
     e.preventDefault();
     if (!email.trim() || !password) {
-      setEmailError("E-posta ve şifreni gir.");
+      setEmailError(t("auth.errorEmailRequired"));
       return;
     }
     setEmailError("");
@@ -5265,7 +5295,7 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal }) {
       }
       setEmailMode(null);
     } catch (e2) {
-      setEmailError(mapAuthError(e2.code) || e2.message);
+      setEmailError(mapAuthError(e2.code, t) || e2.message);
     } finally {
       setEmailBusy(false);
     }
@@ -5287,18 +5317,17 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal }) {
       <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>
         <h2 style={{ fontFamily: SERIF, fontSize: "20px", color: COLORS.ink, margin: "0 0 4px", display: "flex", alignItems: "center", gap: "8px" }}>
           <UserCircle size={19} color={COLORS.forest} />
-          Hesabım
+          {t("account.title")}
         </h2>
         <p style={{ fontSize: "14px", color: COLORS.ink, margin: "12px 0 4px" }}>
-          {authUser?.isAnonymous ? "Misafir kullanıcı" : authUser?.email || "Hesap"}
+          {authUser?.isAnonymous ? t("families.guestUser") : authUser?.email || t("account.accountFallback")}
         </p>
-        {personName && <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: "0 0 16px" }}>Görünen isim: {personName}</p>}
+        {personName && <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: "0 0 16px" }}>{t("account.displayName", { name: personName })}</p>}
 
         {authUser?.isAnonymous && (
           <div style={{ padding: "14px", borderRadius: "10px", background: "#EFE9D8", marginBottom: "16px" }}>
             <p style={{ fontSize: "13px", color: COLORS.ink, margin: "0 0 10px" }}>
-              Misafir hesabı kaybolabilir (ör. tarayıcı verisi silinirse). Bir hesap oluşturursan ya da mevcut
-              hesabına girersen tariflerin güvenceye alınır.
+              {t("account.guestWarning")}
             </p>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
               <button
@@ -5320,7 +5349,7 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal }) {
                 }}
               >
                 <LogIn size={13} />
-                Google ile Bağla
+                {t("account.linkGoogle")}
               </button>
               <button
                 type="button"
@@ -5336,7 +5365,7 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal }) {
                   cursor: "pointer",
                 }}
               >
-                Hesap Oluştur
+                {t("account.createAccount")}
               </button>
               <button
                 type="button"
@@ -5352,7 +5381,7 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal }) {
                   cursor: "pointer",
                 }}
               >
-                Giriş Yap
+                {t("auth.login")}
               </button>
             </div>
             {linkError && <div style={{ fontSize: "12px", color: COLORS.danger, marginTop: "8px" }}>{linkError}</div>}
@@ -5361,12 +5390,12 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal }) {
               <form onSubmit={handleEmailSubmit} style={{ marginTop: "12px" }}>
                 {emailMode === "login" && (
                   <p style={{ fontSize: "12px", color: COLORS.inkSoft, margin: "0 0 8px" }}>
-                    Mevcut bir hesaba giriş yapıyorsun - misafirdeki tarifler bu hesaba otomatik taşınmaz.
+                    {t("account.loginHint")}
                   </p>
                 )}
                 <input
                   type="email"
-                  placeholder="E-posta"
+                  placeholder={t("auth.emailPlaceholder")}
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   style={{
@@ -5384,7 +5413,7 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal }) {
                 />
                 <input
                   type="password"
-                  placeholder="Şifre"
+                  placeholder={t("auth.passwordPlaceholder")}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   style={{
@@ -5416,7 +5445,7 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal }) {
                     opacity: emailBusy ? 0.6 : 1,
                   }}
                 >
-                  {emailBusy ? "…" : emailMode === "create" ? "Hesap Oluştur" : "Giriş Yap"}
+                  {emailBusy ? "…" : emailMode === "create" ? t("account.createAccount") : t("auth.login")}
                 </button>
               </form>
             )}
@@ -5440,16 +5469,15 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal }) {
               cursor: "pointer",
             }}
           >
-            <LogOut size={13} /> Çıkış Yap
+            <LogOut size={13} /> {t("account.signOut")}
           </button>
         )}
       </div>
 
       <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>
-        <h3 style={{ fontFamily: SERIF, fontSize: "16px", color: COLORS.ink, margin: "0 0 8px" }}>Eski Tarif Kutusu Verisi</h3>
+        <h3 style={{ fontFamily: SERIF, fontSize: "16px", color: COLORS.ink, margin: "0 0 8px" }}>{t("account.legacyTitle")}</h3>
         <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: "0 0 12px" }}>
-          Aile özellikleri eklenmeden önce herkesin gördüğü eski paylaşılan tarifler varsa, kişisel listen boşken
-          buradan kişisel listene aktarabilirsin.
+          {t("account.legacyBody")}
         </p>
         <button
           onClick={handleImport}
@@ -5464,22 +5492,32 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal }) {
             cursor: "pointer",
           }}
         >
-          {importState === "checking" ? "Kontrol ediliyor…" : "Kişisel Listeme Aktar"}
+          {importState === "checking" ? t("common.checking") : t("account.importToPersonal")}
         </button>
-        {importState === "done" && <div style={{ fontSize: "12px", color: COLORS.forest, marginTop: "8px" }}>Aktarıldı (varsa).</div>}
-        {importState === "hata" && <div style={{ fontSize: "12px", color: COLORS.danger, marginTop: "8px" }}>İçe aktarma başarısız oldu.</div>}
+        {importState === "done" && <div style={{ fontSize: "12px", color: COLORS.forest, marginTop: "8px" }}>{t("families.imported")}</div>}
+        {importState === "hata" && <div style={{ fontSize: "12px", color: COLORS.danger, marginTop: "8px" }}>{t("families.importFailed")}</div>}
       </div>
     </div>
   );
 }
 
-function SettingsView({ personName, nameDraft, setNameDraft, onSaveName }) {
+function SettingsView({ personName, nameDraft, setNameDraft, onSaveName, languageModalOpenRef, languageModalCloseRef }) {
+  const { t, language, setLanguage } = useLanguage();
   const [saved, setSaved] = useState(false);
+  const [langModalOpen, setLangModalOpen] = useState(false);
 
   useEffect(() => {
     if (!nameDraft && personName) setNameDraft(personName);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Dil seçim modalı açıkken Header ←/Android backButton önce SADECE bu modalı
+  // kapatsın (bkz. TarifKutusu'ndaki languageModalOpenRef/-CloseRef ve
+  // pantryModalOpenRef ile aynı desen).
+  useEffect(() => {
+    languageModalOpenRef.current = langModalOpen;
+    languageModalCloseRef.current = () => setLangModalOpen(false);
+  }, [langModalOpen, languageModalOpenRef, languageModalCloseRef]);
 
   const handleSave = () => {
     if (!nameDraft.trim()) return;
@@ -5488,13 +5526,15 @@ function SettingsView({ personName, nameDraft, setNameDraft, onSaveName }) {
     setTimeout(() => setSaved(false), 1800);
   };
 
+  const currentLanguageLabel = LANGUAGES.find((l) => l.code === language)?.label || language;
+
   return (
     <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>
       <h2 style={{ fontFamily: SERIF, fontSize: "20px", color: COLORS.ink, margin: "0 0 4px", display: "flex", alignItems: "center", gap: "8px" }}>
         <Settings size={19} color={COLORS.forest} />
-        Ayarlar
+        {t("settings.title")}
       </h2>
-      <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: "12px 0 6px" }}>Görünen ismin</p>
+      <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: "12px 0 6px" }}>{t("settings.displayNameLabel")}</p>
       <div style={{ display: "flex", gap: "8px" }}>
         <input
           value={nameDraft}
@@ -5515,10 +5555,117 @@ function SettingsView({ personName, nameDraft, setNameDraft, onSaveName }) {
           onClick={handleSave}
           style={{ padding: "10px 16px", borderRadius: "8px", fontWeight: 700, background: COLORS.mustard, color: COLORS.forestDark, border: "none", cursor: "pointer" }}
         >
-          Kaydet
+          {t("common.save")}
         </button>
       </div>
-      {saved && <div style={{ fontSize: "12px", color: COLORS.forest, marginTop: "8px" }}>Kaydedildi.</div>}
+      {saved && <div style={{ fontSize: "12px", color: COLORS.forest, marginTop: "8px" }}>{t("common.saved")}</div>}
+
+      <div style={{ height: "1px", background: COLORS.line, margin: "20px 0 16px" }} />
+
+      <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: "0 0 6px" }}>{t("settings.languageLabel")}</p>
+      <button
+        onClick={() => setLangModalOpen(true)}
+        style={{
+          width: "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "10px 12px",
+          borderRadius: "8px",
+          border: `1px solid ${COLORS.line}`,
+          background: COLORS.paper,
+          color: COLORS.ink,
+          fontSize: "14px",
+          fontWeight: 600,
+          cursor: "pointer",
+        }}
+      >
+        {currentLanguageLabel}
+        <ChevronDown size={16} color={COLORS.inkSoft} style={{ transform: "rotate(-90deg)" }} />
+      </button>
+
+      {langModalOpen && (
+        <LanguagePickerModal
+          value={language}
+          onSelect={(code) => {
+            setLanguage(code);
+            setLangModalOpen(false);
+          }}
+          onClose={() => setLangModalOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function LanguagePickerModal({ value, onSelect, onClose }) {
+  const { t } = useLanguage();
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 80, display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" }}>
+      <div
+        onClick={onClose}
+        style={{ position: "absolute", inset: 0, background: "rgba(42,38,32,0.45)", backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)" }}
+      />
+      <div
+        style={{
+          position: "relative",
+          width: "100%",
+          maxWidth: "360px",
+          background: COLORS.panel,
+          borderRadius: "16px",
+          boxShadow: "0 8px 40px rgba(0,0,0,0.3)",
+          padding: "20px",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "14px" }}>
+          <h3 style={{ fontFamily: SERIF, fontSize: "17px", color: COLORS.ink, margin: 0 }}>{t("settings.languageModalTitle")}</h3>
+          <button
+            onClick={onClose}
+            aria-label={t("common.close")}
+            style={{ background: "transparent", border: "none", cursor: "pointer", color: COLORS.inkSoft, padding: "4px", display: "flex" }}
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+          {LANGUAGES.map((lang) => {
+            const selected = value === lang.code;
+            return (
+              <button
+                key={lang.code}
+                onClick={() => onSelect(lang.code)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "10px",
+                  padding: "12px 14px",
+                  borderRadius: "10px",
+                  border: `1px solid ${selected ? COLORS.forest : COLORS.line}`,
+                  background: selected ? "#EFE9D8" : "transparent",
+                  color: COLORS.ink,
+                  fontSize: "14px",
+                  fontWeight: selected ? 700 : 500,
+                  cursor: "pointer",
+                  textAlign: "left",
+                }}
+              >
+                <span
+                  style={{
+                    width: "16px",
+                    height: "16px",
+                    borderRadius: "9999px",
+                    border: `2px solid ${selected ? COLORS.forest : COLORS.line}`,
+                    background: selected ? COLORS.forest : "transparent",
+                    flexShrink: 0,
+                    boxShadow: selected ? `inset 0 0 0 3px ${COLORS.panel}` : "none",
+                  }}
+                />
+                {lang.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "./firebase.js";
 import { COLORS, SERIF, BODY, uid, storageGet, authedFetch } from "./App.jsx";
 import { CATEGORIES } from "../shared/recipeExtraction.js";
+import { useLanguage } from "./i18n.jsx";
 
 // Android paylaşım paneli. Native ShareActivity, kaynak uygulamanın (TikTok vb.)
 // üstünde açtığı yarım ekranlık pencerede bu sayfayı "?sharePanel=1" ile
@@ -18,6 +19,7 @@ function sharedLinkFrom(text) {
 const SPIN_CSS = `.spin { animation: spin 1s linear infinite; } @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`;
 
 export default function SharePanel() {
+  const { t, categoryLabel } = useLanguage();
   const bridge = typeof window !== "undefined" ? window.TarifKutusuShare : undefined;
   const [authChecked, setAuthChecked] = useState(false);
   const [authUser, setAuthUser] = useState(null);
@@ -59,10 +61,10 @@ export default function SharePanel() {
         const data = await res.json().catch(() => ({}));
         if (cancelled) return;
         if (res.ok && data.caption) setCaption(data.caption);
-        else setCaptionError("Açıklama otomatik alınamadı, elle yapıştırabilirsin.");
+        else setCaptionError(t("errors.captionFetchFailed"));
       })
       .catch(() => {
-        if (!cancelled) setCaptionError("Açıklama otomatik alınamadı, elle yapıştırabilirsin.");
+        if (!cancelled) setCaptionError(t("errors.captionFetchFailed"));
       })
       .finally(() => {
         if (!cancelled) setFetchingCaption(false);
@@ -75,11 +77,11 @@ export default function SharePanel() {
   const handleSubmit = async () => {
     setError("");
     if (!category) {
-      setError("Yemeğin hangi kategoriye ait olduğunu seçmen lazım.");
+      setError(t("errors.needCategory"));
       return;
     }
     if (!caption.trim()) {
-      setError("Açıklama alınamadı — videoda gördüklerini birkaç kelimeyle yaz.");
+      setError(t("sharePanel.errorCaptionRequired"));
       return;
     }
     setStatus("sending");
@@ -96,18 +98,18 @@ export default function SharePanel() {
           addedBy: storageGet("person-name")?.value || "",
         },
       });
-      if (!data.jobId) throw new Error("Tarif hazırlama işlemi başlatılamadı.");
+      if (!data.jobId) throw new Error(t("sharePanel.errorJobStartFailed"));
       setStatus("sent");
       setNote(
         data.notifyDevices === 0
-          ? "Bildirim kaydın yok; tarif hazır olunca uygulamada görünecek."
-          : "Hazır olunca bildirim göndereceğiz."
+          ? t("sharePanel.noNotifyNote")
+          : t("sharePanel.willNotify")
       );
       // Panel yalnızca sunucu job'ı kabul ettikten sonra kapanıyor.
       setTimeout(() => bridge?.close(), 1400);
     } catch (e) {
       setStatus("idle");
-      setError(e.message || "Tarif hazırlama işlemi başlatılamadı.");
+      setError(e.message || t("sharePanel.errorJobStartFailed"));
     }
   };
 
@@ -138,13 +140,13 @@ export default function SharePanel() {
     return frame(
       <div>
         <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: "0 0 16px" }}>
-          Paylaşılan içerikte TikTok, Instagram ya da YouTube linki bulamadım.
+          {t("sharePanel.noLinkFound")}
         </p>
         <button
           onClick={() => bridge?.close()}
           style={{ padding: "12px 18px", borderRadius: "10px", background: COLORS.forest, color: "#F3EFE6", border: "none", fontWeight: 700, fontSize: "15px" }}
         >
-          Kapat
+          {t("common.close")}
         </button>
       </div>
     );
@@ -153,7 +155,7 @@ export default function SharePanel() {
   if (!authChecked) {
     return frame(
       <div style={{ display: "flex", alignItems: "center", gap: "8px", color: COLORS.inkSoft, fontSize: "14px" }}>
-        <Loader2 size={16} className="spin" /> Hazırlanıyor…
+        <Loader2 size={16} className="spin" /> {t("sharePanel.preparing")}
       </div>
     );
   }
@@ -162,13 +164,13 @@ export default function SharePanel() {
     return frame(
       <div>
         <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: "0 0 16px" }}>
-          Tarifi kaydedebilmem için önce Tarif Kutusu'nu açıp giriş yapman (ya da misafir olarak girmen) gerekiyor.
+          {t("sharePanel.needLogin")}
         </p>
         <button
           onClick={openInApp}
           style={{ padding: "12px 18px", borderRadius: "10px", background: COLORS.mustard, color: COLORS.forestDark, border: "none", fontWeight: 700, fontSize: "15px" }}
         >
-          Uygulamada Aç
+          {t("sharePanel.openInApp")}
         </button>
       </div>
     );
@@ -178,7 +180,7 @@ export default function SharePanel() {
     return frame(
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "10px", paddingTop: "28px", textAlign: "center" }}>
         <Check size={34} color={COLORS.forest} />
-        <p style={{ fontFamily: SERIF, fontSize: "19px", color: COLORS.forest, margin: 0 }}>Tarif hazırlanıyor</p>
+        <p style={{ fontFamily: SERIF, fontSize: "19px", color: COLORS.forest, margin: 0 }}>{t("sharePanel.recipePreparing")}</p>
         <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: 0 }}>{note}</p>
       </div>
     );
@@ -203,16 +205,16 @@ export default function SharePanel() {
       </div>
 
       <label style={labelStyle}>
-        Video açıklaması
+        {t("sharePanel.captionLabel")}
         {fetchingCaption && (
-          <span style={{ marginLeft: "8px", fontWeight: 400, textTransform: "none", color: COLORS.mustardDark }}>Otomatik getiriliyor…</span>
+          <span style={{ marginLeft: "8px", fontWeight: 400, textTransform: "none", color: COLORS.mustardDark }}>{t("addForm.autoFetching")}</span>
         )}
       </label>
       {captionError && <div style={{ fontSize: "12px", color: COLORS.inkSoft, marginBottom: "6px" }}>{captionError}</div>}
       <textarea
         value={caption}
         onChange={(e) => setCaption(e.target.value)}
-        placeholder="Videonun açıklaması ya da gördüğün malzemeler…"
+        placeholder={t("sharePanel.captionPlaceholder")}
         rows={4}
         style={{
           width: "100%",
@@ -229,7 +231,7 @@ export default function SharePanel() {
         }}
       />
 
-      <label style={labelStyle}>Kategori</label>
+      <label style={labelStyle}>{t("addForm.categoryLabel")}</label>
       <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "16px" }}>
         {CATEGORIES.map((cat) => {
           const selected = category === cat;
@@ -249,7 +251,7 @@ export default function SharePanel() {
                 cursor: "pointer",
               }}
             >
-              {cat}
+              {categoryLabel(cat)}
             </button>
           );
         })}
@@ -295,14 +297,14 @@ export default function SharePanel() {
         }}
       >
         {status === "sending" ? <Loader2 size={18} className="spin" /> : <Plus size={18} />}
-        {status === "sending" ? "Gönderiliyor…" : "Tarife Ekle"}
+        {status === "sending" ? t("sharePanel.sending") : t("sharePanel.addRecipe")}
       </button>
 
       <button
         onClick={openInApp}
         style={{ width: "100%", marginTop: "10px", padding: "10px", background: "transparent", border: "none", color: COLORS.inkSoft, fontSize: "13px", cursor: "pointer" }}
       >
-        Uygulamada aç (ekran görüntüsü ekle, aileye kaydet)
+        {t("sharePanel.openInAppHint")}
       </button>
     </div>
   );

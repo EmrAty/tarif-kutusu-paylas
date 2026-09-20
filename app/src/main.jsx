@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import TarifKutusu from "./App.jsx";
 import SharePanel from "./SharePanel.jsx";
+import { LanguageProvider } from "./i18n.jsx";
 import "./index.css";
 
 // Android paylaşım paneli (native ShareActivity) sayfayı "?sharePanel=1" ile ve
@@ -12,5 +13,7 @@ const isSharePanel =
   typeof window.TarifKutusuShare !== "undefined";
 
 ReactDOM.createRoot(document.getElementById("root")).render(
-  <React.StrictMode>{isSharePanel ? <SharePanel /> : <TarifKutusu />}</React.StrictMode>
+  <React.StrictMode>
+    <LanguageProvider>{isSharePanel ? <SharePanel /> : <TarifKutusu />}</LanguageProvider>
+  </React.StrictMode>
 );
