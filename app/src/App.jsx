@@ -27,6 +27,13 @@ import ShareReceiver from "./capacitorShare.js";
 import NativeSplash from "./capacitorSplash.js";
 import { CATEGORIES, RECIPE_SYSTEM_PROMPT, buildRecipeUserText } from "../shared/recipeExtraction.js";
 
+// ShareReceiver/NativeSplash sadece Android tarafında yazılmış özel native plugin'ler
+// (bkz. app/android/.../ShareReceiverPlugin.java, NativeSplashPlugin.java) - iOS'ta
+// hiç native karşılıkları yok. Capacitor.isNativePlatform() iOS'ta da true döndüğü
+// için bu ikisine özel çağrılarda ayrıca "gerçekten Android mi" kontrolü gerekiyor;
+// aksi hâlde iOS'ta bu plugin'lerin metodları "not implemented" ile reddedilirdi.
+const isAndroidNative = Capacitor.getPlatform() === "android";
+
 // Google, gömülü (embedded) WebView'lerde OAuth popup'ını User-Agent'a bakarak
 // engelliyor ("disallowed_useragent") - TWA gerçek Chrome kullandığı için sorun
 // değildi, ama Capacitor'ın kendi WebView'inde signInWithPopup hiç sonuçlanmadan
@@ -719,9 +726,12 @@ export default function TarifKutusu() {
     }
   }, []);
 
-  // --- Android (Capacitor) kabuğuna özel entegrasyonlar ---
-  // Aşağıdaki üç useEffect sadece native Android'de çalışır (Capacitor.isNativePlatform()
-  // web'de/Vercel'deki normal tarayıcı sürümünde false döner), web davranışını etkilemez.
+  // --- Capacitor native kabuğuna özel entegrasyonlar (Android + iOS) ---
+  // Aşağıdaki useEffect'ler web'de/Vercel'deki normal tarayıcı sürümünde hiç
+  // çalışmaz (Capacitor.isNativePlatform() orada false döner). İkisi (splash,
+  // bildirime tıklama) hem Android hem iOS'ta çalışır; ShareReceiver ve donanım
+  // backButton'ı ise (isAndroidNative) sadece Android'de - iOS'ta ne özel bir
+  // paylaşım plugin'i ne de donanım geri tuşu var.
 
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
@@ -733,7 +743,11 @@ export default function TarifKutusu() {
     // - giriş ekranı ya da ana liste - belli olana kadar) bekleniyor.
     if (!authChecked) return;
     SplashScreen.hide();
-    NativeSplash.hide().catch(() => {});
+    // NativeSplash yalnızca Android'in kendi tam ekran splash overlay'i için var
+    // (bkz. isAndroidNative tanımı, üstteki importlar) - iOS'ta bu plugin hiç
+    // bulunmuyor, SplashScreen.hide() tek başına yeterli (@capacitor/splash-screen
+    // her iki platformda da destekleniyor).
+    if (isAndroidNative) NativeSplash.hide().catch(() => {});
   }, [authChecked]);
 
   useEffect(() => {
@@ -741,8 +755,10 @@ export default function TarifKutusu() {
     // TikTok/Instagram/YouTube linkini, yukarıdaki web share_target akışıyla
     // aynı mantıkla (regex ile URL ayıklama) "Yeni Tarif Çıkar" ekranına aktarır.
     // Uygulama kapalıyken paylaşılırsa getInitialShare, açıkken paylaşılırsa
-    // "shareReceived" olayı bu veriyi taşır.
-    if (!Capacitor.isNativePlatform()) return;
+    // "shareReceived" olayı bu veriyi taşır. ShareReceiver, sadece Android'de
+    // yazılmış özel bir native plugin (bkz. isAndroidNative) - bu turda iOS için
+    // bir Share Extension yazılmadı, o yüzden iOS'ta bu efekt hiç çalışmıyor.
+    if (!isAndroidNative) return;
     const applyShared = (data) => {
       if (!data) return;
       const combined = [data.text, data.title].filter(Boolean).join(" ");
@@ -792,8 +808,10 @@ export default function TarifKutusu() {
   useEffect(() => {
     // Android donanım geri tuşu: önce açık modal, sonra drawer, sonra ekran
     // içi "geri" (Header'daki ok ile aynı davranış: her zaman listeye döner),
-    // hiçbiri yoksa uygulamayı kapatmadan arka plana alır.
-    if (!Capacitor.isNativePlatform()) return;
+    // hiçbiri yoksa uygulamayı kapatmadan arka plana alır. iOS'ta donanım geri
+    // tuşu diye bir şey yok - backButton olayı hiç ateşlenmez ama gereksiz bir
+    // native listener kaydetmemek için burada da isAndroidNative kontrolü var.
+    if (!isAndroidNative) return;
     let listenerHandle;
     CapacitorApp.addListener("backButton", () => {
       if (modalView) {
