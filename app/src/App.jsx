@@ -25,6 +25,7 @@ import { PushNotifications } from "@capacitor/push-notifications";
 import { FirebaseAuthentication } from "@capacitor-firebase/authentication";
 import ShareReceiver from "./capacitorShare.js";
 import NativeSplash from "./capacitorSplash.js";
+import { scaleIngredient, FRACTION_GLYPHS, scaleNutrition, perServingNutrition, baseServingsOf, maxServingsFor, MIN_SERVINGS } from "./servings.js";
 import { CATEGORIES, RECIPE_SYSTEM_PROMPT, buildRecipeUserText } from "../shared/recipeExtraction.js";
 import { useLanguage, LANGUAGES, translate } from "./i18n.jsx";
 
@@ -497,6 +498,10 @@ export default function TarifKutusu() {
   // "Alışveriş Listesi" özel durum: ana ekrandan mı (→ geri: list) yoksa bir
   // tarif detayından "Alışveriş Listesine Ekle" ile mi (→ geri: o detay) açıldı.
   const [shoppingReturnView, setShoppingReturnView] = useState("list");
+  // Tarif Detay'da seçilen GEÇİCİ porsiyon (bkz. servings.js). Sadece bellekte durur;
+  // recipe.servings'e / Redis'e hiç yazılmaz. { id, base, n } — `base` kayıtlı porsiyon,
+  // tarif düzenlenip porsiyonu değişirse eski seçim otomatik geçersiz sayılır.
+  const [servingsPick, setServingsPick] = useState(null);
 
   useEffect(() => {
     // Mobilde ana bölümler (detay/Yeni Tarif Çıkar/Tarifini Kendin Oluştur/
@@ -563,6 +568,15 @@ export default function TarifKutusu() {
     }, SCREEN_EXIT_MS);
     return () => clearTimeout(timer);
   }, [closingScreen]);
+
+  // Geçici porsiyon seçimi tarife bağlı: başka tarife geçilince ya da liste
+  // ekranına dönülünce sıfırlanır (tekrar açınca kayıtlı porsiyonla başlar).
+  useEffect(() => {
+    setServingsPick(null);
+  }, [activeId]);
+  useEffect(() => {
+    if (view !== "detail" && view !== "cook" && view !== "edit" && view !== "shopping") setServingsPick(null);
+  }, [view]);
 
   // ModalSheet (Aileler/Plus/Ayarlar/Hesabım) kapanışı: X butonu, arka plana
   // tıklama ve Android backButton'ın hepsi bunu çağırıyor. Aynı closeActiveScreen
@@ -1141,6 +1155,10 @@ export default function TarifKutusu() {
 
   const [shoppingInitialContext, setShoppingInitialContext] = useState(PERSONAL);
   const addRecipeToShoppingList = async (recipe) => {
+    // Detayda porsiyon değiştirildiyse listeye o porsiyona göre ölçeklenmiş miktarlar
+    // girsin diye seçilen porsiyon liste kaydına (tarife değil) `servings[recipeId]` olarak yazılır.
+    const pickedServings =
+      active && active.id === recipe.id && baseServings && selectedServings && selectedServings !== baseServings ? selectedServings : null;
     const scopes = recipe._scopes && recipe._scopes.length ? recipe._scopes : [PERSONAL];
     await Promise.all(
       scopes.map(async (scopeKey) => {
@@ -1148,8 +1166,17 @@ export default function TarifKutusu() {
           const res = await bucketGet("shopping-list", scopeKey);
           const data = res && res.value ? JSON.parse(res.value) : {};
           const selected = data.selected || [];
-          if (!selected.includes(recipe.id)) {
-            await bucketSet("shopping-list", scopeKey, JSON.stringify({ ...data, selected: [...selected, recipe.id] }));
+          const servingsMap = { ...(data.servings || {}) };
+          const alreadyIn = selected.includes(recipe.id);
+          if (pickedServings) servingsMap[recipe.id] = pickedServings;
+          else if (alreadyIn) delete servingsMap[recipe.id];
+          const servingsChanged = servingsMap[recipe.id] !== (data.servings || {})[recipe.id];
+          if (!alreadyIn || servingsChanged) {
+            await bucketSet(
+              "shopping-list",
+              scopeKey,
+              JSON.stringify({ ...data, selected: alreadyIn ? selected : [...selected, recipe.id], servings: servingsMap })
+            );
           }
         } catch (e) {
           // eklenemezse sessizce geç, kullanıcı Alışveriş Listesi'nden elle seçebilir
@@ -1162,6 +1189,14 @@ export default function TarifKutusu() {
   };
 
   const active = recipes.find((r) => r.id === activeId);
+  const baseServings = active ? baseServingsOf(active) : null;
+  const selectedServings =
+    baseServings && servingsPick && servingsPick.id === active.id && servingsPick.base === baseServings ? servingsPick.n : baseServings;
+  const handleChangeServings = (n) => {
+    if (!active || !baseServings) return;
+    const next = Math.min(maxServingsFor(baseServings), Math.max(Math.min(MIN_SERVINGS, baseServings), n));
+    setServingsPick({ id: active.id, base: baseServings, n: next });
+  };
   // Şu an render edilen tam ekran view kapanış animasyonundaysa (closingScreen
   // her zaman geçerli `view` ile aynı olur, bkz. closeActiveScreen), aynı ortak
   // giriş/çıkış sınıfı tüm FULLSCREEN_VIEWS ekranlarında kullanılıyor.
@@ -1384,13 +1419,15 @@ export default function TarifKutusu() {
                 onAddToShopping={() => addRecipeToShoppingList(active)}
                 onSendNotification={() => handleSendNotification(active)}
                 onStartCooking={() => setView("cook")}
+                selectedServings={selectedServings}
+                onChangeServings={handleChangeServings}
               />
             </div>
           )}
 
           {view === "cook" && active && (
             <div className={screenTransitionClass} style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-              <CookMode recipe={active} onFinish={closeActiveScreen} />
+              <CookMode recipe={active} selectedServings={selectedServings} onFinish={closeActiveScreen} />
             </div>
           )}
 
@@ -3067,8 +3104,55 @@ function AddForm({ link, caption, notes, images, category, busy, error, setLink,
   );
 }
 
-function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavorite, onChangeCategory, onEdit, onAddToShopping, onSendNotification, onStartCooking }) {
-  const { t, categoryLabel, difficultyLabel } = useLanguage();
+// "1 porsiyon" / "4 porsiyon" — tekil için ayrı metin (İngilizce'de "1 servings" olmasın).
+function formatServings(t, n) {
+  return n === 1 ? t("servings.one") : t("detail.servings", { n });
+}
+
+// Tarif Detay'daki kompakt porsiyon seçici: [-] 4 [+]. Sadece geçici görünüm/hazırlık
+// tercihini değiştirir; kayıtlı porsiyon değişmez (o Tarifi Düzenle'den değişir).
+function ServingsStepper({ base, value, onChange }) {
+  const { t } = useLanguage();
+  const min = Math.min(MIN_SERVINGS, base);
+  const max = maxServingsFor(base);
+  const btn = (disabled) => ({
+    width: "32px",
+    height: "32px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: "8px",
+    border: `1px solid ${COLORS.line}`,
+    background: COLORS.panel,
+    color: disabled ? COLORS.line : COLORS.forest,
+    cursor: disabled ? "default" : "pointer",
+    padding: 0,
+  });
+  return (
+    <div style={{ marginTop: "16px", padding: "10px 12px", borderRadius: "8px", background: COLORS.paper, border: `1px solid ${COLORS.line}` }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px" }}>
+        <span style={{ fontSize: "13px", fontWeight: 700, color: COLORS.ink }}>{t("servings.label")}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <button onClick={() => onChange(value - 1)} disabled={value <= min} aria-label={t("servings.decrease")} style={btn(value <= min)}>
+            <Minus size={15} />
+          </button>
+          <span style={{ minWidth: "28px", textAlign: "center", fontSize: "16px", fontWeight: 700, color: COLORS.ink }} aria-live="polite">
+            {value}
+          </span>
+          <button onClick={() => onChange(value + 1)} disabled={value >= max} aria-label={t("servings.increase")} style={btn(value >= max)}>
+            <Plus size={15} />
+          </button>
+        </div>
+      </div>
+      {value !== base && (
+        <div style={{ fontSize: "11px", color: COLORS.inkSoft, marginTop: "6px" }}>{t("servings.original", { n: base })}</div>
+      )}
+    </div>
+  );
+}
+
+function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavorite, onChangeCategory, onEdit, onAddToShopping, onSendNotification, onStartCooking, selectedServings, onChangeServings }) {
+  const { t, language, categoryLabel, difficultyLabel } = useLanguage();
   const { title, servings, category, prep_time_minutes, difficulty, ingredients = [], instructions = [], nutrition = {}, assumptions, link, isFavorite, addedBy } = recipe;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(title || "");
@@ -3105,8 +3189,15 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
   const hasValidCategory = CATEGORIES.includes(category);
   const scopeLabel = scopeLabels(recipe, familyNameById, t).join(" + ");
 
+  // Ölçek katsayısı = seçilen / kayıtlı porsiyon. Kayıtlı porsiyon yoksa ölçekleme yok.
+  const baseServings = baseServingsOf(recipe);
+  const factor = baseServings && selectedServings ? selectedServings / baseServings : 1;
+  const decimal = language === "tr" ? "," : ".";
+  const scaledIngredients = ingredients.map((ing) => scaleIngredient(ing, factor, decimal));
+  const someNotScaled = factor !== 1 && scaledIngredients.some((r) => r.status === "unparsed");
+
   const metaParts = [
-    servings ? t("detail.servings", { n: servings }) : null,
+    servings ? formatServings(t, servings) : null,
     hasValidCategory ? categoryLabel(category) : null,
     prep_time_minutes ? t("detail.prepTime", { n: prep_time_minutes }) : null,
     difficulty ? difficultyLabel(difficulty) : null,
@@ -3270,10 +3361,12 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
           </div>
         )}
 
+        {baseServings && <ServingsStepper base={baseServings} value={selectedServings} onChange={onChangeServings} />}
+
         <button
           onClick={onStartCooking}
           style={{
-            marginTop: "16px",
+            marginTop: "12px",
             width: "100%",
             display: "flex",
             alignItems: "center",
@@ -3349,11 +3442,12 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
                 {ingredients.map((ing, i) => (
                   <li key={i} style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "12px", fontSize: "14px" }}>
                     <span style={{ color: COLORS.ink }}>{ing.name}</span>
-                    <span style={{ flexShrink: 0, whiteSpace: "nowrap", color: COLORS.inkSoft }}>{ing.amount}</span>
+                    <span style={{ flexShrink: 0, whiteSpace: "nowrap", color: COLORS.inkSoft }}>{scaledIngredients[i].text}</span>
                   </li>
                 ))}
               </ul>
             )}
+            {someNotScaled && <p style={{ fontSize: "11px", color: COLORS.inkSoft, margin: "12px 0 0" }}>{t("servings.someNotScaled")}</p>}
           </ExpandableSection>
 
           <ExpandableSection title={t("detail.instructions")} badge={instructions.length ? t("detail.stepsCount", { n: instructions.length }) : null}>
@@ -3415,7 +3509,7 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
         </div>
 
         <div className="md-nutrition" style={{ width: "100%" }}>
-          <NutritionLabel nutrition={nutrition} servings={servings} />
+          <NutritionLabel nutrition={nutrition} servings={baseServings} selectedServings={selectedServings} />
         </div>
       </div>
 
@@ -3445,6 +3539,9 @@ function normalizeIngredientName(name) {
 }
 
 function parseAmount(amount) {
+  // Ölçeklenmiş miktarlar ½, 1½ gibi kesir içerebilir ("1½ diş") — toplanabilsin diye sayıya çevir.
+  const g = /^(\d*)\s*([½¼¾⅓⅔⅛])\s*(.*)$/u.exec((amount || "").trim());
+  if (g) return { num: Number(g[1] || 0) + FRACTION_GLYPHS[g[2]], unit: g[3].trim().toLocaleLowerCase("tr") };
   const m = /^([\d.,]+)\s*(.*)$/.exec((amount || "").trim());
   if (!m) return null;
   const num = parseFloat(m[1].replace(",", "."));
@@ -3454,14 +3551,16 @@ function parseAmount(amount) {
 
 // Aynı malzeme farklı tariflerde geçiyorsa (aynı ada normalize edilince) tek satırda
 // birleştiriyor: aynı birimdeki miktarları toplar, farklı/okunaksız miktarları "+" ile yan yana yazar.
-function mergeIngredients(chosenRecipes) {
+function mergeIngredients(chosenRecipes, servingsMap = {}, decimal = ".") {
   const map = new Map();
   chosenRecipes.forEach((r) => {
+    const base = baseServingsOf(r);
+    const factor = base && servingsMap[r.id] ? servingsMap[r.id] / base : 1;
     (r.ingredients || []).forEach((ing) => {
       const key = normalizeIngredientName(ing.name);
       if (!key) return;
       if (!map.has(key)) map.set(key, { name: ing.name, parts: [] });
-      map.get(key).parts.push(ing.amount || "");
+      map.get(key).parts.push(factor === 1 ? ing.amount || "" : scaleIngredient(ing, factor, decimal).text);
     });
   });
   return Array.from(map.entries()).map(([key, { name, parts }]) => {
@@ -3515,10 +3614,11 @@ function ContextTabs({ context, setContext, isPlus, families }) {
 }
 
 function ShoppingList({ recipes, isPlus, families, initialContext }) {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const [context, setContext] = useState(initialContext || PERSONAL);
   const [selected, setSelected] = useState([]);
   const [checked, setChecked] = useState({});
+  const [servingsMap, setServingsMap] = useState({}); // { recipeId: seçilen porsiyon } — sadece liste kaydında
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
@@ -3531,6 +3631,7 @@ function ShoppingList({ recipes, isPlus, families, initialContext }) {
           const data = res && res.value ? JSON.parse(res.value) : {};
           setSelected(data.selected || []);
           setChecked(data.checked || {});
+          setServingsMap(data.servings || {});
         }
       } catch (e) {
         // henüz alışveriş listesi yok
@@ -3544,16 +3645,17 @@ function ShoppingList({ recipes, isPlus, families, initialContext }) {
   }, [context]);
 
   const persist = useCallback(
-    async (nextSelected, nextChecked) => {
+    async (nextSelected, nextChecked, nextServings = servingsMap) => {
       setSelected(nextSelected);
       setChecked(nextChecked);
+      setServingsMap(nextServings);
       try {
-        await bucketSet("shopping-list", context, JSON.stringify({ selected: nextSelected, checked: nextChecked }));
+        await bucketSet("shopping-list", context, JSON.stringify({ selected: nextSelected, checked: nextChecked, servings: nextServings }));
       } catch (e) {
         // yazma başarısız olsa da yerel görünüm güncel kalsın
       }
     },
-    [context]
+    [context, servingsMap]
   );
 
   // Bir tarif birden fazla yere (kişisel + aile) kaydedilmiş olabilir — hangi
@@ -3561,8 +3663,10 @@ function ShoppingList({ recipes, isPlus, families, initialContext }) {
   const contextRecipes = recipes.filter((r) => (r._scopes || [r._scope]).includes(context));
 
   const toggleSelect = (id) => {
-    const next = selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id];
-    persist(next, checked);
+    const isRemoving = selected.includes(id);
+    const next = isRemoving ? selected.filter((x) => x !== id) : [...selected, id];
+    const { [id]: _dropped, ...restServings } = servingsMap;
+    persist(next, checked, isRemoving ? restServings : servingsMap);
   };
 
   const toggleChecked = (key) => {
@@ -3572,7 +3676,7 @@ function ShoppingList({ recipes, isPlus, families, initialContext }) {
   const clearChecked = () => persist(selected, {});
 
   const chosenRecipes = contextRecipes.filter((r) => selected.includes(r.id));
-  const mergedIngredients = mergeIngredients(chosenRecipes);
+  const mergedIngredients = mergeIngredients(chosenRecipes, servingsMap, language === "tr" ? "," : ".");
   const checkedCount = mergedIngredients.filter((i) => checked[i.key]).length;
 
   return (
@@ -3616,6 +3720,7 @@ function ShoppingList({ recipes, isPlus, families, initialContext }) {
                 >
                   {isSel && <Check size={13} />}
                   {r.title || t("common.untitledRecipe")}
+                  {isSel && servingsMap[r.id] ? ` · ${formatServings(t, servingsMap[r.id])}` : ""}
                 </button>
               );
             })}
@@ -3722,9 +3827,14 @@ function ExpandableSection({ title, badge, defaultOpen = false, children }) {
 // sidebar gizleme, geri butonu App'teki ortak closeActiveScreen()'den geliyor
 // — burada tekrar yazılmadı). Buradaki "stage" (malzemeler → adım N → tamamlandı)
 // tamamen bu component'e özel, yerel bir state; App'in `view`'ıyla ilgisi yok.
-function CookMode({ recipe, onFinish }) {
-  const { t } = useLanguage();
+function CookMode({ recipe, selectedServings, onFinish }) {
+  const { t, language } = useLanguage();
   const ingredients = recipe.ingredients || [];
+  // Tarif Detay'da seçilen porsiyon buraya taşınıyor (tekrar sorulmuyor). Sadece
+  // malzeme miktarları ölçeklenir; yapılış adımları (süre/sıcaklık dahil) aynen kalır.
+  const baseServings = baseServingsOf(recipe);
+  const factor = baseServings && selectedServings ? selectedServings / baseServings : 1;
+  const decimal = language === "tr" ? "," : ".";
   const steps = useMemo(() => (recipe.instructions || []).filter((s) => typeof s === "string" && s.trim()), [recipe.instructions]);
   const [stage, setStage] = useState("ingredients"); // "ingredients" | 0..steps.length-1 | "done"
 
@@ -3830,7 +3940,12 @@ function CookMode({ recipe, onFinish }) {
       <div key={String(stage)} className={stage === "done" ? "cook-done-enter" : "cook-stage-enter"} style={{ flex: 1 }}>
         {stage === "ingredients" && (
           <div>
-            <h2 style={{ fontFamily: SERIF, fontSize: "22px", color: COLORS.ink, margin: "0 0 18px" }}>{recipe.title || t("common.recipeWord")}</h2>
+            <h2 style={{ fontFamily: SERIF, fontSize: "22px", color: COLORS.ink, margin: baseServings ? "0 0 6px" : "0 0 18px" }}>{recipe.title || t("common.recipeWord")}</h2>
+            {baseServings && (
+              <p style={{ fontSize: "13px", fontWeight: 600, color: COLORS.mustardDark, margin: "0 0 18px" }}>
+                {t("servings.forCount", { count: formatServings(t, selectedServings || baseServings) })}
+              </p>
+            )}
             {ingredients.length === 0 ? (
               <p style={{ fontSize: "16px", color: COLORS.inkSoft }}>{t("detail.noIngredients")}</p>
             ) : (
@@ -3849,7 +3964,7 @@ function CookMode({ recipe, onFinish }) {
                     }}
                   >
                     <span>{ing.name}</span>
-                    <span style={{ color: COLORS.inkSoft, flexShrink: 0 }}>{ing.amount}</span>
+                    <span style={{ color: COLORS.inkSoft, flexShrink: 0 }}>{scaleIngredient(ing, factor, decimal).text}</span>
                   </li>
                 ))}
               </ul>
@@ -3916,13 +4031,19 @@ function CookMode({ recipe, onFinish }) {
   );
 }
 
-function NutritionLabel({ nutrition, servings }) {
+// Besin değerleri tarifin TAMAMI için toplam olarak saklanıyor (bkz. shared/recipeExtraction.js).
+// Seçilen porsiyon kayıtlıdan farklıysa toplam orantıyla ölçeklenir ve "hazırladığın miktar"
+// olarak gösterilir; 1 porsiyonluk değer hiç değişmez.
+function NutritionLabel({ nutrition, servings, selectedServings }) {
   const { t } = useLanguage();
   const [open, setOpen] = useState(false);
-  const cal = nutrition.calories ?? "—";
-  const protein = nutrition.protein_g ?? "—";
-  const carbs = nutrition.carbs_g ?? "—";
-  const fat = nutrition.fat_g ?? "—";
+  const factor = servings && selectedServings ? selectedServings / servings : 1;
+  const scaled = scaleNutrition(nutrition, factor);
+  const perServing = factor !== 1 ? perServingNutrition(nutrition, servings) : null;
+  const cal = scaled.calories ?? "—";
+  const protein = scaled.protein_g ?? "—";
+  const carbs = scaled.carbs_g ?? "—";
+  const fat = scaled.fat_g ?? "—";
 
   return (
     <div style={{ background: "#FFFFFF", border: `3px solid ${COLORS.ink}`, borderRadius: "2px", padding: "12px", fontFamily: LABELSANS, boxShadow: CARD_SHADOW }}>
@@ -3967,12 +4088,20 @@ function NutritionLabel({ nutrition, servings }) {
       <div style={{ display: "grid", gridTemplateRows: open ? "1fr" : "0fr", transition: "grid-template-rows 280ms ease" }}>
         <div style={{ overflow: "hidden" }}>
           <div style={{ fontSize: "11px", padding: "6px 0 4px", borderBottom: `1px solid ${COLORS.ink}`, color: COLORS.ink }}>
-            {t("nutrition.wholeRecipe")} {servings ? t("nutrition.servingsNote", { servings }) : ""}
+            {factor !== 1
+              ? `${t("nutrition.preparedTotal")} (${formatServings(t, selectedServings)})`
+              : `${t("nutrition.wholeRecipe")} ${servings ? t("nutrition.servingsNote", { servings }) : ""}`}
           </div>
 
           <NutritionRow label={t("nutrition.protein")} value={protein} unit="g" />
           <NutritionRow label={t("nutrition.carbs")} value={carbs} unit="g" />
           <NutritionRow label={t("nutrition.fat")} value={fat} unit="g" last />
+
+          {perServing && (
+            <div style={{ fontSize: "11px", paddingTop: "8px", marginTop: "4px", borderTop: `1px solid ${COLORS.ink}`, color: COLORS.ink }}>
+              <strong>{t("nutrition.perServing")}:</strong> {perServing.calories ?? "—"} {t("pantry.kcal")} · {perServing.protein_g ?? "—"} g {t("nutrition.protein")} · {perServing.carbs_g ?? "—"} g {t("nutrition.carbs")} · {perServing.fat_g ?? "—"} g {t("nutrition.fat")}
+            </div>
+          )}
 
           <div style={{ fontSize: "10px", paddingTop: "8px", marginTop: "4px", color: COLORS.inkSoft, lineHeight: 1.4 }}>
             {t("nutrition.disclaimer")}
@@ -4145,7 +4274,7 @@ function RecipeEditor({ heading, initial, isNew, saveTargets, setSaveTargets, is
             <label style={labelStyle}>{t("editor.servingsLabel")}</label>
             <input
               type="number"
-              min="0"
+              min="1"
               value={servings}
               onChange={(e) => setServings(e.target.value)}
               placeholder="4"
