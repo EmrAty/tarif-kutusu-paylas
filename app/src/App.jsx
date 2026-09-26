@@ -3837,6 +3837,17 @@ function CookMode({ recipe, selectedServings, onFinish }) {
   const decimal = language === "tr" ? "," : ".";
   const steps = useMemo(() => (recipe.instructions || []).filter((s) => typeof s === "string" && s.trim()), [recipe.instructions]);
   const [stage, setStage] = useState("ingredients"); // "ingredients" | 0..steps.length-1 | "done"
+  // "Hazırlandı" işaretleri: sadece bu pişirme oturumunun React state'i (index bazlı; oturum
+  // boyunca tarif değişmediği için sıra sabit). Hiçbir yere yazılmaz; CookMode kapanıp
+  // yeniden açılınca (yeni oturum) boş başlar.
+  const [checkedIngredients, setCheckedIngredients] = useState(() => new Set());
+  const toggleIngredient = (i) =>
+    setCheckedIngredients((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
+    });
 
   const stepIndex = typeof stage === "number" ? stage : null;
   const totalSteps = steps.length;
@@ -3950,23 +3961,53 @@ function CookMode({ recipe, selectedServings, onFinish }) {
               <p style={{ fontSize: "16px", color: COLORS.inkSoft }}>{t("detail.noIngredients")}</p>
             ) : (
               <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "12px" }}>
-                {ingredients.map((ing, i) => (
-                  <li
-                    key={i}
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      gap: "12px",
-                      fontSize: "17px",
-                      color: COLORS.ink,
-                      borderBottom: `1px solid ${COLORS.line}`,
-                      paddingBottom: "10px",
-                    }}
-                  >
-                    <span>{ing.name}</span>
-                    <span style={{ color: COLORS.inkSoft, flexShrink: 0 }}>{scaleIngredient(ing, factor, decimal).text}</span>
-                  </li>
-                ))}
+                {ingredients.map((ing, i) => {
+                  const done = checkedIngredients.has(i);
+                  return (
+                    <li key={i} style={{ borderBottom: `1px solid ${COLORS.line}` }}>
+                      <button
+                        type="button"
+                        onClick={() => toggleIngredient(i)}
+                        aria-pressed={done}
+                        style={{
+                          width: "100%",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "12px",
+                          padding: "10px 0",
+                          background: "transparent",
+                          border: "none",
+                          cursor: "pointer",
+                          textAlign: "left",
+                          fontSize: "17px",
+                          color: COLORS.ink,
+                          opacity: done ? 0.5 : 1,
+                          textDecoration: done ? "line-through" : "none",
+                          transition: "opacity 150ms ease",
+                        }}
+                      >
+                        <span
+                          aria-hidden="true"
+                          style={{
+                            flexShrink: 0,
+                            width: "20px",
+                            height: "20px",
+                            borderRadius: "9999px",
+                            border: `1.5px solid ${done ? COLORS.forest : COLORS.line}`,
+                            background: done ? COLORS.forest : "transparent",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                          }}
+                        >
+                          {done && <Check size={12} color="#F3EFE6" />}
+                        </span>
+                        <span style={{ flex: 1 }}>{ing.name}</span>
+                        <span style={{ color: COLORS.inkSoft, flexShrink: 0 }}>{scaleIngredient(ing, factor, decimal).text}</span>
+                      </button>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </div>
