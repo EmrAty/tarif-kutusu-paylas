@@ -127,7 +127,7 @@ export default function SharePanel() {
     <div style={{ background: COLORS.paper, padding: "14px 18px 24px", fontFamily: BODY, color: COLORS.ink }}>
       <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "14px" }}>
         <ChefHat size={20} color={COLORS.forest} />
-        <h1 style={{ fontFamily: SERIF, fontSize: "20px", color: COLORS.forest, margin: 0 }}>Tarif Kutusu</h1>
+        <h1 style={{ fontFamily: SERIF, fontSize: "20px", color: COLORS.forest, margin: 0 }}>{t("appName")}</h1>
       </div>
       {children}
       <style>{SPIN_CSS}</style>

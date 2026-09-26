@@ -1,9 +1,9 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">Tarif Kutusu</string>
-    <string name="title_activity_main">Tarif Kutusu</string>
+    <string name="app_name">Recipe Box</string>
+    <string name="title_activity_main">Recipe Box</string>
     <string name="package_name">com.tarifkutusu.app</string>
     <string name="custom_url_scheme">com.tarifkutusu.app</string>
-    <string name="share_offline">Bağlantı kurulamadı. İnternetini kontrol edip tekrar paylaş.</string>
-    <string name="share_close">Kapat</string>
+    <string name="share_offline">Could not connect. Check your internet connection and share again.</string>
+    <string name="share_close">Close</string>
 </resources>

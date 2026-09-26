@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useMemo } from "react";
+import React, { createContext, useContext, useState, useCallback, useMemo, useEffect } from "react";
 
 // Merkezi dil/çeviri sistemi. Tek kaynak burası: App.jsx ve SharePanel.jsx
 // hiçbir yerde kendi language state'ini tutmuyor, hepsi <LanguageProvider>
@@ -80,6 +80,7 @@ const translations = {
 
     // İlk isim sorma ekranı
     "welcome.title": "Merhaba!",
+    "appName": "Tarif Kutusu",
     "welcome.body": "Ailenle paylaştığın bu Tarif Kutusu'nda eklediğin tarifler senin isminle görünsün. Bu, sadece bu cihazda bir kere sorulur.",
     "welcome.placeholder": "Adın",
     "welcome.continue": "Devam Et",
@@ -391,7 +392,8 @@ const translations = {
     "update.button": "Update Now",
 
     "welcome.title": "Hi there!",
-    "welcome.body": "Recipes you add to this shared Tarif Kutusu should show up under your name. You'll only be asked this once on this device.",
+    "appName": "Recipe Box",
+    "welcome.body": "Recipes you add to this shared Recipe Box should show up under your name. You'll only be asked this once on this device.",
     "welcome.placeholder": "Your name",
     "welcome.continue": "Continue",
 
@@ -626,7 +628,7 @@ const translations = {
     "account.createAccount": "Create Account",
     "account.loginHint": "You're signing in to an existing account - recipes from the guest account won't move over automatically.",
     "account.signOut": "Sign Out",
-    "account.legacyTitle": "Old Tarif Kutusu Data",
+    "account.legacyTitle": "Old Recipe Box Data",
     "account.legacyBody": "If there are old shared recipes from before family accounts existed, you can import them into your personal list here while it's empty.",
     "account.importToPersonal": "Import to My List",
     "account.linkFailed": "Couldn't link, want to try again?",
@@ -638,7 +640,7 @@ const translations = {
 
     "sharePanel.noLinkFound": "I couldn't find a TikTok, Instagram, or YouTube link in what was shared.",
     "sharePanel.preparing": "Preparing…",
-    "sharePanel.needLogin": "To save this recipe, first open Tarif Kutusu and sign in (or continue as a guest).",
+    "sharePanel.needLogin": "To save this recipe, first open Recipe Box and sign in (or continue as a guest).",
     "sharePanel.openInApp": "Open in App",
     "sharePanel.recipePreparing": "Preparing recipe",
     "sharePanel.captionLabel": "Video description",
@@ -684,6 +686,11 @@ const LanguageContext = createContext(null);
 
 export function LanguageProvider({ children }) {
   const [language, setLanguageState] = useState(() => readStoredLanguage() || DEFAULT_LANGUAGE);
+
+  // Tarayıcı sekme başlığı da seçili dile göre marka adını göstersin (tek dil state'i).
+  useEffect(() => {
+    document.title = (translations[language] || translations[DEFAULT_LANGUAGE]).appName;
+  }, [language]);
 
   const setLanguage = useCallback((code) => {
     if (!STORAGE_LANGUAGES.has(code)) return;

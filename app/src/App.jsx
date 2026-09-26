@@ -1720,7 +1720,7 @@ function Header({ view, onBack, authUser, onSignOut, onOpenMenu }) {
                 margin: 0,
               }}
             >
-              Tarif Kutusu
+              {t("appName")}
             </h1>
             <p
               style={{
@@ -1789,7 +1789,7 @@ function SideMenu({ open, onClose, isPlus, onNavigate }) {
             <div style={{ padding: "8px", borderRadius: "9999px", background: COLORS.mustard }}>
               <ChefHat size={16} color={COLORS.forestDark} />
             </div>
-            <span style={{ fontFamily: SERIF, fontSize: "18px", color: "#F8F5EC" }}>Tarif Kutusu</span>
+            <span style={{ fontFamily: SERIF, fontSize: "18px", color: "#F8F5EC" }}>{t("appName")}</span>
             {isPlus && (
               <span
                 style={{
@@ -2015,7 +2015,7 @@ function AuthGate({ onGuest }) {
           <ChefHat size={22} color={COLORS.forestDark} />
         </div>
         <h1 style={{ fontFamily: SERIF, fontSize: "22px", color: COLORS.ink, margin: "0 0 6px" }}>
-          Tarif Kutusu
+          {t("appName")}
         </h1>
         <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: "0 0 22px" }}>
           {mode === "login" ? t("auth.subtitleLogin") : t("auth.subtitleSignup")}
@@ -5362,7 +5362,7 @@ function PlusView({ isPlus, onToggle }) {
       >
         <Crown size={24} color={COLORS.forestDark} />
       </div>
-      <h2 style={{ fontFamily: SERIF, fontSize: "22px", color: COLORS.ink, margin: "0 0 8px" }}>Tarif Kutusu Plus</h2>
+      <h2 style={{ fontFamily: SERIF, fontSize: "22px", color: COLORS.ink, margin: "0 0 8px" }}>{t("appName")} Plus</h2>
       <ul
         style={{
           listStyle: "none",
