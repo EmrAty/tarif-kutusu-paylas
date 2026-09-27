@@ -234,6 +234,8 @@ const translations = {
 
     // Pişirmeye Başla (CookMode)
     "cook.beforeStart": "Hazırlanmadan Önce",
+    "cook.servingsQuestion": "Kaç porsiyon hazırlayacaksın?",
+    "cook.servingsUnknown": "Bu tarifte porsiyon bilgisi yok, bu yüzden miktarlar tarifte yazdığı gibi gösterilecek.",
     "cook.stepCounter": "Adım {current} / {total}",
     "cook.instructionsFallback": "Yapılış",
     "cook.congrats": "Tebrikler!",
@@ -545,6 +547,8 @@ const translations = {
     "shopping.clearChecks": "Clear checks",
 
     "cook.beforeStart": "Before You Start",
+    "cook.servingsQuestion": "How many servings are you making?",
+    "cook.servingsUnknown": "This recipe doesn't say how many servings it makes, so amounts are shown as written.",
     "cook.stepCounter": "Step {current} / {total}",
     "cook.instructionsFallback": "Instructions",
     "cook.congrats": "Well done!",

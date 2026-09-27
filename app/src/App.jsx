@@ -500,10 +500,6 @@ export default function TarifKutusu() {
   // "Alışveriş Listesi" özel durum: ana ekrandan mı (→ geri: list) yoksa bir
   // tarif detayından "Alışveriş Listesine Ekle" ile mi (→ geri: o detay) açıldı.
   const [shoppingReturnView, setShoppingReturnView] = useState("list");
-  // Tarif Detay'da seçilen GEÇİCİ porsiyon (bkz. servings.js). Sadece bellekte durur;
-  // recipe.servings'e / Redis'e hiç yazılmaz. { id, base, n } — `base` kayıtlı porsiyon,
-  // tarif düzenlenip porsiyonu değişirse eski seçim otomatik geçersiz sayılır.
-  const [servingsPick, setServingsPick] = useState(null);
 
   useEffect(() => {
     // Mobilde ana bölümler (detay/Yeni Tarif Çıkar/Tarifini Kendin Oluştur/
@@ -571,14 +567,6 @@ export default function TarifKutusu() {
     return () => clearTimeout(timer);
   }, [closingScreen]);
 
-  // Geçici porsiyon seçimi tarife bağlı: başka tarife geçilince ya da liste
-  // ekranına dönülünce sıfırlanır (tekrar açınca kayıtlı porsiyonla başlar).
-  useEffect(() => {
-    setServingsPick(null);
-  }, [activeId]);
-  useEffect(() => {
-    if (view !== "detail" && view !== "cook" && view !== "edit" && view !== "shopping") setServingsPick(null);
-  }, [view]);
 
   // ModalSheet (Aileler/Plus/Ayarlar/Hesabım) kapanışı: X butonu, arka plana
   // tıklama ve Android backButton'ın hepsi bunu çağırıyor. Aynı closeActiveScreen
@@ -1159,10 +1147,9 @@ export default function TarifKutusu() {
 
   const [shoppingInitialContext, setShoppingInitialContext] = useState(PERSONAL);
   const addRecipeToShoppingList = async (recipe) => {
-    // Detayda porsiyon değiştirildiyse listeye o porsiyona göre ölçeklenmiş miktarlar
-    // girsin diye seçilen porsiyon liste kaydına (tarife değil) `servings[recipeId]` olarak yazılır.
-    const pickedServings =
-      active && active.id === recipe.id && baseServings && selectedServings && selectedServings !== baseServings ? selectedServings : null;
+    // Porsiyon artık yalnızca Pişirme modunda seçiliyor; Tarif Detay'dan eklenen tarif
+    // kayıtlı miktarlarıyla girer. Listede daha önce bu tarif için kalmış bir porsiyon
+    // kaydı varsa (eski davranıştan) kaldırılır ki liste de tarifteki miktarları göstersin.
     const scopes = recipe._scopes && recipe._scopes.length ? recipe._scopes : [PERSONAL];
     await Promise.all(
       scopes.map(async (scopeKey) => {
@@ -1172,8 +1159,7 @@ export default function TarifKutusu() {
           const selected = data.selected || [];
           const servingsMap = { ...(data.servings || {}) };
           const alreadyIn = selected.includes(recipe.id);
-          if (pickedServings) servingsMap[recipe.id] = pickedServings;
-          else if (alreadyIn) delete servingsMap[recipe.id];
+          if (alreadyIn) delete servingsMap[recipe.id];
           const servingsChanged = servingsMap[recipe.id] !== (data.servings || {})[recipe.id];
           if (!alreadyIn || servingsChanged) {
             await bucketSet(
@@ -1193,14 +1179,6 @@ export default function TarifKutusu() {
   };
 
   const active = recipes.find((r) => r.id === activeId);
-  const baseServings = active ? baseServingsOf(active) : null;
-  const selectedServings =
-    baseServings && servingsPick && servingsPick.id === active.id && servingsPick.base === baseServings ? servingsPick.n : baseServings;
-  const handleChangeServings = (n) => {
-    if (!active || !baseServings) return;
-    const next = Math.min(maxServingsFor(baseServings), Math.max(Math.min(MIN_SERVINGS, baseServings), n));
-    setServingsPick({ id: active.id, base: baseServings, n: next });
-  };
   // Şu an render edilen tam ekran view kapanış animasyonundaysa (closingScreen
   // her zaman geçerli `view` ile aynı olur, bkz. closeActiveScreen), aynı ortak
   // giriş/çıkış sınıfı tüm FULLSCREEN_VIEWS ekranlarında kullanılıyor.
@@ -1423,15 +1401,13 @@ export default function TarifKutusu() {
                 onAddToShopping={() => addRecipeToShoppingList(active)}
                 onSendNotification={() => handleSendNotification(active)}
                 onStartCooking={() => setView("cook")}
-                selectedServings={selectedServings}
-                onChangeServings={handleChangeServings}
               />
             </div>
           )}
 
           {view === "cook" && active && (
             <div className={screenTransitionClass} style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-              <CookMode recipe={active} selectedServings={selectedServings} onFinish={closeActiveScreen} />
+              <CookMode recipe={active} onFinish={closeActiveScreen} />
             </div>
           )}
 
@@ -3118,19 +3094,19 @@ function formatServings(t, n) {
 // Sadece gösterim: eski kayıtlara yazılmaz. "kaynak"/"kullanici" düz, "bilinmiyor"da sayı yok.
 const isEstimatedServings = (recipe) => !!recipe && (recipe.servings_basis === "hesap" || recipe.servings_basis == null);
 
-// Tarif Detay'daki kompakt porsiyon seçici: [-] 4 [+]. Sadece geçici görünüm/hazırlık
-// tercihini değiştirir; kayıtlı porsiyon değişmez (o Tarifi Düzenle'den değişir).
+// Pişirme modunun ilk ekranındaki porsiyon seçici: − 4 +. Seçim yalnızca o pişirme
+// oturumunda (CookMode state'i) yaşar; kayıtlı porsiyon değişmez (o Tarifi Düzenle'den değişir).
 function ServingsStepper({ base, value, onChange, estimated }) {
   const { t } = useLanguage();
   const min = Math.min(MIN_SERVINGS, base);
   const max = maxServingsFor(base);
   const btn = (disabled) => ({
-    width: "32px",
-    height: "32px",
+    width: "52px",
+    height: "52px",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: "8px",
+    borderRadius: "9999px",
     border: `1px solid ${COLORS.line}`,
     background: COLORS.panel,
     color: disabled ? COLORS.line : COLORS.forest,
@@ -3138,29 +3114,26 @@ function ServingsStepper({ base, value, onChange, estimated }) {
     padding: 0,
   });
   return (
-    <div style={{ marginTop: "16px", padding: "10px 12px", borderRadius: "8px", background: COLORS.paper, border: `1px solid ${COLORS.line}` }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px" }}>
-        <span style={{ fontSize: "13px", fontWeight: 700, color: COLORS.ink }}>{t("servings.label")}</span>
-        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <button onClick={() => onChange(value - 1)} disabled={value <= min} aria-label={t("servings.decrease")} style={btn(value <= min)}>
-            <Minus size={15} />
-          </button>
-          <span style={{ minWidth: "28px", textAlign: "center", fontSize: "16px", fontWeight: 700, color: COLORS.ink }} aria-live="polite">
-            {value}
-          </span>
-          <button onClick={() => onChange(value + 1)} disabled={value >= max} aria-label={t("servings.increase")} style={btn(value >= max)}>
-            <Plus size={15} />
-          </button>
-        </div>
+    <div style={{ textAlign: "center" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "28px" }}>
+        <button onClick={() => onChange(value - 1)} disabled={value <= min} aria-label={t("servings.decrease")} style={btn(value <= min)}>
+          <Minus size={22} />
+        </button>
+        <span style={{ minWidth: "56px", textAlign: "center", fontFamily: SERIF, fontSize: "44px", fontWeight: 700, color: COLORS.ink }} aria-live="polite">
+          {value}
+        </span>
+        <button onClick={() => onChange(value + 1)} disabled={value >= max} aria-label={t("servings.increase")} style={btn(value >= max)}>
+          <Plus size={22} />
+        </button>
       </div>
-      {value !== base && (
-        <div style={{ fontSize: "11px", color: COLORS.inkSoft, marginTop: "6px" }}>{t(estimated ? "servings.originalEstimated" : "servings.original", { n: base })}</div>
-      )}
+      <div style={{ fontSize: "12px", color: COLORS.inkSoft, marginTop: "12px", minHeight: "16px" }}>
+        {value !== base ? t(estimated ? "servings.originalEstimated" : "servings.original", { n: base }) : ""}
+      </div>
     </div>
   );
 }
 
-function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavorite, onChangeCategory, onEdit, onAddToShopping, onSendNotification, onStartCooking, selectedServings, onChangeServings }) {
+function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavorite, onChangeCategory, onEdit, onAddToShopping, onSendNotification, onStartCooking }) {
   const { t, language, categoryLabel, difficultyLabel } = useLanguage();
   const { title, servings, category, prep_time_minutes, difficulty, ingredients = [], instructions = [], nutrition = {}, assumptions, servings_note, link, isFavorite, addedBy } = recipe;
   const servingsEstimated = isEstimatedServings(recipe);
@@ -3199,12 +3172,8 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
   const hasValidCategory = CATEGORIES.includes(category);
   const scopeLabel = scopeLabels(recipe, familyNameById, t).join(" + ");
 
-  // Ölçek katsayısı = seçilen / kayıtlı porsiyon. Kayıtlı porsiyon yoksa ölçekleme yok.
+  // Tarif Detay kayıtlı tarifi gösterir; porsiyon seçimi ve ölçekleme Pişirme modunda.
   const baseServings = baseServingsOf(recipe);
-  const factor = baseServings && selectedServings ? selectedServings / baseServings : 1;
-  const decimal = language === "tr" ? "," : ".";
-  const scaledIngredients = ingredients.map((ing) => scaleIngredient(ing, factor, decimal));
-  const someNotScaled = factor !== 1 && scaledIngredients.some((r) => r.status === "unparsed");
 
   const metaParts = [
     servings ? (servingsEstimated ? t("detail.servingsEstimated", { n: servings }) : formatServings(t, servings)) : null,
@@ -3371,7 +3340,6 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
           </div>
         )}
 
-        {baseServings && <ServingsStepper base={baseServings} value={selectedServings} onChange={onChangeServings} estimated={servingsEstimated} />}
 
         <button
           onClick={onStartCooking}
@@ -3452,17 +3420,11 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
                 {ingredients.map((ing, i) => (
                   <li key={i} style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "12px", fontSize: "14px" }}>
                     <span style={{ color: COLORS.ink }}>{ing.name}</span>
-                    <span style={{ flexShrink: 0, whiteSpace: "nowrap", color: COLORS.inkSoft }}>
-                      {scaledIngredients[i].text}
-                      {scaledIngredients[i].rounded && (
-                        <RoundedBadge name={ing.name} pairs={[{ exact: scaledIngredients[i].exactText, shown: scaledIngredients[i].text }]} />
-                      )}
-                    </span>
+                    <span style={{ flexShrink: 0, whiteSpace: "nowrap", color: COLORS.inkSoft }}>{ing.amount}</span>
                   </li>
                 ))}
               </ul>
             )}
-            {someNotScaled && <p style={{ fontSize: "11px", color: COLORS.inkSoft, margin: "12px 0 0" }}>{t("servings.someNotScaled")}</p>}
           </ExpandableSection>
 
           <ExpandableSection title={t("detail.instructions")} badge={instructions.length ? t("detail.stepsCount", { n: instructions.length }) : null}>
@@ -3524,7 +3486,7 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
         </div>
 
         <div className="md-nutrition" style={{ width: "100%" }}>
-          <NutritionLabel nutrition={nutrition} servings={baseServings} selectedServings={selectedServings} estimated={servingsEstimated} />
+          <NutritionLabel nutrition={nutrition} servings={baseServings} estimated={servingsEstimated} />
         </div>
       </div>
 
@@ -4007,20 +3969,27 @@ function ExpandableSection({ title, badge, defaultOpen = false, children }) {
 // sidebar gizleme, geri butonu App'teki ortak closeActiveScreen()'den geliyor
 // — burada tekrar yazılmadı). Buradaki "stage" (malzemeler → adım N → tamamlandı)
 // tamamen bu component'e özel, yerel bir state; App'in `view`'ıyla ilgisi yok.
-function CookMode({ recipe, selectedServings, onFinish }) {
+function CookMode({ recipe, onFinish }) {
   const { t, language } = useLanguage();
   const ingredients = recipe.ingredients || [];
-  // Tarif Detay'da seçilen porsiyon buraya taşınıyor (tekrar sorulmuyor). Sadece
-  // malzeme miktarları ölçeklenir; yapılış adımları (süre/sıcaklık dahil) aynen kalır.
+  // Porsiyon bu oturumun ilk adımında seçilir ve yalnızca bu bileşenin state'inde yaşar
+  // (Redis/tarif/localStorage'a yazılmaz); Pişirme modu her açılışta yeniden mount
+  // olduğu için tekrar kayıtlı porsiyonla başlar. Sadece malzeme miktarları ölçeklenir;
+  // yapılış adımları (süre/sıcaklık dahil) aynen kalır. Kayıtlı porsiyon bilinmiyorsa
+  // oran kurulamaz: seçici gösterilmez, miktarlar tarifteki gibi kalır.
   const baseServings = baseServingsOf(recipe);
+  const [selectedServings, setSelectedServings] = useState(baseServings);
   const factor = baseServings && selectedServings ? selectedServings / baseServings : 1;
   const decimal = language === "tr" ? "," : ".";
   const steps = useMemo(() => (recipe.instructions || []).filter((s) => typeof s === "string" && s.trim()), [recipe.instructions]);
-  const [stage, setStage] = useState("ingredients"); // "ingredients" | 0..steps.length-1 | "done"
+  const [stage, setStage] = useState("servings"); // "servings" | "ingredients" | 0..steps.length-1 | "done"
   // "Hazırlandı" işaretleri: sadece bu pişirme oturumunun React state'i (index bazlı; oturum
   // boyunca tarif değişmediği için sıra sabit). Hiçbir yere yazılmaz; CookMode kapanıp
   // yeniden açılınca (yeni oturum) boş başlar.
   const [checkedIngredients, setCheckedIngredients] = useState(() => new Set());
+  // İşaretler hangi porsiyonun miktarlarına göre yapıldı: porsiyon değiştirilip "Devam Et"
+  // denirse (200 g işaretliyken 400 g olması yanıltıcı olur) işaretler sıfırlanır.
+  const checkedForServingsRef = useRef(selectedServings);
   const toggleIngredient = (i) =>
     setCheckedIngredients((prev) => {
       const next = new Set(prev);
@@ -4034,17 +4003,31 @@ function CookMode({ recipe, selectedServings, onFinish }) {
   const isLastStep = stepIndex !== null && stepIndex === totalSteps - 1;
 
   const goNext = () => {
-    if (stage === "ingredients") {
+    if (stage === "servings") {
+      if (checkedForServingsRef.current !== selectedServings) {
+        checkedForServingsRef.current = selectedServings;
+        setCheckedIngredients(new Set());
+      }
+      setStage("ingredients");
+    } else if (stage === "ingredients") {
       setStage(totalSteps > 0 ? 0 : "done");
     } else if (stepIndex !== null) {
       setStage(isLastStep ? "done" : stepIndex + 1);
     }
   };
   const goPrev = () => {
-    if (stepIndex !== null) {
+    if (stage === "ingredients") {
+      setStage("servings");
+    } else if (stepIndex !== null) {
       setStage(stepIndex === 0 ? "ingredients" : stepIndex - 1);
     }
   };
+  const changeServings = (n) => {
+    if (!baseServings) return;
+    setSelectedServings(Math.min(maxServingsFor(baseServings), Math.max(Math.min(MIN_SERVINGS, baseServings), n)));
+  };
+  const scaledIngredients = ingredients.map((ing) => scaleIngredient(ing, factor, decimal));
+  const someNotScaled = factor !== 1 && scaledIngredients.some((r) => r.status === "unparsed");
 
   const bigButtonStyle = {
     flex: 1,
@@ -4110,7 +4093,7 @@ function CookMode({ recipe, selectedServings, onFinish }) {
       {stage !== "done" && (
         <div style={{ marginBottom: "24px" }}>
           <div style={{ fontSize: "13px", fontWeight: 700, color: COLORS.mustardDark, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "10px" }}>
-            {stage === "ingredients" ? t("cook.beforeStart") : totalSteps > 0 ? t("cook.stepCounter", { current: stepIndex + 1, total: totalSteps }) : t("cook.instructionsFallback")}
+            {stage === "servings" ? t("servings.label") : stage === "ingredients" ? t("cook.beforeStart") : totalSteps > 0 ? t("cook.stepCounter", { current: stepIndex + 1, total: totalSteps }) : t("cook.instructionsFallback")}
           </div>
           {stepIndex !== null && totalSteps > 0 && (
             <div style={{ height: "6px", borderRadius: "9999px", background: COLORS.line, overflow: "hidden" }}>
@@ -4129,6 +4112,17 @@ function CookMode({ recipe, selectedServings, onFinish }) {
       )}
 
       <div key={String(stage)} className={stage === "done" ? "cook-done-enter" : "cook-stage-enter"} style={{ flex: 1 }}>
+        {stage === "servings" && (
+          <div>
+            <h2 style={{ fontFamily: SERIF, fontSize: "22px", color: COLORS.ink, margin: "0 0 28px" }}>{t("cook.servingsQuestion")}</h2>
+            {baseServings ? (
+              <ServingsStepper base={baseServings} value={selectedServings} onChange={changeServings} estimated={isEstimatedServings(recipe)} />
+            ) : (
+              <p style={{ fontSize: "15px", color: COLORS.inkSoft, margin: 0, lineHeight: 1.5 }}>{t("cook.servingsUnknown")}</p>
+            )}
+          </div>
+        )}
+
         {stage === "ingredients" && (
           <div>
             <h2 style={{ fontFamily: SERIF, fontSize: "22px", color: COLORS.ink, margin: baseServings ? "0 0 6px" : "0 0 18px" }}>{recipe.title || t("common.recipeWord")}</h2>
@@ -4183,21 +4177,19 @@ function CookMode({ recipe, selectedServings, onFinish }) {
                           {done && <Check size={12} color="#F3EFE6" />}
                         </span>
                         <span style={{ flex: 1 }}>{ing.name}</span>
-                        {(() => {
-                          const scaled = scaleIngredient(ing, factor, decimal);
-                          return (
-                            <span style={{ color: COLORS.inkSoft, flexShrink: 0 }}>
-                              {scaled.text}
-                              {scaled.rounded && <RoundedBadge name={ing.name} pairs={[{ exact: scaled.exactText, shown: scaled.text }]} />}
-                            </span>
-                          );
-                        })()}
+                        <span style={{ color: COLORS.inkSoft, flexShrink: 0 }}>
+                          {scaledIngredients[i].text}
+                          {scaledIngredients[i].rounded && (
+                            <RoundedBadge name={ing.name} pairs={[{ exact: scaledIngredients[i].exactText, shown: scaledIngredients[i].text }]} />
+                          )}
+                        </span>
                       </button>
                     </li>
                   );
                 })}
               </ul>
             )}
+            {someNotScaled && <p style={{ fontSize: "12px", color: COLORS.inkSoft, margin: "14px 0 0" }}>{t("servings.someNotScaled")}</p>}
           </div>
         )}
 
@@ -4230,7 +4222,7 @@ function CookMode({ recipe, selectedServings, onFinish }) {
 
       <div style={{ flexShrink: 0, marginTop: "28px", paddingBottom: "max(16px, env(safe-area-inset-bottom))" }}>
         <div style={{ display: "flex", gap: "10px" }}>
-          {stepIndex !== null && (
+          {(stepIndex !== null || stage === "ingredients") && (
             <button onClick={goPrev} style={prevButtonStyle}>
               <ArrowLeft size={15} />
               {t("cook.prev")}
@@ -4238,8 +4230,8 @@ function CookMode({ recipe, selectedServings, onFinish }) {
           )}
           {stage !== "done" && (
             <button onClick={goNext} style={bigButtonStyle}>
-              {stage === "ingredients" ? t("cook.next") : isLastStep ? t("cook.complete") : t("cook.next")}
-              {!(stage !== "ingredients" && isLastStep) && <ArrowRight size={16} />}
+              {stage === "servings" ? t("welcome.continue") : stage === "ingredients" ? t("cook.next") : isLastStep ? t("cook.complete") : t("cook.next")}
+              {!(stepIndex !== null && isLastStep) && <ArrowRight size={16} />}
             </button>
           )}
           {stage === "done" && (
