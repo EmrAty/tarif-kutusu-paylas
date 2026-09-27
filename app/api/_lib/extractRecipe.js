@@ -1,4 +1,13 @@
 import { RECIPE_SYSTEM_PROMPT, buildRecipeUserText } from "../../shared/recipeExtraction.js";
+import {
+  applyPortionEstimate,
+  PORTION_DISH_TYPES,
+  PORTION_METHODS,
+  PORTION_KINDS,
+  PORTION_UNITS,
+  PORTION_SIZES,
+  PORTION_STATES,
+} from "../../shared/portionEstimate.js";
 
 // /api/extract ile aynı model ve prompt. Farklar: çıktı şemaya bağlı (her zaman
 // geçerli JSON), max_tokens daha yüksek (claude-sonnet-5 varsayılan olarak önce
@@ -9,7 +18,7 @@ const RECIPE_SCHEMA = {
   type: "object",
   properties: {
     title: { type: "string" },
-    servings: { type: "number" },
+    servings: { anyOf: [{ type: "integer" }, { type: "null" }] },
     prep_time_minutes: { type: "number" },
     difficulty: { type: "string", enum: ["Kolay", "Orta", "Zor"] },
     ingredients: {
@@ -34,8 +43,34 @@ const RECIPE_SCHEMA = {
       additionalProperties: false,
     },
     assumptions: { type: "string" },
+    portion: {
+      type: "object",
+      properties: {
+        dish_type: { type: "string", enum: PORTION_DISH_TYPES },
+        cooking_method: { type: "string", enum: PORTION_METHODS },
+        items: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              kind: { type: "string", enum: PORTION_KINDS },
+              quantity: { anyOf: [{ type: "number" }, { type: "null" }] },
+              unit: { type: "string", enum: PORTION_UNITS },
+              size: { anyOf: [{ type: "string", enum: PORTION_SIZES }, { type: "null" }] },
+              state: { type: "string", enum: PORTION_STATES },
+              quantity_in_source: { type: "boolean" },
+            },
+            required: ["name", "kind", "quantity", "unit", "size", "state", "quantity_in_source"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["dish_type", "cooking_method", "items"],
+      additionalProperties: false,
+    },
   },
-  required: ["title", "servings", "prep_time_minutes", "difficulty", "ingredients", "instructions", "nutrition", "assumptions"],
+  required: ["title", "servings", "prep_time_minutes", "difficulty", "ingredients", "instructions", "nutrition", "assumptions", "portion"],
   additionalProperties: false,
 };
 
@@ -96,5 +131,5 @@ export async function extractRecipeFromCaption({ link, caption, timeoutMs }) {
   if (!recipe || typeof recipe.title !== "string" || !Array.isArray(recipe.ingredients)) {
     throw new Error("Tarif ayrıştırılamadı.");
   }
-  return { recipe, usage: data.usage, stopReason: data.stop_reason };
+  return { recipe: applyPortionEstimate(recipe), usage: data.usage, stopReason: data.stop_reason };
 }

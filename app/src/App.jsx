@@ -27,6 +27,7 @@ import ShareReceiver from "./capacitorShare.js";
 import NativeSplash from "./capacitorSplash.js";
 import { scaleIngredient, FRACTION_GLYPHS, scaleNutrition, perServingNutrition, baseServingsOf, maxServingsFor, MIN_SERVINGS } from "./servings.js";
 import { CATEGORIES, RECIPE_SYSTEM_PROMPT, buildRecipeUserText } from "../shared/recipeExtraction.js";
+import { applyPortionEstimate } from "../shared/portionEstimate.js";
 import { useLanguage, LANGUAGES, translate } from "./i18n.jsx";
 
 // ShareReceiver/NativeSplash sadece Android tarafında yazılmış özel native plugin'ler
@@ -334,7 +335,7 @@ async function extractRecipe({ link, caption, notes, images }) {
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
     body: JSON.stringify({
       model: "claude-sonnet-4-6",
-      max_tokens: 4096,
+      max_tokens: 8000,
       system,
       messages: [{ role: "user", content: contentBlocks }],
     }),
@@ -353,7 +354,7 @@ async function extractRecipe({ link, caption, notes, images }) {
   } catch (e) {
     throw new Error(translate("errors.parseFailed"));
   }
-  return parsed;
+  return applyPortionEstimate(parsed);
 }
 
 function mapAuthError(code, t) {
@@ -3109,9 +3110,14 @@ function formatServings(t, n) {
   return n === 1 ? t("servings.one") : t("detail.servings", { n });
 }
 
+// Porsiyon kesin değilse "Tahmini" gösterilir: malzemelerden hesaplandıysa (shared/portionEstimate.js)
+// ya da servings_basis hiç yoksa (eski tarifler — AI o dönem kaynağa bakmadan sayı uydurmak zorundaydı).
+// Sadece gösterim: eski kayıtlara yazılmaz. "kaynak"/"kullanici" düz, "bilinmiyor"da sayı yok.
+const isEstimatedServings = (recipe) => !!recipe && (recipe.servings_basis === "hesap" || recipe.servings_basis == null);
+
 // Tarif Detay'daki kompakt porsiyon seçici: [-] 4 [+]. Sadece geçici görünüm/hazırlık
 // tercihini değiştirir; kayıtlı porsiyon değişmez (o Tarifi Düzenle'den değişir).
-function ServingsStepper({ base, value, onChange }) {
+function ServingsStepper({ base, value, onChange, estimated }) {
   const { t } = useLanguage();
   const min = Math.min(MIN_SERVINGS, base);
   const max = maxServingsFor(base);
@@ -3145,7 +3151,7 @@ function ServingsStepper({ base, value, onChange }) {
         </div>
       </div>
       {value !== base && (
-        <div style={{ fontSize: "11px", color: COLORS.inkSoft, marginTop: "6px" }}>{t("servings.original", { n: base })}</div>
+        <div style={{ fontSize: "11px", color: COLORS.inkSoft, marginTop: "6px" }}>{t(estimated ? "servings.originalEstimated" : "servings.original", { n: base })}</div>
       )}
     </div>
   );
@@ -3153,7 +3159,8 @@ function ServingsStepper({ base, value, onChange }) {
 
 function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavorite, onChangeCategory, onEdit, onAddToShopping, onSendNotification, onStartCooking, selectedServings, onChangeServings }) {
   const { t, language, categoryLabel, difficultyLabel } = useLanguage();
-  const { title, servings, category, prep_time_minutes, difficulty, ingredients = [], instructions = [], nutrition = {}, assumptions, link, isFavorite, addedBy } = recipe;
+  const { title, servings, category, prep_time_minutes, difficulty, ingredients = [], instructions = [], nutrition = {}, assumptions, servings_note, link, isFavorite, addedBy } = recipe;
+  const servingsEstimated = isEstimatedServings(recipe);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(title || "");
   const [notifyState, setNotifyState] = useState("idle"); // "idle" | "sending" | "done" | "empty" | "error"
@@ -3197,7 +3204,7 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
   const someNotScaled = factor !== 1 && scaledIngredients.some((r) => r.status === "unparsed");
 
   const metaParts = [
-    servings ? formatServings(t, servings) : null,
+    servings ? (servingsEstimated ? t("detail.servingsEstimated", { n: servings }) : formatServings(t, servings)) : null,
     hasValidCategory ? categoryLabel(category) : null,
     prep_time_minutes ? t("detail.prepTime", { n: prep_time_minutes }) : null,
     difficulty ? difficultyLabel(difficulty) : null,
@@ -3361,7 +3368,7 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
           </div>
         )}
 
-        {baseServings && <ServingsStepper base={baseServings} value={selectedServings} onChange={onChangeServings} />}
+        {baseServings && <ServingsStepper base={baseServings} value={selectedServings} onChange={onChangeServings} estimated={servingsEstimated} />}
 
         <button
           onClick={onStartCooking}
@@ -3509,7 +3516,7 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
         </div>
 
         <div className="md-nutrition" style={{ width: "100%" }}>
-          <NutritionLabel nutrition={nutrition} servings={baseServings} selectedServings={selectedServings} />
+          <NutritionLabel nutrition={nutrition} servings={baseServings} selectedServings={selectedServings} estimated={servingsEstimated} />
         </div>
       </div>
 
@@ -3528,6 +3535,24 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
         >
           <AlertCircle size={14} style={{ marginTop: "2px", flexShrink: 0 }} />
           <span>{assumptions}</span>
+        </div>
+      )}
+
+      {servings_note && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            gap: "8px",
+            fontSize: "13px",
+            padding: "10px 12px",
+            borderRadius: "8px",
+            background: "#EFE9D8",
+            color: COLORS.inkSoft,
+          }}
+        >
+          <AlertCircle size={14} style={{ marginTop: "2px", flexShrink: 0 }} />
+          <span>{servings_note}</span>
         </div>
       )}
     </div>
@@ -4075,7 +4100,7 @@ function CookMode({ recipe, selectedServings, onFinish }) {
 // Besin değerleri tarifin TAMAMI için toplam olarak saklanıyor (bkz. shared/recipeExtraction.js).
 // Seçilen porsiyon kayıtlıdan farklıysa toplam orantıyla ölçeklenir ve "hazırladığın miktar"
 // olarak gösterilir; 1 porsiyonluk değer hiç değişmez.
-function NutritionLabel({ nutrition, servings, selectedServings }) {
+function NutritionLabel({ nutrition, servings, selectedServings, estimated }) {
   const { t } = useLanguage();
   const [open, setOpen] = useState(false);
   const factor = servings && selectedServings ? selectedServings / servings : 1;
@@ -4131,7 +4156,7 @@ function NutritionLabel({ nutrition, servings, selectedServings }) {
           <div style={{ fontSize: "11px", padding: "6px 0 4px", borderBottom: `1px solid ${COLORS.ink}`, color: COLORS.ink }}>
             {factor !== 1
               ? `${t("nutrition.preparedTotal")} (${formatServings(t, selectedServings)})`
-              : `${t("nutrition.wholeRecipe")} ${servings ? t("nutrition.servingsNote", { servings }) : ""}`}
+              : `${t("nutrition.wholeRecipe")} ${servings ? t(estimated ? "nutrition.servingsNoteEstimated" : "nutrition.servingsNote", { servings }) : ""}`}
           </div>
 
           <NutritionRow label={t("nutrition.protein")} value={protein} unit="g" />
@@ -4248,10 +4273,21 @@ function RecipeEditor({ heading, initial, isNew, saveTargets, setSaveTargets, is
     const cleanIngredients = ingredients.filter((i) => i.name.trim()).map((i) => ({ name: i.name.trim(), amount: i.amount.trim() }));
     const cleanInstructions = instructions.filter((s) => s.text.trim()).map((s) => s.text.trim());
 
+    // Porsiyon elle girildi/değiştirildiyse AI'ın hesap gerekçesi artık geçerli değil:
+    // "kullanici" olarak işaretlenir, hesap ve gerekçe alanları silinir. Değişmediyse
+    // bu alanlara dokunulmaz (kayıttaki "Tahmini" bilgisi korunur).
+    const nextServings = servings.trim() ? Number(servings) : undefined;
+    const prevServings = initial?.servings != null ? Number(initial.servings) : undefined;
+    const servingsFields =
+      isNew || nextServings !== prevServings
+        ? { servings_basis: nextServings ? "kullanici" : undefined, servings_calc: undefined, servings_note: undefined }
+        : {};
+
     onSave({
+      ...servingsFields,
       title: title.trim(),
       category,
-      servings: servings.trim() ? Number(servings) : undefined,
+      servings: nextServings,
       prep_time_minutes: prepTime.trim() ? Number(prepTime) : undefined,
       difficulty: difficulty || undefined,
       link: link.trim(),

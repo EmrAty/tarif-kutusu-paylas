@@ -176,6 +176,7 @@ const translations = {
 
     // Tarif Detay
     "detail.servings": "{n} porsiyon",
+    "detail.servingsEstimated": "Tahmini {n} porsiyon",
     "detail.prepTime": "{n} dk",
     "detail.addedBy": "Ekleyen: {name}",
     "detail.fallbackTitle": "Tarif",
@@ -199,6 +200,7 @@ const translations = {
     "nutrition.calories": "Kalori",
     "nutrition.wholeRecipe": "Tarifin tamamı",
     "nutrition.servingsNote": "({servings} porsiyonluk tarif)",
+    "nutrition.servingsNoteEstimated": "(tahmini {servings} porsiyonluk tarif)",
     "nutrition.preparedTotal": "Hazırladığın miktar",
     "nutrition.perServing": "1 porsiyon",
     "servings.label": "Porsiyon",
@@ -206,6 +208,7 @@ const translations = {
     "servings.decrease": "Porsiyonu azalt",
     "servings.increase": "Porsiyonu artır",
     "servings.original": "Tarifte kayıtlı: {n} porsiyon",
+    "servings.originalEstimated": "Tarifte kayıtlı: tahmini {n} porsiyon",
     "servings.forCount": "{count} için",
     "servings.someNotScaled": "Bazı miktarlar güvenilir okunamadığı için ölçeklenmedi, olduğu gibi gösteriliyor.",
     "nutrition.protein": "Protein",
@@ -479,6 +482,7 @@ const translations = {
     "addForm.extract": "Extract Recipe",
 
     "detail.servings": "{n} servings",
+    "detail.servingsEstimated": "About {n} servings (estimated)",
     "detail.prepTime": "{n} min",
     "detail.addedBy": "Added by: {name}",
     "detail.fallbackTitle": "Recipe",
@@ -501,6 +505,7 @@ const translations = {
     "nutrition.calories": "Calories",
     "nutrition.wholeRecipe": "Whole recipe",
     "nutrition.servingsNote": "(recipe makes {servings} servings)",
+    "nutrition.servingsNoteEstimated": "(recipe makes about {servings} servings, estimated)",
     "nutrition.preparedTotal": "Amount you're making",
     "nutrition.perServing": "1 serving",
     "servings.label": "Servings",
@@ -508,6 +513,7 @@ const translations = {
     "servings.decrease": "Decrease servings",
     "servings.increase": "Increase servings",
     "servings.original": "Saved in recipe: {n} servings",
+    "servings.originalEstimated": "Saved in recipe: about {n} servings (estimated)",
     "servings.forCount": "For {count}",
     "servings.someNotScaled": "Some amounts couldn't be read reliably, so they aren't scaled and are shown as written.",
     "nutrition.protein": "Protein",

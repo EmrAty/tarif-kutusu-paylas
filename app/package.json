@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test shared/portionEstimate.test.mjs"
   },
   "dependencies": {
     "@capacitor-firebase/authentication": "^8.5.1",
