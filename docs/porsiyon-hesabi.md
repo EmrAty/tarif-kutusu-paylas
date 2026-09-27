@@ -1,6 +1,6 @@
 # Porsiyon hesabı — kurallar ve kaynaklar
 
-Kural sürümü: `2026-09-27.1` (`app/shared/portionEstimate.js` → `PORTION_RULES_VERSION`).
+Kural sürümü: `2026-09-27.2` (`.2`: yumurta sarısı ve akı ayrı ağırlık aldı) (`app/shared/portionEstimate.js` → `PORTION_RULES_VERSION`).
 Bu kurallar genel bir **tarif verimi tahmini** içindir; kişiye özel diyet ya da tıbbi beslenme önerisi değildir.
 
 ## Nasıl çalışıyor
@@ -91,6 +91,15 @@ Notlar:
   - Karşılaştırma (yemek.com): 1 su bardağı un 120 g (bizde 116), pirinç 160 g (164), şeker 160 g (176).
 - **Adet (g), USDA FoodData Central SR Legacy, yenebilir kısım:**
   - patates 170 / 213 / 369 (FDC 170026); soğan 70 / 110 / 150 (170000); havuç 50 / 61 / 72 (170393); domates 91 / 123 / 182 (170457); yumurta 38 / 44 / 50, kabuksuz (171287).
+  - Yumurta üç ayrı ağırlıkla hesaplanır:
+
+    | Malzeme | g/adet | Kaynak |
+    |---|---|---|
+    | tam yumurta (kabuksuz) | küçük 38 / orta 44 / büyük 50 | FDC 171287 "Egg, whole, raw, fresh" |
+    | yumurta sarısı | 17 | FDC 172184 "Egg, yolk, raw, fresh", 1 large = 17 g |
+    | yumurta akı | 33 | FDC 172183 "Egg, white, raw, fresh", 1 large = 33 g |
+
+    USDA sarı ve ak için yalnızca büyük boyu veriyor. Bu değerler boyuttan bağımsız kullanılır ve boyut notu düşülmez. Şemada ayrı bir tür yoktur; AI bunları `yumurta` (ya da `diger`) olarak sınıflar. Kod, malzeme adında "yumurta" ile birlikte yalnızca "sarı" ya da yalnızca "ak/akı/akları" geçiyorsa ilgili ağırlığı kullanır. İkisi birden geçiyorsa ("yumurta sarısı ve akı") ya da hiçbiri geçmiyorsa tam yumurta sayılır.
   - Boyut yazmıyorsa **orta** kabul edilir ve gerekçeye not düşülür.
   - Bunlar ABD ölçüleridir. Türk Gıda Kodeksi'ne göre M boy yumurta kabuklu 53–63 g'dır (TÜBER'den), bu da USDA medium'dan biraz büyük.
   - Tabloda olmayan adetler ("4 tavuk but", "1 limon", "1 diş sarımsak") gram almaz; hesap dışı kalır ve listelenir.

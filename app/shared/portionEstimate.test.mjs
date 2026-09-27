@@ -193,3 +193,27 @@ test("kaynakta yazan porsiyonda gerekçe/hesap alanı yok", () => {
   assert.equal(out.servings_note, undefined);
   assert.equal(out.servings_calc, undefined);
 });
+
+const eggs = (name, kind = "yumurta", size = null) =>
+  estimateServings({ dish_type: "tatli_kek", cooking_method: "firin", items: [item(name, kind, 4, "adet", { size })] });
+
+test("A) 4 yumurta sarısı ≈ 68 g (17 g/adet), boyut notu düşülmez", () => {
+  const r = eggs("yumurta sarısı");
+  close(r.lines[0].g, 68, "4 × 17");
+  assert.ok(!r.notes.some((n) => n.includes("orta boy")));
+  close(eggs("Yumurta sarısı", "diger").lines[0].g, 68, "AI 'diger' dese de isimden tanınır");
+});
+
+test("B) 4 tam yumurta: mevcut ağırlıklar değişmedi (orta 44, büyük 50)", () => {
+  close(eggs("yumurta").lines[0].g, 176, "4 × 44");
+  close(eggs("Yumurta (tam)").lines[0].g, 176, "tam yumurta ismi");
+  close(eggs("yumurta", "yumurta", "buyuk").lines[0].g, 200, "4 × 50");
+  close(eggs("yumurta sarısı ve akı").lines[0].g, 176, "sarı ve ak birlikte → tam yumurta");
+});
+
+test("C) 4 yumurta akı = 132 g (33 g/adet); üçü birbirinden farklı", () => {
+  close(eggs("yumurta akı").lines[0].g, 132, "4 × 33");
+  close(eggs("yumurtanın akları").lines[0].g, 132, "çoğul");
+  const ys = [eggs("yumurta").yieldG, eggs("yumurta sarısı").yieldG, eggs("yumurta akı").yieldG];
+  assert.equal(new Set(ys).size, 3);
+});

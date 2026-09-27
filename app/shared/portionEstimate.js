@@ -7,7 +7,7 @@
 // çarpımsal olduğu için malzemeler k katına çıkınca yuvarlanmamış porsiyon da k
 // katına çıkar; tam sayıya yuvarlama yalnızca en son adımda yapılır.
 
-export const PORTION_RULES_VERSION = "2026-09-27.1";
+export const PORTION_RULES_VERSION = "2026-09-27.2";
 
 // --- Ölçüler -------------------------------------------------------------------
 // Ev ölçüsü hacimleri (mL). Türkiye'de standart değildir (TÜBER 2022: su bardakları
@@ -52,6 +52,9 @@ const PIECE_G = {
   havuc: { kucuk: 50, orta: 61, buyuk: 72 }, // FDC 170393
   domates: { kucuk: 91, orta: 123, buyuk: 182 }, // FDC 170457
   yumurta: { kucuk: 38, orta: 44, buyuk: 50 }, // FDC 171287 (kabuksuz)
+  // Sarı ve ak: USDA yalnızca büyük boy veriyor; boyuttan bağımsız bu değer kullanılır.
+  yumurta_sarisi: { orta: 17 }, // FDC 172184 "Egg, yolk, raw" 1 large = 17 g
+  yumurta_aki: { orta: 33 }, // FDC 172183 "Egg, white, raw" 1 large = 33 g
 };
 
 // --- Pişmiş/yenebilir verim katsayıları (pişmiş yenebilir g / çiğ g) ---------------
@@ -181,12 +184,24 @@ function toGrams(item) {
     return { g: q * UNIT_ML[item.unit] * d };
   }
   if (item.unit === "adet") {
-    const table = PIECE_G[kind] || (item.name && PIECE_G[pieceKey(item.name)]);
+    // "yumurta sarısı"/"yumurta akı" şemada ayrı bir tür değil (AI "yumurta" ya da "diger" döndürür);
+    // tam yumurta ağırlığı almasınlar diye önce isimden ayırt edilir.
+    const table = PIECE_G[eggPart(item.name)] || PIECE_G[kind] || (item.name && PIECE_G[pieceKey(item.name)]);
     if (!table) return { error: "adet ağırlığı bilinmiyor" };
+    const fixed = Object.keys(table).length === 1; // boyuta göre ayrılmayan ağırlık (yumurta sarısı/akı)
     const size = table[item.size] ? item.size : "orta";
-    return { g: q * table[size], sizeAssumed: !table[item.size] };
+    return { g: q * table[size], sizeAssumed: !fixed && !table[item.size] };
   }
   return { error: `birim belirsiz (${item.unit || "yok"})` };
+}
+// Yalnızca sarı ya da yalnızca ak geçiyorsa o parça; ikisi birden ya da hiçbiri → tam yumurta (null).
+function eggPart(name) {
+  const n = String(name || "").toLocaleLowerCase("tr");
+  if (!n.includes("yumurta")) return null;
+  const yolk = /sarı/u.test(n);
+  const white = /(^|[^\p{L}])akı?(ları|leri)?(?![\p{L}])/u.test(n);
+  if (yolk === white) return null;
+  return yolk ? "yumurta_sarisi" : "yumurta_aki";
 }
 function pieceKey(name) {
   const n = String(name).toLocaleLowerCase("tr");
