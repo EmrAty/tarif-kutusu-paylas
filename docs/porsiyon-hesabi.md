@@ -1,6 +1,6 @@
 # Porsiyon hesabı — kurallar ve kaynaklar
 
-Kural sürümü: `2026-09-27.2` (`.2`: yumurta sarısı ve akı ayrı ağırlık aldı) (`app/shared/portionEstimate.js` → `PORTION_RULES_VERSION`).
+Kural sürümü: `2026-09-27.3` (`.2`: yumurta sarısı ve akı ayrı ağırlık aldı; `.3`: aynı eşleştirme İngilizce malzeme adlarında da çalışıyor) (`app/shared/portionEstimate.js` → `PORTION_RULES_VERSION`).
 Bu kurallar genel bir **tarif verimi tahmini** içindir; kişiye özel diyet ya da tıbbi beslenme önerisi değildir.
 
 ## Nasıl çalışıyor

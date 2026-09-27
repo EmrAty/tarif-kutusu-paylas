@@ -7,7 +7,7 @@
 // çarpımsal olduğu için malzemeler k katına çıkınca yuvarlanmamış porsiyon da k
 // katına çıkar; tam sayıya yuvarlama yalnızca en son adımda yapılır.
 
-export const PORTION_RULES_VERSION = "2026-09-27.2";
+export const PORTION_RULES_VERSION = "2026-09-27.3";
 
 // --- Ölçüler -------------------------------------------------------------------
 // Ev ölçüsü hacimleri (mL). Türkiye'de standart değildir (TÜBER 2022: su bardakları
@@ -197,9 +197,18 @@ function toGrams(item) {
 // Yalnızca sarı ya da yalnızca ak geçiyorsa o parça; ikisi birden ya da hiçbiri → tam yumurta (null).
 function eggPart(name) {
   const n = String(name || "").toLocaleLowerCase("tr");
-  if (!n.includes("yumurta")) return null;
-  const yolk = /sarı/u.test(n);
-  const white = /(^|[^\p{L}])akı?(ları|leri)?(?![\p{L}])/u.test(n);
+  let yolk;
+  let white;
+  if (n.includes("yumurta")) {
+    yolk = /sarı/u.test(n);
+    white = /(^|[^\p{L}])akı?(ları|leri)?(?![\p{L}])/u.test(n);
+  } else if (/(^|[^\p{L}])eggs?(?![\p{L}])/u.test(n)) {
+    // Uygulama İngilizceyken çıkarılan tarifler ("egg yolks", "egg whites")
+    yolk = /yolk/u.test(n);
+    white = /whites?(?![\p{L}])/u.test(n);
+  } else {
+    return null;
+  }
   if (yolk === white) return null;
   return yolk ? "yumurta_sarisi" : "yumurta_aki";
 }
@@ -210,6 +219,10 @@ function pieceKey(name) {
   if (n.includes("havuç")) return "havuc";
   if (n.includes("domates")) return "domates";
   if (n.includes("yumurta")) return "yumurta";
+  // İngilizce adlar: yalnızca son kelime (baş isim) sayılır — "eggplant" ve "egg noodles" yumurta değil.
+  const head = n.replace(/\([^)]*\)/g, " ").trim();
+  const en = [["potato", "patates"], ["onion", "sogan"], ["carrot", "havuc"], ["tomato", "domates"], ["egg", "yumurta"]];
+  for (const [word, key] of en) if (head === word || head === `${word}s` || head === `${word}es` || head.endsWith(` ${word}`) || head.endsWith(` ${word}s`) || head.endsWith(` ${word}es`)) return key;
   return "";
 }
 

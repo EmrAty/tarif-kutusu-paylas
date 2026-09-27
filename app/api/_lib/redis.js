@@ -82,3 +82,20 @@ export async function redisGetJSON(key, fallback) {
 export async function redisSetJSON(key, value, ttlSeconds) {
   await redisSet(key, JSON.stringify(value), ttlSeconds);
 }
+
+// Tek bir Redis komutu (ör. ["HMGET", key, ...fields]); Upstash REST sonucunu döndürür.
+export async function redisCommand(command) {
+  assertConfigured();
+  const res = await fetch(BASE_URL, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
+    body: JSON.stringify(command),
+  });
+  if (!res.ok) {
+    const err = new Error("Veritabanına erişilemedi.");
+    err.status = 502;
+    throw err;
+  }
+  const data = await res.json();
+  return data.result ?? null;
+}

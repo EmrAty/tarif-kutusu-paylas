@@ -1,12 +1,13 @@
 // Hem istemci ("Yeni Tarif Çıkar" -> /api/extract) hem sunucu (Android paylaşım
 // paneli -> /api/recipe-jobs) aynı prompt'u ve kategori listesini kullanıyor.
+import { CONTENT_LANGUAGES, DEFAULT_CONTENT_LANG } from "./recipeLocales.js";
 import { PORTION_DISH_TYPES, PORTION_METHODS, PORTION_KINDS, PORTION_UNITS, PORTION_SIZES, PORTION_STATES } from "./portionEstimate.js";
 
 const list = (values) => values.map((v) => `"${v}"`).join(", ");
 
 export const CATEGORIES = ["Kahvaltı", "Öğle Yemeği ve Akşam Yemeği", "Soslar", "Atıştırmalıklar", "Tatlılar"];
 
-export const RECIPE_SYSTEM_PROMPT = `Sen bir yemek tarifi çıkarma asistanısın. Sana bir sosyal medya (TikTok/YouTube) yemek videosuna dair bilgi verilecek — bu, videonun tam açıklama/altyazı metni olabilir, kullanıcının videoyu izlerken gördüğü malzemeler hakkında yazdığı kısa bir not olabilir, ve/veya videodan alınmış ekran görüntüleri olabilir (görüntülerde video açıklaması, altyazı, ya da ekranda görünen malzeme/tarif yazıları olabilir — görsellerdeki TÜM metni dikkatlice oku). Hangisi verilirse verilsin, bundan yapılandırılmış tarif bilgisi çıkar.
+const RECIPE_SYSTEM_PROMPT_BASE = `Sen bir yemek tarifi çıkarma asistanısın. Sana bir sosyal medya (TikTok/YouTube) yemek videosuna dair bilgi verilecek — bu, videonun tam açıklama/altyazı metni olabilir, kullanıcının videoyu izlerken gördüğü malzemeler hakkında yazdığı kısa bir not olabilir, ve/veya videodan alınmış ekran görüntüleri olabilir (görüntülerde video açıklaması, altyazı, ya da ekranda görünen malzeme/tarif yazıları olabilir — görsellerdeki TÜM metni dikkatlice oku). Hangisi verilirse verilsin, bundan yapılandırılmış tarif bilgisi çıkar.
 
 SADECE ve SADECE aşağıdaki şemaya uyan HAM JSON döndür. Markdown yok, açıklama yok, backtick yok, başka hiçbir metin yok:
 
@@ -47,7 +48,15 @@ Nutrition alanındaki değerler porsiyon başına DEĞİL, tarifteki TÜM malzem
 
 Eğer sana verilen metin/görsellerde malzemeler açıkça ve eksiksiz yazılı DEĞİLSE ve sen bu yemeğin genel bilgine dayanarak malzemelerin bir kısmını ya da tamamını kendin tahmin ettiysen, bunu "assumptions" alanında AÇIKÇA belirt (örn: "Malzemelerin bir kısmı bu yemeğin tipik tarifine göre tarafımca tamamlandı."). Malzemeler zaten eksiksiz yazılıysa bunu belirtmene gerek yok.
 
-Miktarlar net değilse o yemeğin tipik bir porsiyonuna göre makul tahminler yap ve bunu "assumptions" alanında belirt. Yapılış adımları verilmemişse "instructions" alanını boş dizi olarak döndür, uydurma. "prep_time_minutes" ve "difficulty" belirtilmemişse tarifin niteliğine göre makul bir tahmin yap. Tüm metinler Türkçe olsun.`;
+Miktarlar net değilse o yemeğin tipik bir porsiyonuna göre makul tahminler yap ve bunu "assumptions" alanında belirt. Yapılış adımları verilmemişse "instructions" alanını boş dizi olarak döndür, uydurma. "prep_time_minutes" ve "difficulty" belirtilmemişse tarifin niteliğine göre makul bir tahmin yap. `;
+
+// Çıktı dili uygulamanın dilidir (kaynak videonun dili değil). Türkçe'de prompt
+// bu özellikten önceki haliyle birebir aynı; başka dilde yalnızca son talimat değişir.
+export function recipeSystemPrompt(lang = DEFAULT_CONTENT_LANG) {
+  const target = CONTENT_LANGUAGES[lang] || CONTENT_LANGUAGES[DEFAULT_CONTENT_LANG];
+  return RECIPE_SYSTEM_PROMPT_BASE + target.extractInstruction;
+}
+export const RECIPE_SYSTEM_PROMPT = recipeSystemPrompt(DEFAULT_CONTENT_LANG);
 
 export function buildRecipeUserText({ link, caption, notes, imageCount }) {
   return `Video linki: ${link || "(verilmedi)"}

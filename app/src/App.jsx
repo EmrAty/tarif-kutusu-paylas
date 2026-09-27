@@ -27,7 +27,9 @@ import { FirebaseAuthentication } from "@capacitor-firebase/authentication";
 import ShareReceiver from "./capacitorShare.js";
 import NativeSplash from "./capacitorSplash.js";
 import { scaleIngredient, FRACTION_GLYPHS, scaleNutrition, perServingNutrition, baseServingsOf, maxServingsFor, MIN_SERVINGS } from "./servings.js";
-import { CATEGORIES, RECIPE_SYSTEM_PROMPT, buildRecipeUserText } from "../shared/recipeExtraction.js";
+import { CATEGORIES, recipeSystemPrompt, buildRecipeUserText } from "../shared/recipeExtraction.js";
+import { contentLangOf, translationPayload } from "../shared/recipeLocales.js";
+import { localizeRecipe, displayIngredient, contentFingerprint, localizeAmount } from "./recipeLocale.js";
 import { applyPortionEstimate } from "../shared/portionEstimate.js";
 import { useLanguage, LANGUAGES, translate } from "./i18n.jsx";
 
@@ -312,8 +314,9 @@ async function importLegacyInto(scopeKey) {
 }
 
 
-async function extractRecipe({ link, caption, notes, images }) {
-  const system = RECIPE_SYSTEM_PROMPT;
+async function extractRecipe({ link, caption, notes, images, language }) {
+  // Tarif metinleri uygulamanın dilinde üretilir (kaynak videonun dili değil); sayılar değişmez.
+  const system = recipeSystemPrompt(language);
   const textSection = buildRecipeUserText({ link, caption, notes, imageCount: images ? images.length : 0 });
 
   const contentBlocks = [];
@@ -355,7 +358,7 @@ async function extractRecipe({ link, caption, notes, images }) {
   } catch (e) {
     throw new Error(translate("errors.parseFailed"));
   }
-  return applyPortionEstimate(parsed);
+  return { ...applyPortionEstimate(parsed), content_lang: language };
 }
 
 function mapAuthError(code, t) {
@@ -457,7 +460,7 @@ function UpdateBanner({ onUpdate }) {
 }
 
 export default function TarifKutusu() {
-  const { t, categoryLabel } = useLanguage();
+  const { t, categoryLabel, language } = useLanguage();
   const [loaded, setLoaded] = useState(false);
   const [view, setView] = useState("list");
   const [activeId, setActiveId] = useState(null);
@@ -1031,7 +1034,7 @@ export default function TarifKutusu() {
     }
     setBusy(true);
     try {
-      const parsed = await extractRecipe({ link, caption, notes, images });
+      const parsed = await extractRecipe({ link, caption, notes, images, language });
       const recipe = {
         id: uid(),
         createdAt: Date.now(),
@@ -1103,7 +1106,8 @@ export default function TarifKutusu() {
   };
 
   const handleManualSave = async (data) => {
-    const recipe = { id: uid(), createdAt: Date.now(), isFavorite: false, addedBy: personName || "", ...data };
+    // Elle yazılan tarifin içerik dili: yazıldığı sıradaki uygulama dili.
+    const recipe = { id: uid(), createdAt: Date.now(), isFavorite: false, addedBy: personName || "", content_lang: language, ...data };
     await Promise.all(saveTargets.map((scopeKey) => persistScope(scopeKey, [recipe, ...(recipeBuckets[scopeKey] || [])])));
     setManualPrefill(null);
     setActiveId(recipe.id);
@@ -1141,6 +1145,7 @@ export default function TarifKutusu() {
       isFavorite: false,
       addedBy: personName || "",
       source: "pantry-ai",
+      content_lang: "tr", // api/suggest-recipes.js önerileri Türkçe üretir
     };
     await persistScope(PERSONAL, [recipe, ...(recipeBuckets[PERSONAL] || [])]);
   };
@@ -1179,6 +1184,68 @@ export default function TarifKutusu() {
   };
 
   const active = recipes.find((r) => r.id === activeId);
+
+  // --- Tarif içeriğinin uygulama dilinde gösterimi (bkz. src/recipeLocale.js) -------------
+  // Asıl tarif (recipes/active) hiç değişmez; düzenleme, silme, bildirim ve Kiler hep onu
+  // kullanır. Ekranlar displayRecipes/activeDisplay'i gösterir. Çeviriler sunucuda
+  // içerik-hash'li önbellekte (api/translate-recipe.js); burada yalnızca bu oturumun belleği.
+  const [translations, setTranslations] = useState({}); // `${dil}|${parmak izi}` -> { status, translation }
+  const [titleTranslations, setTitleTranslations] = useState({}); // dil -> { asıl başlık: çeviri }
+  const translationsRef = useRef(translations);
+  translationsRef.current = translations;
+  const requestTranslation = useCallback(
+    async (recipe, { force = false } = {}) => {
+      if (!recipe || !translationPayload(recipe, language)) return;
+      const key = `${language}|${contentFingerprint(recipe)}`;
+      const current = translationsRef.current[key];
+      if (current && !force) return;
+      translationsRef.current = { ...translationsRef.current, [key]: { status: "loading" } };
+      setTranslations((prev) => ({ ...prev, [key]: { status: "loading" } }));
+      const scope = (recipe._scopes && recipe._scopes[0]) || PERSONAL;
+      try {
+        const data = await authedFetch("/api/translate-recipe", {
+          method: "POST",
+          body: { recipeId: recipe.id, scope: scope === PERSONAL ? "personal" : scope, target: language },
+        });
+        setTranslations((prev) => ({ ...prev, [key]: { status: "done", translation: data.translation || null } }));
+      } catch (e) {
+        setTranslations((prev) => ({ ...prev, [key]: { status: "error", error: e.message } }));
+      }
+    },
+    [language]
+  );
+  // Liste başlıkları: dil değişince çevrilmemiş başlıklar tek istekte (sunucu önbelleği + gerekirse tek Claude çağrısı).
+  const titlesAskedRef = useRef({});
+  useEffect(() => {
+    if (!loaded) return;
+    const asked = titlesAskedRef.current[language] || (titlesAskedRef.current[language] = new Set());
+    const fresh = recipes.filter((r) => r.title && contentLangOf(r) !== language && !asked.has(r.title));
+    if (!fresh.length) return;
+    const timer = setTimeout(async () => {
+      fresh.forEach((r) => asked.add(r.title));
+      try {
+        const data = await authedFetch("/api/translate-recipe", { method: "POST", body: { mode: "titles", target: language } });
+        setTitleTranslations((prev) => ({ ...prev, [language]: { ...(prev[language] || {}), ...(data.titles || {}) } }));
+      } catch (e) {
+        // başlıklar asıl haliyle kalır; tarif açılınca tam çeviri başlığı da getirir
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [recipes, language, loaded]);
+  const localizeForDisplay = useCallback(
+    (r) => {
+      if (!r || !translationPayload(r, language)) return r;
+      const entry = translations[`${language}|${contentFingerprint(r)}`];
+      const d = localizeRecipe(r, language, { translation: entry && entry.translation, title: (titleTranslations[language] || {})[r.title] });
+      return { ...d, _source: r, _translation: entry ? entry.status : "idle" };
+    },
+    [translations, titleTranslations, language]
+  );
+  const displayRecipes = useMemo(() => recipes.map(localizeForDisplay), [recipes, localizeForDisplay]);
+  const activeDisplay = useMemo(() => localizeForDisplay(active), [active, localizeForDisplay]);
+  useEffect(() => {
+    if (active && (view === "detail" || view === "cook")) requestTranslation(active);
+  }, [active, view, requestTranslation]);
   // Şu an render edilen tam ekran view kapanış animasyonundaysa (closingScreen
   // her zaman geçerli `view` ile aynı olur, bkz. closeActiveScreen), aynı ortak
   // giriş/çıkış sınıfı tüm FULLSCREEN_VIEWS ekranlarında kullanılıyor.
@@ -1283,7 +1350,7 @@ export default function TarifKutusu() {
           style={{ width: "100%" }}
         >
           <Sidebar
-            recipes={recipes}
+            recipes={displayRecipes}
             loaded={loaded}
             activeId={activeId}
             isPlus={isPlus}
@@ -1318,7 +1385,7 @@ export default function TarifKutusu() {
             }}
             onToggleFavorite={handleToggleFavorite}
             onDelete={handleDelete}
-            onSendNotification={handleSendNotification}
+            onSendNotification={(r) => handleSendNotification((r && r._source) || r)}
           />
         </div>
 
@@ -1381,6 +1448,7 @@ export default function TarifKutusu() {
             <RecipeEditor
               heading={t("editor.headingEdit")}
               initial={active}
+              originalLang={contentLangOf(active)}
               isPlus={isPlus}
               families={families}
               onSave={(data) => handleEditSave(active.id, data)}
@@ -1391,7 +1459,8 @@ export default function TarifKutusu() {
           {view === "detail" && active && (
             <div className={screenTransitionClass}>
               <RecipeDetail
-                recipe={active}
+                recipe={activeDisplay}
+                onRetryTranslation={() => requestTranslation(active, { force: true })}
                 familyNameById={familyNameById}
                 onDelete={() => handleDelete(active.id)}
                 onRename={(newTitle) => handleRename(active.id, newTitle)}
@@ -1407,13 +1476,20 @@ export default function TarifKutusu() {
 
           {view === "cook" && active && (
             <div className={screenTransitionClass} style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-              <CookMode recipe={active} onFinish={closeActiveScreen} />
+              <CookMode recipe={activeDisplay} onFinish={closeActiveScreen} />
             </div>
           )}
 
           {view === "shopping" && (
             <div className={screenTransitionClass}>
-              <ShoppingList key={shoppingInitialContext} recipes={recipes} isPlus={isPlus} families={families} initialContext={shoppingInitialContext} />
+              <ShoppingList
+                key={shoppingInitialContext}
+                recipes={displayRecipes}
+                onNeedTranslation={requestTranslation}
+                isPlus={isPlus}
+                families={families}
+                initialContext={shoppingInitialContext}
+              />
             </div>
           )}
 
@@ -1437,7 +1513,7 @@ export default function TarifKutusu() {
           {view === "favorites" && (
             <div className={screenTransitionClass}>
               <FavoritesView
-                recipes={recipes}
+                recipes={displayRecipes}
                 familyNameById={familyNameById}
                 onSelect={(id) => {
                   setActiveId(id);
@@ -2206,7 +2282,7 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
 
   const isSearching = query.trim().length > 0;
   const q = query.trim().toLocaleLowerCase("tr");
-  const matches = (r) => (r.title || "").toLocaleLowerCase("tr").includes(q);
+  const matches = (r) => [r.title, r._origTitle].some((x) => (x || "").toLocaleLowerCase("tr").includes(q));
 
   const byCategory = (cat) => recipes.filter((r) => (r.category || "Diğer") === cat && (!isSearching || matches(r)));
   const favorites = recipes.filter((r) => r.isFavorite && (!isSearching || matches(r)));
@@ -3133,12 +3209,36 @@ function ServingsStepper({ base, value, onChange, estimated }) {
   );
 }
 
-function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavorite, onChangeCategory, onEdit, onAddToShopping, onSendNotification, onStartCooking }) {
+// Çeviri durum şeridi: yüklenirken küçük bir not (tarif asıl haliyle görünmeye devam eder),
+// hata olursa asıl tarif + "Tekrar dene". Ekranı kilitlemez.
+function TranslationStatus({ status, onRetry }) {
+  const { t } = useLanguage();
+  if (status !== "loading" && status !== "error") return null;
+  return (
+    <div
+      role="status"
+      style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", padding: "8px 12px", borderRadius: "8px", background: "#EFE9D8", color: COLORS.inkSoft }}
+    >
+      {status === "loading" ? <Loader2 size={14} className="spin" /> : <AlertCircle size={14} />}
+      <span style={{ flex: 1 }}>{t(status === "loading" ? "translation.loading" : "translation.failed")}</span>
+      {status === "error" && onRetry && (
+        <button onClick={onRetry} style={{ background: "transparent", border: "none", color: COLORS.forest, fontWeight: 700, fontSize: "13px", cursor: "pointer", padding: 0 }}>
+          {t("translation.retry")}
+        </button>
+      )}
+      <style>{`.spin { animation: spin 1s linear infinite; } @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
+
+function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavorite, onChangeCategory, onEdit, onAddToShopping, onSendNotification, onStartCooking, onRetryTranslation }) {
   const { t, language, categoryLabel, difficultyLabel } = useLanguage();
   const { title, servings, category, prep_time_minutes, difficulty, ingredients = [], instructions = [], nutrition = {}, assumptions, servings_note, link, isFavorite, addedBy } = recipe;
   const servingsEstimated = isEstimatedServings(recipe);
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(title || "");
+  // Ad düzenleme asıl (kayıtlı) başlık üzerinde; çeviri gösteriliyorsa bile kayda çeviri yazılmaz.
+  const originalTitle = recipe._origTitle ?? title;
+  const [draft, setDraft] = useState(originalTitle || "");
   const [notifyState, setNotifyState] = useState("idle"); // "idle" | "sending" | "done" | "empty" | "error"
   const [notifyMessage, setNotifyMessage] = useState("");
 
@@ -3160,12 +3260,12 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
   };
 
   useEffect(() => {
-    setDraft(title || "");
+    setDraft(originalTitle || "");
     setEditing(false);
-  }, [title]);
+  }, [originalTitle]);
 
   const commit = () => {
-    if (draft.trim() && draft.trim() !== title) onRename(draft.trim());
+    if (draft.trim() && draft.trim() !== originalTitle) onRename(draft.trim());
     setEditing(false);
   };
 
@@ -3186,6 +3286,7 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+      <TranslationStatus status={recipe._translation} onRetry={onRetryTranslation} />
       <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>
         <div className="detail-title-row" style={{ display: "flex", flexDirection: "column", alignItems: "stretch", justifyContent: "flex-start", gap: "12px" }}>
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -3214,7 +3315,7 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
                   onKeyDown={(e) => {
                     if (e.key === "Enter") commit();
                     if (e.key === "Escape") {
-                      setDraft(title || "");
+                      setDraft(originalTitle || "");
                       setEditing(false);
                     }
                   }}
@@ -3420,7 +3521,7 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
                 {ingredients.map((ing, i) => (
                   <li key={i} style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "12px", fontSize: "14px" }}>
                     <span style={{ color: COLORS.ink }}>{ing.name}</span>
-                    <span style={{ flexShrink: 0, whiteSpace: "nowrap", color: COLORS.inkSoft }}>{ing.amount}</span>
+                    <span style={{ flexShrink: 0, whiteSpace: "nowrap", color: COLORS.inkSoft }}>{displayIngredient(ing, 1, language).text}</span>
                   </li>
                 ))}
               </ul>
@@ -3546,38 +3647,46 @@ function parseAmount(amount) {
 
 // Aynı malzeme farklı tariflerde geçiyorsa (aynı ada normalize edilince) tek satırda
 // birleştiriyor: aynı birimdeki miktarları toplar, farklı/okunaksız miktarları "+" ile yan yana yazar.
-function mergeIngredients(chosenRecipes, servingsMap = {}, decimal = ".") {
+// Birleştirme anahtarı malzemenin ASIL (kayıtlı) adıdır — gösterim dili değil; böylece
+// "sarımsak" ile çevirisi "garlic" ayrı satır olmaz. Ad ve miktar gösterim dilinde yazılır.
+function mergeIngredients(chosenRecipes, servingsMap = {}, lang = "tr") {
   const map = new Map();
   chosenRecipes.forEach((r) => {
     const base = baseServingsOf(r);
     const factor = base && servingsMap[r.id] ? servingsMap[r.id] / base : 1;
     (r.ingredients || []).forEach((ing) => {
-      const key = normalizeIngredientName(ing.name);
+      const key = normalizeIngredientName(ing._canon ? ing._canon.name : ing.name);
       if (!key) return;
       if (!map.has(key)) map.set(key, { name: ing.name, parts: [], rounded: [] });
       const entry = map.get(key);
-      if (factor === 1) {
-        entry.parts.push(ing.amount || "");
-      } else {
-        const scaled = scaleIngredient(ing, factor, decimal);
-        entry.parts.push(scaled.text);
-        if (scaled.rounded) entry.rounded.push({ exact: scaled.exactText, shown: scaled.text });
-      }
+      const shown = displayIngredient(ing, factor, lang);
+      entry.parts.push({ canon: shown.canonText, from: shown.from, display: shown.text });
+      if (shown.rounded) entry.rounded.push({ exact: shown.exactText, shown: shown.text });
     });
   });
   return Array.from(map.entries()).map(([key, { name, parts, rounded }]) => {
     const byUnit = new Map();
     const others = [];
+    // Toplama asıl dildeki miktarlarla yapılır ("2 diş" + "1 diş"), sonuç gösterim diline çevrilir;
+    // böylece "2 cloves" ile "1 clove" ayrı birim sanılmaz.
     parts.forEach((p) => {
-      const parsed = parseAmount(p);
+      const parsed = parseAmount(p.canon);
       if (parsed) {
-        byUnit.set(parsed.unit, (byUnit.get(parsed.unit) || 0) + parsed.num);
-      } else if (p.trim()) {
-        others.push(p.trim());
+        const k = `${p.from}|${parsed.unit}`;
+        const g = byUnit.get(k) || { from: p.from, unit: parsed.unit, sum: 0, displays: [] };
+        g.sum += parsed.num;
+        g.displays.push(p.display);
+        byUnit.set(k, g);
+      } else if ((p.display || "").trim()) {
+        others.push(p.display.trim());
       }
     });
     const amountParts = [
-      ...Array.from(byUnit.entries()).map(([unit, sum]) => `${Number.isInteger(sum) ? sum : sum.toFixed(1)}${unit ? " " + unit : ""}`),
+      ...Array.from(byUnit.values()).map((g) => {
+        if (g.displays.length === 1) return g.displays[0].trim();
+        const canonText = `${Number.isInteger(g.sum) ? g.sum : g.sum.toFixed(1)}${g.unit ? " " + g.unit : ""}`;
+        return localizeAmount(canonText, g.from, lang) ?? canonText;
+      }),
       ...others,
     ];
     return { key, name, amount: amountParts.join(" + "), rounded };
@@ -3615,7 +3724,7 @@ function ContextTabs({ context, setContext, isPlus, families }) {
   );
 }
 
-function ShoppingList({ recipes, isPlus, families, initialContext }) {
+function ShoppingList({ recipes, onNeedTranslation, isPlus, families, initialContext }) {
   const { t, language } = useLanguage();
   const [context, setContext] = useState(initialContext || PERSONAL);
   const [selected, setSelected] = useState([]);
@@ -3678,7 +3787,13 @@ function ShoppingList({ recipes, isPlus, families, initialContext }) {
   const clearChecked = () => persist(selected, {});
 
   const chosenRecipes = contextRecipes.filter((r) => selected.includes(r.id));
-  const mergedIngredients = mergeIngredients(chosenRecipes, servingsMap, language === "tr" ? "," : ".");
+  const mergedIngredients = mergeIngredients(chosenRecipes, servingsMap, language);
+  // Listedeki tariflerin çevirisi gerekiyorsa iste (önbellekteyse Claude'a gitmez).
+  const chosenKey = chosenRecipes.map((r) => r.id).join(",");
+  useEffect(() => {
+    if (onNeedTranslation) chosenRecipes.forEach((r) => onNeedTranslation(r._source || r));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chosenKey, language]);
   const checkedCount = mergedIngredients.filter((i) => checked[i.key]).length;
 
   return (
@@ -4026,7 +4141,7 @@ function CookMode({ recipe, onFinish }) {
     if (!baseServings) return;
     setSelectedServings(Math.min(maxServingsFor(baseServings), Math.max(Math.min(MIN_SERVINGS, baseServings), n)));
   };
-  const scaledIngredients = ingredients.map((ing) => scaleIngredient(ing, factor, decimal));
+  const scaledIngredients = ingredients.map((ing) => displayIngredient(ing, factor, language));
   const someNotScaled = factor !== 1 && scaledIngredients.some((r) => r.status === "unparsed");
 
   const bigButtonStyle = {
@@ -4353,8 +4468,11 @@ function NutritionRow({ label, value, unit, last }) {
   );
 }
 
-function RecipeEditor({ heading, initial, isNew, saveTargets, setSaveTargets, isPlus, families, personalCount, onSave, onCancel }) {
-  const { t, categoryLabel, difficultyLabel } = useLanguage();
+function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setSaveTargets, isPlus, families, personalCount, onSave, onCancel }) {
+  const { t, categoryLabel, difficultyLabel, language } = useLanguage();
+  // Düzenleme her zaman asıl (kayıtlı) metin üzerinde; uygulama başka dildeyse bunu söyle.
+  // Kaydedince içerik değişir, çeviri önbelleğinin anahtarı da değişir (eski çeviri kullanılmaz).
+  const showsOriginalNote = !isNew && originalLang && originalLang !== language;
   const [title, setTitle] = useState(initial?.title || "");
   const [category, setCategory] = useState(initial?.category || "");
   const [servings, setServings] = useState(initial?.servings != null ? String(initial.servings) : "");
@@ -4461,9 +4579,15 @@ function RecipeEditor({ heading, initial, isNew, saveTargets, setSaveTargets, is
     <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
       <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>
         <h2 style={{ fontFamily: SERIF, fontSize: "20px", color: COLORS.ink, margin: "0 0 4px" }}>{heading}</h2>
-        <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: "0 0 20px" }}>
+        <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: showsOriginalNote ? "0 0 12px" : "0 0 20px" }}>
           {t("editor.hint")}
         </p>
+        {showsOriginalNote && (
+          <div style={{ display: "flex", alignItems: "flex-start", gap: "8px", fontSize: "13px", padding: "10px 12px", borderRadius: "8px", background: "#EFE9D8", color: COLORS.inkSoft, margin: "0 0 20px" }}>
+            <AlertCircle size={14} style={{ marginTop: "2px", flexShrink: 0 }} />
+            <span>{t("editor.originalLanguageNote", { lang: t(`contentLang.${originalLang}`) })}</span>
+          </div>
+        )}
 
         <label style={labelStyle}>{t("editor.nameLabel")}</label>
         <input

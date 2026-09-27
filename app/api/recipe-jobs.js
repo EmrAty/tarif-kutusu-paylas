@@ -8,6 +8,7 @@ import { fcmTokensKey, notifyUserDevices } from "./_lib/fcm.js";
 import { addPendingJobRecipe } from "./_lib/jobRecipes.js";
 import { isTikTokLink, tiktokTranscript } from "./_lib/tiktok.js";
 import { CATEGORIES } from "../shared/recipeExtraction.js";
+import { DEFAULT_CONTENT_LANG, isContentLanguage } from "../shared/recipeLocales.js";
 
 // Android paylaşım paneli (ShareActivity) buraya POST atıyor: link, kullanıcının
 // gördüğü video açıklaması ve seçtiği kategori. Job kabul edilir edilmez {jobId}
@@ -115,7 +116,7 @@ async function readRecipeList(uid) {
   return list;
 }
 
-async function processRecipeJob({ uid, jobId, sourceUrl, caption, category, addedBy, lockKey }) {
+async function processRecipeJob({ uid, jobId, sourceUrl, caption, category, addedBy, language, lockKey }) {
   const startedAt = Date.now();
   const timings = {};
   let recipe = null;
@@ -155,6 +156,7 @@ async function processRecipeJob({ uid, jobId, sourceUrl, caption, category, adde
     const { recipe: parsed, usage, stopReason } = await extractRecipeFromCaption({
       link: sourceUrl,
       caption: recipeText,
+      language,
       timeoutMs: claudeTimeout,
     });
     timings.claude = Date.now() - t;
@@ -241,7 +243,7 @@ async function respondWithJob(res, uid, job, duplicate) {
 }
 
 async function handlePost(req, res, uid) {
-  const { requestId, sourceUrl, caption, category, addedBy } = req.body || {};
+  const { requestId, sourceUrl, caption, category, addedBy, language } = req.body || {};
 
   const url = typeof sourceUrl === "string" ? sourceUrl.trim() : "";
   if (!/^https?:\/\//i.test(url) || !SUPPORTED_LINK.test(url) || url.length > 2000) {
@@ -324,6 +326,8 @@ async function handlePost(req, res, uid) {
       caption: captionText,
       category,
       addedBy: typeof addedBy === "string" ? addedBy.slice(0, 60) : "",
+      // Yalnızca çıktı dili; bilinmeyen değer varsayılan dile (tr) düşer.
+      language: isContentLanguage(language) ? language : DEFAULT_CONTENT_LANG,
       lockKey,
     })
   );

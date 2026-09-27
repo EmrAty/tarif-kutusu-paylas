@@ -84,6 +84,9 @@ function formatValue(value, unit, decimal = ".") {
   return METRIC_UNITS.has(unit) ? formatMetric(value, unit).replace(".", decimal) : formatFraction(value);
 }
 
+// Birim adının parçası olan sabit hacim notu (bkz. src/recipeLocale.js birim sözlüğü).
+const UNIT_DEFINITION_RE = /^(?:glass|glasses|tea glass|tea glasses|dessert spoon|dessert spoons|kupa)\s*\(\s*(?:200|100|10|240)\s*ml\s*\)/iu;
+
 function firstWord(rest) {
   const m = /^[\p{L}]+/u.exec(rest.trim().toLocaleLowerCase("tr"));
   return m ? m[0] : "";
@@ -108,13 +111,20 @@ const WHOLE_UNIT_NAMES = [
   "dolma", "sarma",
   "kurabiye", "muffin", "cupcake",
   "hamburger ekmeği", "burger ekmeği", "sandviç ekmeği",
+  // İngilizce yazılmış tarifler (uygulama İngilizceyken çıkarılanlar) için aynı ürünler
+  "egg", "eggs", "egg yolk", "egg yolks", "egg white", "egg whites",
+  "chicken drumstick", "chicken drumsticks", "drumstick", "drumsticks",
+  "chicken thigh", "chicken thighs", "chicken leg", "chicken legs", "chicken wing", "chicken wings",
+  "meatball", "meatballs", "burger patty", "burger patties",
+  "cookie", "cookies", "muffin", "muffins", "cupcakes",
+  "hamburger bun", "hamburger buns", "burger bun", "burger buns",
 ];
 // Adet sayısı olduğunu gösteren birim sözcükleri (ölçü birimi değil).
-const COUNT_WORDS = new Set(["adet", "tane", "büyük", "orta", "küçük", "iri", "irice"]);
+const COUNT_WORDS = new Set(["adet", "tane", "büyük", "orta", "küçük", "iri", "irice", "large", "medium", "small", "whole", "pc", "pcs", "piece", "pieces"]);
 
-function normalizeName(text) {
+function normalizeName(text, locale = "tr") {
   return String(text || "")
-    .toLocaleLowerCase("tr")
+    .toLocaleLowerCase(locale)
     .replace(/\([^)]*\)/g, " ")
     .replace(/[^\p{L}\s]/gu, " ")
     .replace(/\s+/g, " ")
@@ -122,8 +132,10 @@ function normalizeName(text) {
 }
 
 export function isWholeUnitName(name) {
-  const n = normalizeName(name);
-  return !!n && WHOLE_UNIT_NAMES.some((entry) => n === entry || n.endsWith(" " + entry));
+  // Türkçe küçük harf "I"yı "ı" yapar ("EGG" değil ama "CHICKEN THIGH" bozulur); iki biçim de denenir.
+  return [normalizeName(name, "tr"), normalizeName(name, "en")].some(
+    (n) => !!n && WHOLE_UNIT_NAMES.some((entry) => n === entry || n.endsWith(" " + entry))
+  );
 }
 
 // Tam adede yuvarlanacak mı: ad listede VE miktar adet biçiminde ("3", "3 adet", "3 orta boy",
@@ -157,7 +169,9 @@ function practicalRange(lo, hi, whole) {
 //  "scaled"   → miktar ölçeklendi
 //  "unparsed" → metinde sayı var ama güvenilir okunamadı, orijinal metin gösterildi
 // `decimal`: ondalık ayraç ("," Türkçe için) — sadece gram/ml/kg/lt gibi ondalıkla gösterilen ölçülerde görünür.
-export function scaleIngredient(ing, factor, decimal = ".") {
+// `opts.wholeUnit`: tam adede yuvarlama kararı dışarıdan verilir (çevrilmiş metin ölçeklenirken
+// karar asıl dildeki malzemeden gelsin diye, bkz. src/recipeLocale.js). Verilmezse burada hesaplanır.
+export function scaleIngredient(ing, factor, decimal = ".", opts = {}) {
   const original = (ing && typeof ing.amount === "string" ? ing.amount : ing && ing.amount != null ? String(ing.amount) : "").trim();
   if (!factor || factor === 1) return { text: original, status: "same" };
 
@@ -168,12 +182,12 @@ export function scaleIngredient(ing, factor, decimal = ".") {
       return { text: original || `${ing.quantity}${unit ? " " + unit : ""}`, status: "same" };
     }
     const exact = ing.quantity * factor;
-    const whole = shouldRoundToWholeUnit(ing, unit, [ing.quantity]);
+    const whole = opts.wholeUnit ?? shouldRoundToWholeUnit(ing, unit, [ing.quantity]);
     const [value] = practicalRange(exact, null, whole);
     const shown = formatValue(value, unit.toLocaleLowerCase("tr"), decimal);
     const rounded = value !== exact;
     const exactText = rounded ? `${formatValue(exact, unit.toLocaleLowerCase("tr"), decimal)}${unit ? " " + unit : ""}` : undefined;
-    return { text: `${shown}${unit ? " " + unit : ""}`, status: "scaled", exact: [exact, null], rounded, exactText };
+    return { text: `${shown}${unit ? " " + unit : ""}`, status: "scaled", exact: [exact, null], rounded, exactText, wholeUnit: whole };
   }
 
   if (!original) return { text: original, status: "same" };
@@ -202,12 +216,15 @@ export function scaleIngredient(ing, factor, decimal = ".") {
   if (!head) return { text: original, status: hasDigit ? "unparsed" : "same" };
   if (NO_SCALE_RE.test(rest.toLocaleLowerCase("tr"))) return { text: original, status: "same" };
   // Birimden sonra ikinci bir sayı varsa ("1 su bardağı (200 ml)") hangisinin ölçekleneceği belirsiz.
-  if (/[\d½¼¾⅓⅔⅛]/u.test(rest)) return { text: original, status: "unparsed" };
+  // İstisna: birimin kendi tanımı olan sabit hacim notu ("glass (200 ml)", "tea glass (100 ml)",
+  // "dessert spoon (10 ml)", "kupa (240 ml)") — bu not adet başına hacimdir, ölçeklenmez, aynen kalır.
+  if (/[\d½¼¾⅓⅔⅛]/u.test(rest.replace(UNIT_DEFINITION_RE, ""))) return { text: original, status: "unparsed" };
 
   const unit = firstWord(rest);
   const [a, b] = head;
   const exact = [a * factor, b != null ? b * factor : null];
-  const [lo, hi] = practicalRange(exact[0], exact[1], shouldRoundToWholeUnit(ing, rest, [a, b]));
+  const whole = opts.wholeUnit ?? shouldRoundToWholeUnit(ing, rest, [a, b]);
+  const [lo, hi] = practicalRange(exact[0], exact[1], whole);
   const from = formatValue(lo, unit, decimal);
   const to = hi != null ? formatValue(hi, unit, decimal) : null;
   const shown = to != null ? `${from}–${to}` : from;
@@ -218,7 +235,7 @@ export function scaleIngredient(ing, factor, decimal = ".") {
   const exactText = rounded
     ? `${formatValue(exact[0], unit, decimal)}${exact[1] != null ? "–" + formatValue(exact[1], unit, decimal) : ""}${suffix}`
     : undefined;
-  return { text: `${shown}${suffix}`, status: "scaled", exact, rounded, exactText };
+  return { text: `${shown}${suffix}`, status: "scaled", exact, rounded, exactText, wholeUnit: whole };
 }
 
 // Besin değerleri şemada TARİFİN TAMAMI için toplam (bkz. shared/recipeExtraction.js).

@@ -19,7 +19,7 @@ function sharedLinkFrom(text) {
 const SPIN_CSS = `.spin { animation: spin 1s linear infinite; } @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`;
 
 export default function SharePanel() {
-  const { t, categoryLabel } = useLanguage();
+  const { t, categoryLabel, language } = useLanguage();
   const bridge = typeof window !== "undefined" ? window.TarifKutusuShare : undefined;
   const [authChecked, setAuthChecked] = useState(false);
   const [authUser, setAuthUser] = useState(null);
@@ -96,6 +96,8 @@ export default function SharePanel() {
           caption: caption.trim(),
           category,
           addedBy: storageGet("person-name")?.value || "",
+          // Tarif metinleri uygulamanın dilinde üretilsin (kaynak videonun dili değil).
+          language,
         },
       });
       if (!data.jobId) throw new Error(t("sharePanel.errorJobStartFailed"));

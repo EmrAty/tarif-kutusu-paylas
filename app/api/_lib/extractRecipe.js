@@ -1,4 +1,5 @@
-import { RECIPE_SYSTEM_PROMPT, buildRecipeUserText } from "../../shared/recipeExtraction.js";
+import { recipeSystemPrompt, buildRecipeUserText } from "../../shared/recipeExtraction.js";
+import { DEFAULT_CONTENT_LANG, isContentLanguage } from "../../shared/recipeLocales.js";
 import {
   applyPortionEstimate,
   PORTION_DISH_TYPES,
@@ -74,7 +75,9 @@ const RECIPE_SCHEMA = {
   additionalProperties: false,
 };
 
-export async function extractRecipeFromCaption({ link, caption, timeoutMs }) {
+// language: tarifin kullanıcıya görünen metinlerinin dili (uygulama dili); sayılar/şema değişmez.
+export async function extractRecipeFromCaption({ link, caption, timeoutMs, language = DEFAULT_CONTENT_LANG }) {
+  const lang = isContentLanguage(language) ? language : DEFAULT_CONTENT_LANG;
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("Sunucu yapılandırması eksik: ANTHROPIC_API_KEY tanımlı değil.");
 
@@ -94,7 +97,7 @@ export async function extractRecipeFromCaption({ link, caption, timeoutMs }) {
       body: JSON.stringify({
         model: MODEL,
         max_tokens: 16000,
-        system: RECIPE_SYSTEM_PROMPT,
+        system: recipeSystemPrompt(lang),
         messages: [
           {
             role: "user",
@@ -131,5 +134,5 @@ export async function extractRecipeFromCaption({ link, caption, timeoutMs }) {
   if (!recipe || typeof recipe.title !== "string" || !Array.isArray(recipe.ingredients)) {
     throw new Error("Tarif ayrıştırılamadı.");
   }
-  return { recipe: applyPortionEstimate(recipe), usage: data.usage, stopReason: data.stop_reason };
+  return { recipe: { ...applyPortionEstimate(recipe), content_lang: lang }, usage: data.usage, stopReason: data.stop_reason };
 }
