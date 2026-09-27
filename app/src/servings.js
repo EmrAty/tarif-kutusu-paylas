@@ -89,6 +89,69 @@ function firstWord(rest) {
   return m ? m[0] : "";
 }
 
+// --- Pratik miktar: mutfakta bölünmeyen tekil ürünler ------------------------------
+// Ölçeklenmiş miktar yalnızca ekranda tam adede yuvarlanır (1,5 yumurta → 2); kayıtlı
+// tarif, seçilen porsiyon ve besin değerleri değişmez. Karar birime değil malzemenin
+// kendisine göre verilir: 1,5 soğan/limon/domates kesirli kalır. Emin olunmayan her
+// malzeme (listede olmayan) kesirli gösterilir — yanlış yuvarlamak daha tehlikeli.
+//
+// Eşleşme: parantez içi atılmış malzeme adının SON kelime(ler)i listedeki bir girişle
+// birebir aynı olmalı (Türkçe'de baş isim sondadır). Böylece "oda sıcaklığında yumurta"
+// yumurtadır; "yumurtalı erişte" (erişte) ve "yumurta büyüklüğünde tereyağı" (tereyağı) değildir.
+const WHOLE_UNIT_NAMES = [
+  "yumurta", "yumurta sarısı", "yumurta sarıları", "yumurtanın sarısı",
+  "yumurta akı", "yumurta akları", "yumurtanın akı",
+  "tavuk but", "tavuk budu", "tavuk butu", "tavuk butları", "piliç but", "piliç budu",
+  "tavuk baget", "tavuk bageti", "tavuk bagetleri", "baget",
+  "tavuk kanat", "tavuk kanadı", "tavuk kanatları",
+  "köfte", "hamburger köftesi", "burger köftesi",
+  "dolma", "sarma",
+  "kurabiye", "muffin", "cupcake",
+  "hamburger ekmeği", "burger ekmeği", "sandviç ekmeği",
+];
+// Adet sayısı olduğunu gösteren birim sözcükleri (ölçü birimi değil).
+const COUNT_WORDS = new Set(["adet", "tane", "büyük", "orta", "küçük", "iri", "irice"]);
+
+function normalizeName(text) {
+  return String(text || "")
+    .toLocaleLowerCase("tr")
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/[^\p{L}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function isWholeUnitName(name) {
+  const n = normalizeName(name);
+  return !!n && WHOLE_UNIT_NAMES.some((entry) => n === entry || n.endsWith(" " + entry));
+}
+
+// Tam adede yuvarlanacak mı: ad listede VE miktar adet biçiminde ("3", "3 adet", "3 orta boy",
+// "3 yumurta") VE kaynaktaki miktar tam sayı. "100 g yumurta", "1 su bardağı" gibi ölçüler
+// hiç yuvarlanmaz; kaynak zaten kesirli yazmışsa ("yarım yumurta", "1½ adet") kesirli kullanım
+// kabul edilmiş demektir, o da yuvarlanmaz.
+export function shouldRoundToWholeUnit(ing, unitText = "", originalQuantities = []) {
+  if (!ing || !isWholeUnitName(ing.name)) return false;
+  if (originalQuantities.some((q) => q != null && !Number.isInteger(q))) return false;
+  const rest = normalizeName(unitText);
+  if (!rest) return true;
+  return COUNT_WORDS.has(rest.split(" ")[0]) || isWholeUnitName(rest);
+}
+
+// En yakın tam sayı (,5 yukarı); malzeme tariften kaybolmasın diye en az 1.
+export function practicalWholeQuantity(exact) {
+  if (!(exact > 0)) return exact;
+  return Math.max(1, Math.round(exact));
+}
+
+// [exact alt, exact üst|null] → pratik değerler; aralık tek sayıya inerse tek değer.
+function practicalRange(lo, hi, whole) {
+  if (!whole) return [lo, hi];
+  const pLo = practicalWholeQuantity(lo);
+  const pHi = hi != null ? practicalWholeQuantity(hi) : null;
+  return [pLo, pHi != null && pHi !== pLo ? pHi : null];
+}
+
 // Bir malzemeyi katsayıyla ölçekler. Dönen `status`:
 //  "same"     → ölçeklenmedi çünkü doğası gereği miktarı yok / ölçeklenmemeli (tutam, servis için, boş…)
 //  "scaled"   → miktar ölçeklendi
@@ -104,9 +167,13 @@ export function scaleIngredient(ing, factor, decimal = ".") {
     if (NO_SCALE_RE.test(unit.toLocaleLowerCase("tr"))) {
       return { text: original || `${ing.quantity}${unit ? " " + unit : ""}`, status: "same" };
     }
-    const value = ing.quantity * factor;
+    const exact = ing.quantity * factor;
+    const whole = shouldRoundToWholeUnit(ing, unit, [ing.quantity]);
+    const [value] = practicalRange(exact, null, whole);
     const shown = formatValue(value, unit.toLocaleLowerCase("tr"), decimal);
-    return { text: `${shown}${unit ? " " + unit : ""}`, status: "scaled" };
+    const rounded = value !== exact;
+    const exactText = rounded ? `${formatValue(exact, unit.toLocaleLowerCase("tr"), decimal)}${unit ? " " + unit : ""}` : undefined;
+    return { text: `${shown}${unit ? " " + unit : ""}`, status: "scaled", exact: [exact, null], rounded, exactText };
   }
 
   if (!original) return { text: original, status: "same" };
@@ -139,10 +206,19 @@ export function scaleIngredient(ing, factor, decimal = ".") {
 
   const unit = firstWord(rest);
   const [a, b] = head;
-  const from = formatValue(a * factor, unit, decimal);
-  const to = b != null ? formatValue(b * factor, unit, decimal) : null;
+  const exact = [a * factor, b != null ? b * factor : null];
+  const [lo, hi] = practicalRange(exact[0], exact[1], shouldRoundToWholeUnit(ing, rest, [a, b]));
+  const from = formatValue(lo, unit, decimal);
+  const to = hi != null ? formatValue(hi, unit, decimal) : null;
   const shown = to != null ? `${from}–${to}` : from;
-  return { text: `${shown}${rest ? " " + rest.trim() : ""}`, status: "scaled" };
+  // exact/rounded/exactText yalnızca bellekte (gösterim bilgisi); hiçbir yere yazılmaz.
+  // exactText: yuvarlamadan önceki miktarın aynı biçimde yazılışı ("1½ adet"), açıklama kartı için.
+  const rounded = lo !== exact[0] || hi !== exact[1];
+  const suffix = rest ? " " + rest.trim() : "";
+  const exactText = rounded
+    ? `${formatValue(exact[0], unit, decimal)}${exact[1] != null ? "–" + formatValue(exact[1], unit, decimal) : ""}${suffix}`
+    : undefined;
+  return { text: `${shown}${suffix}`, status: "scaled", exact, rounded, exactText };
 }
 
 // Besin değerleri şemada TARİFİN TAMAMI için toplam (bkz. shared/recipeExtraction.js).

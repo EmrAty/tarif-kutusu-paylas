@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { createPortal } from "react-dom";
 import {
   ChefHat, Plus, Minus, Link2, ExternalLink, Trash2, Loader2, ArrowLeft, ArrowRight, AlertCircle,
   FileText, Pencil, Check, ChevronDown, Star, Search, ShoppingCart, Clock, Gauge, Undo2, X, Package, Download,
-  Mail, LogOut, Users, Crown, Settings, UserCircle, Copy, Sparkles, LogIn, Bell,
+  Mail, LogOut, Users, Crown, Settings, UserCircle, Copy, Sparkles, LogIn, Bell, Info,
 } from "lucide-react";
 import { auth, googleProvider, requestFcmToken } from "./firebase.js";
 import {
@@ -838,7 +839,9 @@ export default function TarifKutusu() {
     if (!isAndroidNative) return;
     let listenerHandle;
     CapacitorApp.addListener("backButton", () => {
-      if (languageModalOpenRef.current) {
+      if (openRoundingSheet.close) {
+        openRoundingSheet.close();
+      } else if (languageModalOpenRef.current) {
         languageModalCloseRef.current();
       } else if (modalView) {
         closeModal();
@@ -3449,7 +3452,12 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
                 {ingredients.map((ing, i) => (
                   <li key={i} style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "12px", fontSize: "14px" }}>
                     <span style={{ color: COLORS.ink }}>{ing.name}</span>
-                    <span style={{ flexShrink: 0, whiteSpace: "nowrap", color: COLORS.inkSoft }}>{scaledIngredients[i].text}</span>
+                    <span style={{ flexShrink: 0, whiteSpace: "nowrap", color: COLORS.inkSoft }}>
+                      {scaledIngredients[i].text}
+                      {scaledIngredients[i].rounded && (
+                        <RoundedBadge name={ing.name} pairs={[{ exact: scaledIngredients[i].exactText, shown: scaledIngredients[i].text }]} />
+                      )}
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -3584,11 +3592,18 @@ function mergeIngredients(chosenRecipes, servingsMap = {}, decimal = ".") {
     (r.ingredients || []).forEach((ing) => {
       const key = normalizeIngredientName(ing.name);
       if (!key) return;
-      if (!map.has(key)) map.set(key, { name: ing.name, parts: [] });
-      map.get(key).parts.push(factor === 1 ? ing.amount || "" : scaleIngredient(ing, factor, decimal).text);
+      if (!map.has(key)) map.set(key, { name: ing.name, parts: [], rounded: [] });
+      const entry = map.get(key);
+      if (factor === 1) {
+        entry.parts.push(ing.amount || "");
+      } else {
+        const scaled = scaleIngredient(ing, factor, decimal);
+        entry.parts.push(scaled.text);
+        if (scaled.rounded) entry.rounded.push({ exact: scaled.exactText, shown: scaled.text });
+      }
     });
   });
-  return Array.from(map.entries()).map(([key, { name, parts }]) => {
+  return Array.from(map.entries()).map(([key, { name, parts, rounded }]) => {
     const byUnit = new Map();
     const others = [];
     parts.forEach((p) => {
@@ -3603,7 +3618,7 @@ function mergeIngredients(chosenRecipes, servingsMap = {}, decimal = ".") {
       ...Array.from(byUnit.entries()).map(([unit, sum]) => `${Number.isInteger(sum) ? sum : sum.toFixed(1)}${unit ? " " + unit : ""}`),
       ...others,
     ];
-    return { key, name, amount: amountParts.join(" + ") };
+    return { key, name, amount: amountParts.join(" + "), rounded };
   });
 }
 
@@ -3791,7 +3806,10 @@ function ShoppingList({ recipes, isPlus, families, initialContext }) {
                   >
                     {ing.name}
                   </span>
-                  <span style={{ fontSize: "13px", color: COLORS.inkSoft, flexShrink: 0 }}>{ing.amount}</span>
+                  <span style={{ fontSize: "13px", color: COLORS.inkSoft, flexShrink: 0 }}>
+                    {ing.amount}
+                    {ing.rounded.length > 0 && <RoundedBadge name={ing.name} pairs={ing.rounded} />}
+                  </span>
                 </label>
               );
             })}
@@ -3801,6 +3819,143 @@ function ShoppingList({ recipes, isPlus, families, initialContext }) {
     </div>
   );
 }
+// --- Pratik miktar yuvarlaması: "(yuvarlandı) ⓘ" rozeti + açıklama kartı ----------------
+// scaleIngredient (servings.js) bir satırı tam adede yuvarladığında `rounded`/`exactText`
+// döndürür; Tarif Detay, Pişirme modu ve Alışveriş Listesi aynı bileşeni kullanır.
+// Açık kart Android geri tuşuyla önce kendisi kapansın diye kapatma fonksiyonu burada tutulur.
+const ROUNDING_SHEET_EXIT_MS = 180;
+const openRoundingSheet = { close: null };
+
+// pairs: [{ exact: "1½ adet", shown: "2 adet" }] — alışveriş listesinde birden fazla tariften gelebilir.
+function RoundedBadge({ name, pairs }) {
+  const { t } = useLanguage();
+  const [open, setOpen] = useState(false);
+  const openSheet = (e) => {
+    // Satır bir <button> (Pişirme modu) ya da <label> (Alışveriş Listesi) olabilir:
+    // tıklama satırın işaretleme davranışını tetiklemesin.
+    e.preventDefault();
+    e.stopPropagation();
+    setOpen(true);
+  };
+  return (
+    <>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: "3px", marginLeft: "6px", fontSize: "11px", color: COLORS.inkSoft, whiteSpace: "nowrap" }}>
+        ({t("rounding.label")})
+        <span
+          role="button"
+          tabIndex={0}
+          aria-label={t("rounding.infoAria")}
+          onClick={openSheet}
+          onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && openSheet(e)}
+          style={{ display: "inline-flex", padding: "2px", margin: "-2px", cursor: "pointer", color: COLORS.mustardDark }}
+        >
+          <Info size={14} />
+        </span>
+      </span>
+      {/* body'ye portal: satırın atalarındaki transform (ekran animasyonu) ve overflow:hidden
+          (ExpandableSection) position:fixed'i bozup kartı kırpmasın. */}
+      {open && createPortal(<RoundingInfoSheet name={name} pairs={pairs} onClose={() => setOpen(false)} />, document.body)}
+    </>
+  );
+}
+
+function RoundingInfoSheet({ name, pairs, onClose }) {
+  const { t } = useLanguage();
+  const [closing, setClosing] = useState(false);
+  const close = useCallback(() => {
+    setClosing(true);
+    setTimeout(onClose, ROUNDING_SHEET_EXIT_MS);
+  }, [onClose]);
+  useEffect(() => {
+    openRoundingSheet.close = close;
+    return () => {
+      if (openRoundingSheet.close === close) openRoundingSheet.close = null;
+    };
+  }, [close]);
+  // Portal olsa da React olayları bileşen ağacında satıra (button/label) kadar kabarır: geçmesin.
+  const stop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+  const row = (label, value, strong) => (
+    <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", fontSize: "14px", padding: "6px 0" }}>
+      <span style={{ color: COLORS.inkSoft }}>{label}</span>
+      <span style={{ color: COLORS.ink, fontWeight: strong ? 700 : 500, whiteSpace: "nowrap" }}>{value}</span>
+    </div>
+  );
+  return (
+    <div
+      onClick={stop}
+      className={`rounding-sheet-root${closing ? " is-closing" : ""}`}
+      style={{ position: "fixed", inset: 0, zIndex: 90, display: "flex", alignItems: "flex-end", justifyContent: "center", cursor: "default", textAlign: "left", whiteSpace: "normal" }}
+    >
+      <style>{`
+        @keyframes roundingFadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes roundingFadeOut { from { opacity: 1; } to { opacity: 0; } }
+        @keyframes roundingSheetIn { from { opacity: 0; transform: translateY(28px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes roundingSheetOut { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(28px); } }
+        .rounding-sheet-backdrop { animation: roundingFadeIn 200ms ease-out both; }
+        .rounding-sheet-card { animation: roundingSheetIn 220ms ease-out both; }
+        .rounding-sheet-root.is-closing .rounding-sheet-backdrop { animation: roundingFadeOut ${ROUNDING_SHEET_EXIT_MS}ms ease-in both; }
+        .rounding-sheet-root.is-closing .rounding-sheet-card { animation: roundingSheetOut ${ROUNDING_SHEET_EXIT_MS}ms ease-in both; }
+        @media (min-width: 768px) {
+          .rounding-sheet-root { align-items: center !important; padding: 16px; }
+          .rounding-sheet-card { border-radius: 16px !important; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .rounding-sheet-backdrop, .rounding-sheet-card { animation: none !important; }
+        }
+      `}</style>
+      <div
+        className="rounding-sheet-backdrop"
+        onClick={close}
+        style={{ position: "absolute", inset: 0, background: "rgba(42,38,32,0.45)", backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)" }}
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="rounding-sheet-title"
+        className="rounding-sheet-card"
+        style={{
+          position: "relative",
+          width: "100%",
+          maxWidth: "420px",
+          background: COLORS.panel,
+          borderRadius: "20px 20px 0 0",
+          boxShadow: "0 -8px 40px rgba(0,0,0,0.25)",
+          padding: "20px 20px max(20px, env(safe-area-inset-bottom))",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: "10px" }}>
+          <h3 id="rounding-sheet-title" style={{ fontFamily: SERIF, fontSize: "17px", color: COLORS.ink, margin: 0 }}>
+            {t("rounding.title")}
+          </h3>
+          <button
+            onClick={close}
+            aria-label={t("common.close")}
+            style={{ background: "transparent", border: "none", cursor: "pointer", color: COLORS.inkSoft, padding: "4px", display: "flex" }}
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <p style={{ fontSize: "14px", color: COLORS.ink, margin: "0 0 12px", lineHeight: 1.5, fontWeight: 400 }}>
+          {t("rounding.intro")} {t("rounding.body")}
+        </p>
+        <div style={{ borderRadius: "10px", background: COLORS.paper, border: `1px solid ${COLORS.line}`, padding: "8px 12px" }}>
+          <div style={{ fontSize: "13px", fontWeight: 700, color: COLORS.ink, padding: "2px 0 4px" }}>{name}</div>
+          {pairs.map((p, i) => (
+            <div key={i} style={i > 0 ? { borderTop: `1px solid ${COLORS.line}`, marginTop: "4px" } : undefined}>
+              {row(t("rounding.exact"), p.exact, false)}
+              {row(t("rounding.shown"), p.shown, true)}
+            </div>
+          ))}
+        </div>
+        <p style={{ fontSize: "12px", color: COLORS.inkSoft, margin: "12px 0 0", fontWeight: 400 }}>{t("rounding.nutritionNote")}</p>
+      </div>
+    </div>
+  );
+}
+
 function ExpandableSection({ title, badge, defaultOpen = false, children }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
@@ -4028,7 +4183,15 @@ function CookMode({ recipe, selectedServings, onFinish }) {
                           {done && <Check size={12} color="#F3EFE6" />}
                         </span>
                         <span style={{ flex: 1 }}>{ing.name}</span>
-                        <span style={{ color: COLORS.inkSoft, flexShrink: 0 }}>{scaleIngredient(ing, factor, decimal).text}</span>
+                        {(() => {
+                          const scaled = scaleIngredient(ing, factor, decimal);
+                          return (
+                            <span style={{ color: COLORS.inkSoft, flexShrink: 0 }}>
+                              {scaled.text}
+                              {scaled.rounded && <RoundedBadge name={ing.name} pairs={[{ exact: scaled.exactText, shown: scaled.text }]} />}
+                            </span>
+                          );
+                        })()}
                       </button>
                     </li>
                   );
