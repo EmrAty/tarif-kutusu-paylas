@@ -8,6 +8,7 @@ import {
   PORTION_UNITS,
   PORTION_SIZES,
   PORTION_STATES,
+  SERVINGS_UNITS,
 } from "../../shared/portionEstimate.js";
 
 // /api/extract ile aynı model ve prompt. Farklar: çıktı şemaya bağlı (her zaman
@@ -20,6 +21,7 @@ const RECIPE_SCHEMA = {
   properties: {
     title: { type: "string" },
     servings: { anyOf: [{ type: "integer" }, { type: "null" }] },
+    servings_unit: { type: "string", enum: SERVINGS_UNITS },
     prep_time_minutes: { type: "number" },
     difficulty: { type: "string", enum: ["Kolay", "Orta", "Zor"] },
     ingredients: {
@@ -61,8 +63,9 @@ const RECIPE_SCHEMA = {
               size: { anyOf: [{ type: "string", enum: PORTION_SIZES }, { type: "null" }] },
               state: { type: "string", enum: PORTION_STATES },
               quantity_in_source: { type: "boolean" },
+              main: { type: "boolean" },
             },
-            required: ["name", "kind", "quantity", "unit", "size", "state", "quantity_in_source"],
+            required: ["name", "kind", "quantity", "unit", "size", "state", "quantity_in_source", "main"],
             additionalProperties: false,
           },
         },
@@ -71,7 +74,7 @@ const RECIPE_SCHEMA = {
       additionalProperties: false,
     },
   },
-  required: ["title", "servings", "prep_time_minutes", "difficulty", "ingredients", "instructions", "nutrition", "assumptions", "portion"],
+  required: ["title", "servings", "servings_unit", "prep_time_minutes", "difficulty", "ingredients", "instructions", "nutrition", "assumptions", "portion"],
   additionalProperties: false,
 };
 

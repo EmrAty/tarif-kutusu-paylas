@@ -30,7 +30,7 @@ import { scaleIngredient, FRACTION_GLYPHS, scaleNutrition, perServingNutrition, 
 import { CATEGORIES, recipeSystemPrompt, buildRecipeUserText } from "../shared/recipeExtraction.js";
 import { contentLangOf, translationPayload } from "../shared/recipeLocales.js";
 import { localizeRecipe, displayIngredient, contentFingerprint, localizeAmount } from "./recipeLocale.js";
-import { applyPortionEstimate } from "../shared/portionEstimate.js";
+import { applyPortionEstimate, servingsUnitOf } from "../shared/portionEstimate.js";
 import { useLanguage, LANGUAGES, translate } from "./i18n.jsx";
 
 // ShareReceiver/NativeSplash sadece Android tarafında yazılmış özel native plugin'ler
@@ -3161,8 +3161,20 @@ function AddForm({ link, caption, notes, images, category, busy, error, setLink,
 }
 
 // "1 porsiyon" / "4 porsiyon" — tekil için ayrı metin (İngilizce'de "1 servings" olmasın).
-function formatServings(t, n) {
+// unit: kaynakta adet ("12 adet kurabiye") ya da dilim yazıyorsa o birimle gösterilir (bkz. servingsUnitOf).
+function formatServings(t, n, unit = "porsiyon") {
+  if (unit === "adet") return n === 1 ? t("servings.onePiece") : t("detail.pieces", { n });
+  if (unit === "dilim") return n === 1 ? t("servings.oneSlice") : t("detail.slices", { n });
   return n === 1 ? t("servings.one") : t("detail.servings", { n });
+}
+
+// Tarif Detay'daki porsiyon metni. Hesaplanan tahminde makul aralık da yazılır ("Tahmini 6 porsiyon (5–8)");
+// aralık yalnızca malzemelerden hesaplanan (servings_basis "hesap") tariflerde kayıtlıdır.
+function servingsLabel(t, recipe) {
+  const n = recipe.servings;
+  if (!isEstimatedServings(recipe)) return formatServings(t, n, servingsUnitOf(recipe));
+  const range = recipe.servings_basis === "hesap" && Array.isArray(recipe.servings_range) ? recipe.servings_range : null;
+  return range ? t("detail.servingsEstimatedRange", { n, lo: range[0], hi: range[1] }) : t("detail.servingsEstimated", { n });
 }
 
 // Porsiyon kesin değilse "Tahmini" gösterilir: malzemelerden hesaplandıysa (shared/portionEstimate.js)
@@ -3172,7 +3184,7 @@ const isEstimatedServings = (recipe) => !!recipe && (recipe.servings_basis === "
 
 // Pişirme modunun ilk ekranındaki porsiyon seçici: − 4 +. Seçim yalnızca o pişirme
 // oturumunda (CookMode state'i) yaşar; kayıtlı porsiyon değişmez (o Tarifi Düzenle'den değişir).
-function ServingsStepper({ base, value, onChange, estimated }) {
+function ServingsStepper({ base, value, onChange, estimated, unit }) {
   const { t } = useLanguage();
   const min = Math.min(MIN_SERVINGS, base);
   const max = maxServingsFor(base);
@@ -3203,7 +3215,7 @@ function ServingsStepper({ base, value, onChange, estimated }) {
         </button>
       </div>
       <div style={{ fontSize: "12px", color: COLORS.inkSoft, marginTop: "12px", minHeight: "16px" }}>
-        {value !== base ? t(estimated ? "servings.originalEstimated" : "servings.original", { n: base }) : ""}
+        {value !== base ? t(estimated ? "servings.originalEstimated" : "servings.original", { count: formatServings(t, base, unit) }) : ""}
       </div>
     </div>
   );
@@ -3276,7 +3288,7 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
   const baseServings = baseServingsOf(recipe);
 
   const metaParts = [
-    servings ? (servingsEstimated ? t("detail.servingsEstimated", { n: servings }) : formatServings(t, servings)) : null,
+    servings ? servingsLabel(t, recipe) : null,
     hasValidCategory ? categoryLabel(category) : null,
     prep_time_minutes ? t("detail.prepTime", { n: prep_time_minutes }) : null,
     difficulty ? difficultyLabel(difficulty) : null,
@@ -3587,7 +3599,7 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
         </div>
 
         <div className="md-nutrition" style={{ width: "100%" }}>
-          <NutritionLabel nutrition={nutrition} servings={baseServings} estimated={servingsEstimated} />
+          <NutritionLabel nutrition={nutrition} servings={baseServings} estimated={servingsEstimated} unit={servingsUnitOf(recipe)} />
         </div>
       </div>
 
@@ -3837,7 +3849,7 @@ function ShoppingList({ recipes, onNeedTranslation, isPlus, families, initialCon
                 >
                   {isSel && <Check size={13} />}
                   {r.title || t("common.untitledRecipe")}
-                  {isSel && servingsMap[r.id] ? ` · ${formatServings(t, servingsMap[r.id])}` : ""}
+                  {isSel && servingsMap[r.id] ? ` · ${formatServings(t, servingsMap[r.id], servingsUnitOf(r))}` : ""}
                 </button>
               );
             })}
@@ -4093,6 +4105,7 @@ function CookMode({ recipe, onFinish }) {
   // yapılış adımları (süre/sıcaklık dahil) aynen kalır. Kayıtlı porsiyon bilinmiyorsa
   // oran kurulamaz: seçici gösterilmez, miktarlar tarifteki gibi kalır.
   const baseServings = baseServingsOf(recipe);
+  const servingsUnit = servingsUnitOf(recipe);
   const [selectedServings, setSelectedServings] = useState(baseServings);
   const factor = baseServings && selectedServings ? selectedServings / baseServings : 1;
   const decimal = language === "tr" ? "," : ".";
@@ -4229,9 +4242,11 @@ function CookMode({ recipe, onFinish }) {
       <div key={String(stage)} className={stage === "done" ? "cook-done-enter" : "cook-stage-enter"} style={{ flex: 1 }}>
         {stage === "servings" && (
           <div>
-            <h2 style={{ fontFamily: SERIF, fontSize: "22px", color: COLORS.ink, margin: "0 0 28px" }}>{t("cook.servingsQuestion")}</h2>
+            <h2 style={{ fontFamily: SERIF, fontSize: "22px", color: COLORS.ink, margin: "0 0 28px" }}>
+              {t(servingsUnit === "adet" ? "cook.piecesQuestion" : servingsUnit === "dilim" ? "cook.slicesQuestion" : "cook.servingsQuestion")}
+            </h2>
             {baseServings ? (
-              <ServingsStepper base={baseServings} value={selectedServings} onChange={changeServings} estimated={isEstimatedServings(recipe)} />
+              <ServingsStepper base={baseServings} value={selectedServings} onChange={changeServings} estimated={isEstimatedServings(recipe)} unit={servingsUnit} />
             ) : (
               <p style={{ fontSize: "15px", color: COLORS.inkSoft, margin: 0, lineHeight: 1.5 }}>{t("cook.servingsUnknown")}</p>
             )}
@@ -4243,7 +4258,7 @@ function CookMode({ recipe, onFinish }) {
             <h2 style={{ fontFamily: SERIF, fontSize: "22px", color: COLORS.ink, margin: baseServings ? "0 0 6px" : "0 0 18px" }}>{recipe.title || t("common.recipeWord")}</h2>
             {baseServings && (
               <p style={{ fontSize: "13px", fontWeight: 600, color: COLORS.mustardDark, margin: "0 0 18px" }}>
-                {t("servings.forCount", { count: formatServings(t, selectedServings || baseServings) })}
+                {t("servings.forCount", { count: formatServings(t, selectedServings || baseServings, servingsUnit) })}
               </p>
             )}
             {ingredients.length === 0 ? (
@@ -4370,7 +4385,7 @@ function CookMode({ recipe, onFinish }) {
 // Besin değerleri tarifin TAMAMI için toplam olarak saklanıyor (bkz. shared/recipeExtraction.js).
 // Seçilen porsiyon kayıtlıdan farklıysa toplam orantıyla ölçeklenir ve "hazırladığın miktar"
 // olarak gösterilir; 1 porsiyonluk değer hiç değişmez.
-function NutritionLabel({ nutrition, servings, selectedServings, estimated }) {
+function NutritionLabel({ nutrition, servings, selectedServings, estimated, unit }) {
   const { t } = useLanguage();
   const [open, setOpen] = useState(false);
   const factor = servings && selectedServings ? selectedServings / servings : 1;
@@ -4425,8 +4440,8 @@ function NutritionLabel({ nutrition, servings, selectedServings, estimated }) {
         <div style={{ overflow: "hidden" }}>
           <div style={{ fontSize: "11px", padding: "6px 0 4px", borderBottom: `1px solid ${COLORS.ink}`, color: COLORS.ink }}>
             {factor !== 1
-              ? `${t("nutrition.preparedTotal")} (${formatServings(t, selectedServings)})`
-              : `${t("nutrition.wholeRecipe")} ${servings ? t(estimated ? "nutrition.servingsNoteEstimated" : "nutrition.servingsNote", { servings }) : ""}`}
+              ? `${t("nutrition.preparedTotal")} (${formatServings(t, selectedServings, unit)})`
+              : `${t("nutrition.wholeRecipe")} ${servings ? t(estimated ? "nutrition.servingsNoteEstimated" : "nutrition.servingsNote", { count: formatServings(t, servings, unit) }) : ""}`}
           </div>
 
           <NutritionRow label={t("nutrition.protein")} value={protein} unit="g" />
@@ -4435,7 +4450,7 @@ function NutritionLabel({ nutrition, servings, selectedServings, estimated }) {
 
           {perServing && (
             <div style={{ fontSize: "11px", paddingTop: "8px", marginTop: "4px", borderTop: `1px solid ${COLORS.ink}`, color: COLORS.ink }}>
-              <strong>{t("nutrition.perServing")}:</strong> {perServing.calories ?? "—"} {t("pantry.kcal")} · {perServing.protein_g ?? "—"} g {t("nutrition.protein")} · {perServing.carbs_g ?? "—"} g {t("nutrition.carbs")} · {perServing.fat_g ?? "—"} g {t("nutrition.fat")}
+              <strong>{unit === "adet" ? t("servings.onePiece") : unit === "dilim" ? t("servings.oneSlice") : t("nutrition.perServing")}:</strong> {perServing.calories ?? "—"} {t("pantry.kcal")} · {perServing.protein_g ?? "—"} g {t("nutrition.protein")} · {perServing.carbs_g ?? "—"} g {t("nutrition.carbs")} · {perServing.fat_g ?? "—"} g {t("nutrition.fat")}
             </div>
           )}
 
@@ -4553,7 +4568,7 @@ function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setS
     const prevServings = initial?.servings != null ? Number(initial.servings) : undefined;
     const servingsFields =
       isNew || nextServings !== prevServings
-        ? { servings_basis: nextServings ? "kullanici" : undefined, servings_calc: undefined, servings_note: undefined }
+        ? { servings_basis: nextServings ? "kullanici" : undefined, servings_calc: undefined, servings_note: undefined, servings_range: undefined }
         : {};
 
     onSave({

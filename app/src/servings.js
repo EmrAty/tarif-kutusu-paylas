@@ -8,7 +8,9 @@
 
 // Ölçeklenmemesi gereken ifadeler: "bir tutam", "tuz (damak zevkine göre)",
 // "servis için", "üzeri için" vb. Miktarın içinde sayı olsa bile değişmezler.
-const NO_SCALE_RE = /(tutam|çimdik|için|göre|gerek|yeterli|servis|süsle|üzeri|pinch|taste|serving|garnish|needed|dash)/u;
+// Tek başına "için" bilerek listede YOK: "500 g (köfte için)", "3 yemek kaşığı (sos için)"
+// gibi amaç notları asıl malzemedir ve ölçeklenmelidir.
+const NO_SCALE_RE = /(tutam|çimdik|göre|gerek|yeterli|servis|süsle|üzeri|pinch|taste|serving|garnish|needed|dash)/u;
 
 export const FRACTION_GLYPHS = { "½": 0.5, "¼": 0.25, "¾": 0.75, "⅓": 1 / 3, "⅔": 2 / 3, "⅛": 0.125 };
 const GLYPH_BY_VALUE = [

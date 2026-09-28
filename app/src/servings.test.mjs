@@ -76,6 +76,10 @@ test("belirsiz miktarlar ve katsayı 1 dokunulmadan kalır", () => {
   assert.equal(scale("Tuz", "bir tutam", 0.5).status, "same");
   assert.equal(text("Tuz", "1 tutam", 0.5), "1 tutam");
   assert.equal(text("Maydanoz", "servis için", 0.5), "servis için");
+  // Amaç notu ("köfte için", "sos için") malzemeyi ölçekleme dışı bırakmaz.
+  assert.equal(text("Kıyma", "500 g (köfte için)", 2), "1000 g (köfte için)");
+  assert.equal(text("Zeytinyağı", "3 yemek kaşığı (sos için)", 2), "6 yemek kaşığı (sos için)");
+  assert.equal(text("Tereyağı", "2 yemek kaşığı (üzeri için)", 2), "2 yemek kaşığı (üzeri için)");
   assert.equal(text("Yumurta", "3 adet", 1), "3 adet");
   assert.equal(text("Yumurta", "", 0.5), "");
 });
