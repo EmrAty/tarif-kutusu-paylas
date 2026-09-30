@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test shared/portionEstimate.test.mjs src/servings.test.mjs src/recipeLocale.test.mjs"
+    "test": "node --test shared/portionEstimate.test.mjs src/servings.test.mjs src/recipeLocale.test.mjs src/recipeLocks.test.mjs"
   },
   "dependencies": {
     "@capacitor-firebase/authentication": "^8.5.1",

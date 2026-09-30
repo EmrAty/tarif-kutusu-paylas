@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import {
   ChefHat, Plus, Minus, Link2, ExternalLink, Trash2, Loader2, ArrowLeft, ArrowRight, AlertCircle,
   FileText, Pencil, Check, ChevronDown, Star, Search, ShoppingCart, Clock, Gauge, Undo2, X, Package, Download,
-  Mail, LogOut, Users, Crown, Settings, UserCircle, Copy, Sparkles, LogIn, Bell, Info,
+  Mail, LogOut, Users, Crown, Settings, UserCircle, Copy, Sparkles, LogIn, Bell, Info, Lock,
 } from "lucide-react";
 import { auth, googleProvider, requestFcmToken } from "./firebase.js";
 import {
@@ -29,6 +29,7 @@ import NativeSplash from "./capacitorSplash.js";
 import { scaleIngredient, FRACTION_GLYPHS, scaleNutrition, perServingNutrition, baseServingsOf, maxServingsFor, MIN_SERVINGS } from "./servings.js";
 import { CATEGORIES, recipeSystemPrompt, buildRecipeUserText } from "../shared/recipeExtraction.js";
 import { FREE_RECIPE_LIMIT, FREE_LIMIT_ERROR_CODE } from "../shared/limits.js";
+import { lockedRecipeIds } from "./recipeLocks.js";
 import { contentLangOf, translationPayload } from "../shared/recipeLocales.js";
 import { localizeRecipe, displayIngredient, contentFingerprint, localizeAmount } from "./recipeLocale.js";
 import { applyPortionEstimate, servingsUnitOf } from "../shared/portionEstimate.js";
@@ -153,6 +154,10 @@ export const SERIF = "Charter, 'Iowan Old Style', 'Georgia', 'Times New Roman', 
 export const BODY = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
 const LABELSANS = "'Helvetica Neue Condensed', 'Arial Narrow', Arial, sans-serif";
 const CARD_SHADOW = "0 1px 2px rgba(42,38,32,0.05), 0 8px 24px rgba(42,38,32,0.06)";
+// Kilitli tarif kartı: kartın kendisi aynı, üstünde hafif koyu yeşil/krem ton,
+// soluk içerik ve hardal kilit ikonu.
+const LOCKED_TINT = "rgba(47,74,61,0.07)";
+const LOCKED_OPACITY = 0.5;
 const SCREEN_EXIT_MS = 200; // mobil "ekran" kapanış animasyonunun süresi (gerçek view değişiminden önce)
 // Mobilde/Capacitor'da tarif listesinin (Sidebar) üstünde kalmayıp onun yerine
 // tam ekran açılan, kendi giriş/çıkış animasyonu + scroll-üste-sıfırlama olan view'lar.
@@ -497,6 +502,12 @@ export default function TarifKutusu() {
   // (paylaşım paneli job'u aile tarifine "familyId" ekliyor).
   const pendingRecipeScopeRef = useRef(PERSONAL);
   const [familiesLoaded, setFamiliesLoaded] = useState(false);
+  // Tarif kilidi için Plus durumu (null = henüz bilinmiyor). Aile listesi
+  // isteğinden bağımsız: /api/profile'dan ayrıca alınır ve hesap başına bu
+  // cihazda son bilinen değer saklanır — aile isteği başarısız olsa ya da
+  // takılsa bile Free hesabın fazla tarifleri açılmaz. Hiç bilinmiyorsa
+  // (ilk açılış) kilit gösterilmez; Plus kullanıcıda yanlış kilit görünmesin.
+  const [plusStatus, setPlusStatus] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [modalView, setModalView] = useState(null); // "account" | "families" | "plus" | "settings" | null
   // Free tarif sınırı dolunca yeni tarif eklemeye çalışınca açılan uyarı.
@@ -629,17 +640,52 @@ export default function TarifKutusu() {
 
   const showAuthGate = authChecked && !authUser;
 
+  const plusStatusKey = authUser ? `plus-status:${authUser.uid}` : null;
+  const rememberPlusStatus = useCallback(
+    (value) => {
+      setPlusStatus(value);
+      if (!plusStatusKey) return;
+      try {
+        storageSet(plusStatusKey, value ? "1" : "0");
+      } catch (e) {
+        // depolama yoksa yalnızca bu oturumda geçerli
+      }
+    },
+    [plusStatusKey]
+  );
+
+  useEffect(() => {
+    if (!plusStatusKey) {
+      setPlusStatus(null);
+      return;
+    }
+    const cached = storageGet(plusStatusKey)?.value;
+    setPlusStatus(cached === "1" ? true : cached === "0" ? false : null);
+    let cancelled = false;
+    authedFetch("/api/profile")
+      .then((data) => {
+        if (!cancelled) rememberPlusStatus(!!data.isPlus);
+      })
+      .catch(() => {
+        // alınamazsa son bilinen değer kullanılmaya devam eder
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [plusStatusKey, rememberPlusStatus]);
+
   const loadFamiliesState = useCallback(async () => {
     try {
       const data = await fetchFamilies(personName);
       setIsPlus(!!data.isPlus);
+      rememberPlusStatus(!!data.isPlus);
       setFamilies(data.families || []);
     } catch (e) {
       // bilgi alınamazsa sessizce geç, bir sonraki denemede tekrar bakılır
     } finally {
       setFamiliesLoaded(true);
     }
-  }, [personName]);
+  }, [personName, rememberPlusStatus]);
 
   useEffect(() => {
     if (authUser) loadFamiliesState();
@@ -990,6 +1036,25 @@ export default function TarifKutusu() {
     return Array.from(byId.values());
   }, [recipeBuckets, families]);
 
+  // Free hesapta sınırı aşan en yeni kişisel tarifler kilitli (bkz.
+  // src/recipeLocks.js). Türetilmiş durum: Redis'e yazılmaz; Plus açılınca,
+  // tarif silinince kendiliğinden yeniden hesaplanır. Yalnızca kişisel liste
+  // sayılır; aile listeleri ayrı kapsam (Free hesap zaten ailede olamaz).
+  const lockedIds = useMemo(
+    () =>
+      plusStatus === null
+        ? new Set()
+        : lockedRecipeIds(recipeBuckets[PERSONAL] || [], { isPlus: plusStatus, limit: FREE_RECIPE_LIMIT }),
+    [plusStatus, recipeBuckets]
+  );
+  const isRecipeLocked = useCallback(
+    (recipeOrId) => {
+      const id = typeof recipeOrId === "string" ? recipeOrId : recipeOrId?.id;
+      return !!id && lockedIds.has(id);
+    },
+    [lockedIds]
+  );
+
   // Bildirime tıklanınca (native pushNotificationActionPerformed ya da web
   // ?openRecipe= query param) hedef tarif henüz yüklenmemiş olabilir - ailenin
   // tarif bucket'ı ayrı bir istekle geliyor. Bu yüzden tarifin recipes'e girip
@@ -998,11 +1063,14 @@ export default function TarifKutusu() {
     if (!pendingRecipeId) return;
     const recipe = recipes.find((r) => r.id === pendingRecipeId);
     if (recipe) {
-      setActiveId(recipe.id);
-      setView("detail");
+      // Kilitli tarif bildirimden de açılmaz.
+      if (!isRecipeLocked(recipe)) {
+        setActiveId(recipe.id);
+        setView("detail");
+      }
       setPendingRecipeId(null);
     }
-  }, [pendingRecipeId, recipes]);
+  }, [pendingRecipeId, recipes, isRecipeLocked]);
 
   // Bildirimdeki tarif eldeki listede yoksa (uygulama arka planda açık kalmış,
   // tarif sonradan sunucuda oluşmuş) listeyi bir kez sunucudan tazele.
@@ -1271,7 +1339,24 @@ export default function TarifKutusu() {
     setView("shopping");
   };
 
-  const active = recipes.find((r) => r.id === activeId);
+  // Kilitli tarif detay/pişirme/düzenleme/alışveriş ekranlarının hiçbirinde
+  // açılmaz: hepsi `active` üzerinden çalışıyor.
+  const activeCandidate = recipes.find((r) => r.id === activeId);
+  const active = activeCandidate && !isRecipeLocked(activeCandidate) ? activeCandidate : undefined;
+
+  // Tarif açıkken kilitlenirse (ör. Plus kapandı) boş ekranda kalınmasın.
+  useEffect(() => {
+    if (activeCandidate && !active && (view === "detail" || view === "cook" || view === "edit")) {
+      setView("list");
+    }
+  }, [activeCandidate, active, view]);
+
+  const openRecipe = (id) => {
+    if (isRecipeLocked(id)) return false;
+    setActiveId(id);
+    setView("detail");
+    return true;
+  };
 
   // --- Tarif içeriğinin uygulama dilinde gösterimi (bkz. src/recipeLocale.js) -------------
   // Asıl tarif (recipes/active) hiç değişmez; düzenleme, silme, bildirim ve Kiler hep onu
@@ -1443,10 +1528,11 @@ export default function TarifKutusu() {
             activeId={activeId}
             isPlus={isPlus}
             familyNameById={familyNameById}
+            isRecipeLocked={isRecipeLocked}
             onSelect={(id) => {
+              if (isRecipeLocked(id)) return;
               listScrollYRef.current = window.scrollY;
-              setActiveId(id);
-              setView("detail");
+              openRecipe(id);
             }}
             onAdd={() => {
               if (view !== "add") listScrollYRef.current = window.scrollY;
@@ -1588,10 +1674,8 @@ export default function TarifKutusu() {
                 recipes={recipes}
                 isPlus={isPlus}
                 families={families}
-                onSelectRecipe={(id) => {
-                  setActiveId(id);
-                  setView("detail");
-                }}
+                isRecipeLocked={isRecipeLocked}
+                onSelectRecipe={openRecipe}
                 onSaveSuggestion={handleSavePantrySuggestion}
                 pantryModalOpenRef={pantryModalOpenRef}
                 pantryModalCloseRef={pantryModalCloseRef}
@@ -1604,10 +1688,8 @@ export default function TarifKutusu() {
               <FavoritesView
                 recipes={displayRecipes}
                 familyNameById={familyNameById}
-                onSelect={(id) => {
-                  setActiveId(id);
-                  setView("detail");
-                }}
+                isRecipeLocked={isRecipeLocked}
+                onSelect={openRecipe}
               />
             </div>
           )}
@@ -1643,7 +1725,8 @@ export default function TarifKutusu() {
           <PlusView
             isPlus={isPlus}
             onToggle={async (next) => {
-              await setPlusFlag(next);
+              const profile = await setPlusFlag(next);
+              rememberPlusStatus(!!profile?.isPlus);
               await loadFamiliesState();
             }}
           />
@@ -2358,7 +2441,7 @@ function scopeLabels(recipe, familyNameById, t) {
   return scopes.map((s) => (s === PERSONAL ? t("common.personal") : familyNameById?.[s] || t("families.fallbackName")));
 }
 
-function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, onAdd, onManual, onPantry, onShopping, onToggleFavorite, onDelete, onSendNotification }) {
+function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, isRecipeLocked, onSelect, onAdd, onManual, onPantry, onShopping, onToggleFavorite, onDelete, onSendNotification }) {
   const { t, language, categoryLabel } = useLanguage();
   const [listOpen, setListOpen] = useState(true);
   const [openCats, setOpenCats] = useState({});
@@ -2414,14 +2497,15 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
   const listExpanded = isSearching ? true : listOpen;
 
   const renderRecipeButton = (r) => {
-    const isActive = activeId === r.id;
+    const locked = !!isRecipeLocked?.(r);
+    const isActive = !locked && activeId === r.id;
     const isFam = isFamilyRecipeScope(r);
     const notifyOpen = isFam && longPressId === r.id;
     const notifyStatus = quickNotify.id === r.id ? quickNotify.status : "idle";
     return (
       <div key={r.id} style={{ borderRadius: "6px", overflow: "hidden" }}>
         <div
-          onPointerDown={() => startPress(r)}
+          onPointerDown={() => !locked && startPress(r)}
           onPointerUp={cancelPress}
           onPointerLeave={cancelPress}
           onPointerCancel={cancelPress}
@@ -2430,8 +2514,8 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
             alignItems: "center",
             gap: "4px",
             borderRadius: "6px",
-            border: `1px solid ${isActive ? COLORS.forest : "transparent"}`,
-            background: isActive ? COLORS.forest : "transparent",
+            border: `1px solid ${isActive ? COLORS.forest : locked ? COLORS.line : "transparent"}`,
+            background: isActive ? COLORS.forest : locked ? LOCKED_TINT : "transparent",
           }}
         >
           <button
@@ -2440,8 +2524,11 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
                 longPressFiredRef.current = false;
                 return;
               }
+              if (locked) return;
               onSelect(r.id);
             }}
+            aria-disabled={locked || undefined}
+            aria-label={locked ? `${r.title || t("common.untitledRecipe")} — ${t("recipe.locked")}` : undefined}
             style={{
               flex: 1,
               minWidth: 0,
@@ -2450,7 +2537,8 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
               background: "transparent",
               border: "none",
               color: isActive ? "#F3EFE6" : COLORS.ink,
-              cursor: "pointer",
+              cursor: locked ? "default" : "pointer",
+              opacity: locked ? LOCKED_OPACITY : 1,
             }}
           >
             <div style={{ fontSize: "13px", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -2465,20 +2553,26 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, onSelect, 
               {new Date(r.createdAt).toLocaleDateString(language === "en" ? "en-US" : "tr-TR")}
             </div>
           </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleFavorite(r.id);
-            }}
-            aria-label={t("sidebar.favorite")}
-            style={{ padding: "8px", background: "transparent", border: "none", cursor: "pointer", flexShrink: 0 }}
-          >
-            <Star
-              size={15}
-              color={r.isFavorite ? COLORS.mustard : isActive ? "#C9C2AE" : COLORS.inkSoft}
-              fill={r.isFavorite ? COLORS.mustard : "none"}
-            />
-          </button>
+          {locked ? (
+            <span title={t("recipe.locked")} style={{ padding: "8px", display: "flex", flexShrink: 0 }}>
+              <Lock size={15} color={COLORS.mustardDark} aria-hidden="true" />
+            </span>
+          ) : (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleFavorite(r.id);
+              }}
+              aria-label={t("sidebar.favorite")}
+              style={{ padding: "8px", background: "transparent", border: "none", cursor: "pointer", flexShrink: 0 }}
+            >
+              <Star
+                size={15}
+                color={r.isFavorite ? COLORS.mustard : isActive ? "#C9C2AE" : COLORS.inkSoft}
+                fill={r.isFavorite ? COLORS.mustard : "none"}
+              />
+            </button>
+          )}
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -5021,7 +5115,7 @@ function ingredientIsAvailable(ingredientName, pantryItems) {
   });
 }
 
-function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onSaveSuggestion, pantryModalOpenRef, pantryModalCloseRef }) {
+function PantryFinder({ recipes, isPlus, families, isRecipeLocked, onSelectRecipe, onSaveSuggestion, pantryModalOpenRef, pantryModalCloseRef }) {
   const { t } = useLanguage();
   const [context, setContext] = useState(PERSONAL);
   const [items, setItems] = useState([]);
@@ -5246,19 +5340,25 @@ function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onSaveSuggest
             <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
               {results.map(({ recipe, total, matchedCount, missing, ratio }) => {
                 const isFull = matchedCount === total;
+                const locked = !!isRecipeLocked?.(recipe);
                 return (
                   <button
                     key={recipe.id}
-                    onClick={() => onSelectRecipe(recipe.id)}
+                    onClick={() => !locked && onSelectRecipe(recipe.id)}
+                    aria-disabled={locked || undefined}
+                    aria-label={locked ? `${recipe.title || t("common.untitledRecipe")} — ${t("recipe.locked")}` : undefined}
                     style={{
+                      position: "relative",
                       textAlign: "left",
                       borderRadius: "10px",
                       border: `1px solid ${isFull ? COLORS.forest : COLORS.line}`,
-                      background: COLORS.panel,
+                      background: locked ? LOCKED_TINT : COLORS.panel,
                       padding: "16px",
-                      cursor: "pointer",
+                      cursor: locked ? "default" : "pointer",
+                      opacity: locked ? LOCKED_OPACITY : 1,
                     }}
                   >
+                    {locked && <Lock size={15} color={COLORS.mustardDark} aria-hidden="true" style={{ position: "absolute", top: "10px", right: "10px" }} />}
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: missing.length > 0 ? "8px" : 0 }}>
                       <div style={{ fontFamily: SERIF, fontSize: "16px", color: COLORS.ink }}>{recipe.title || t("common.untitledRecipe")}</div>
                       <span
@@ -5482,7 +5582,7 @@ function CategoryPickerModal({ onSelect, onClose }) {
   );
 }
 
-function FavoritesView({ recipes, familyNameById, onSelect }) {
+function FavoritesView({ recipes, familyNameById, isRecipeLocked, onSelect }) {
   const { t } = useLanguage();
   const favorites = recipes.filter((r) => r.isFavorite);
   return (
@@ -5496,29 +5596,35 @@ function FavoritesView({ recipes, familyNameById, onSelect }) {
         <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: 0 }}>{t("favorites.empty")}</p>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-          {favorites.map((r) => (
-            <button
-              key={r.id}
-              onClick={() => onSelect(r.id)}
-              style={{
-                textAlign: "left",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: "12px",
-                padding: "12px 14px",
-                borderRadius: "10px",
-                border: `1px solid ${COLORS.line}`,
-                background: COLORS.paper,
-                cursor: "pointer",
-              }}
-            >
-              <span style={{ fontFamily: SERIF, fontSize: "15px", color: COLORS.ink }}>{r.title || t("common.untitledRecipe")}</span>
-              <span style={{ fontSize: "12px", color: COLORS.inkSoft, flexShrink: 0 }}>
-                {scopeLabels(r, familyNameById, t).join(" + ")}
-              </span>
-            </button>
-          ))}
+          {favorites.map((r) => {
+            const locked = !!isRecipeLocked?.(r);
+            return (
+              <button
+                key={r.id}
+                onClick={() => !locked && onSelect(r.id)}
+                aria-disabled={locked || undefined}
+                aria-label={locked ? `${r.title || t("common.untitledRecipe")} — ${t("recipe.locked")}` : undefined}
+                style={{
+                  textAlign: "left",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: "12px",
+                  padding: "12px 14px",
+                  borderRadius: "10px",
+                  border: `1px solid ${COLORS.line}`,
+                  background: locked ? LOCKED_TINT : COLORS.paper,
+                  cursor: locked ? "default" : "pointer",
+                }}
+              >
+                <span style={{ fontFamily: SERIF, fontSize: "15px", color: COLORS.ink, opacity: locked ? LOCKED_OPACITY : 1 }}>{r.title || t("common.untitledRecipe")}</span>
+                <span style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: COLORS.inkSoft, flexShrink: 0 }}>
+                  <span style={{ opacity: locked ? LOCKED_OPACITY : 1 }}>{scopeLabels(r, familyNameById, t).join(" + ")}</span>
+                  {locked && <Lock size={15} color={COLORS.mustardDark} aria-hidden="true" />}
+                </span>
+              </button>
+            );
+          })}
         </div>
       )}
     </div>
