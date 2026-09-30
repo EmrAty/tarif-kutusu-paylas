@@ -116,7 +116,10 @@ const translations = {
     "errors.captionFetchFailed": "Açıklama otomatik alınamadı, elle yapıştırabilirsin.",
     "errors.needDescriptionOrImage": "Açıklamayı yapıştıramıyorsan sorun değil — en azından bir ekran görüntüsü yükle ya da birkaç kelime not yaz.",
     "errors.needCategory": "Yemeğin hangi kategoriye ait olduğunu seçmen lazım.",
-    "errors.freeLimit": "Ücretsiz hesaplarda en fazla {limit} kişisel tarif olabilir. Sınırsız eklemek için Plus'a geç.",
+    "errors.freeLimit": "Free hesaplarda en fazla {limit} tarif kaydedebilirsin. Daha fazla tarif kaydetmek için Plus'a geç.",
+    "limitModal.title": "Ücretsiz tarif limitine ulaştın",
+    "errors.saveFailed": "Tarif kaydedilemedi. Lütfen tekrar dene.",
+    "limitModal.upgrade": "Plus'a Geç",
     "errors.notifyFailed": "Bildirim gönderilemedi",
     "errors.googleSignInCancelled": "Google girişi iptal edildi ya da id token alınamadı.",
 
@@ -345,7 +348,7 @@ const translations = {
     "families.join": "Katıl",
 
     // Plus
-    "plus.benefit1": "Kişisel tariflerinde 50 sınırı tamamen kalkar",
+    "plus.benefit1": "Kişisel tariflerinde {limit} sınırı tamamen kalkar",
     "plus.benefit2": "En fazla 2 aile oluşturabilir ya da davetle katılabilirsin",
     "plus.benefit3": "Aile tarifleri, o ailenin tüm üyeleri tarafından görülür",
     "plus.testNote": "Ödeme sistemi henüz eklenmedi — şimdilik bu bir test anahtarı.",
@@ -455,7 +458,10 @@ const translations = {
     "errors.captionFetchFailed": "Couldn't fetch the description automatically, you can paste it in by hand.",
     "errors.needDescriptionOrImage": "No worries if you can't paste the description — just upload a screenshot or jot down a few words instead.",
     "errors.needCategory": "You need to pick which category this dish belongs to.",
-    "errors.freeLimit": "Free accounts can have up to {limit} personal recipes. Go Plus for unlimited.",
+    "errors.freeLimit": "Free accounts can save up to {limit} recipes. Upgrade to Plus to save more.",
+    "limitModal.title": "You've reached the free recipe limit",
+    "errors.saveFailed": "Couldn't save the recipe. Please try again.",
+    "limitModal.upgrade": "Upgrade to Plus",
     "errors.notifyFailed": "Couldn't send the notification",
     "errors.googleSignInCancelled": "Google sign-in was cancelled or no id token was received.",
 
@@ -669,7 +675,7 @@ const translations = {
     "families.codePlaceholder": "Enter the invite code",
     "families.join": "Join",
 
-    "plus.benefit1": "The 50-recipe limit on personal recipes is completely removed",
+    "plus.benefit1": "The {limit}-recipe limit on personal recipes is completely removed",
     "plus.benefit2": "Create up to 2 families or join others by invite",
     "plus.benefit3": "Family recipes are visible to every member of that family",
     "plus.testNote": "Payments aren't set up yet — for now this is just a test switch.",

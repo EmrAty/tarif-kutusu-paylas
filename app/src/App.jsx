@@ -28,6 +28,7 @@ import ShareReceiver from "./capacitorShare.js";
 import NativeSplash from "./capacitorSplash.js";
 import { scaleIngredient, FRACTION_GLYPHS, scaleNutrition, perServingNutrition, baseServingsOf, maxServingsFor, MIN_SERVINGS } from "./servings.js";
 import { CATEGORIES, recipeSystemPrompt, buildRecipeUserText } from "../shared/recipeExtraction.js";
+import { FREE_RECIPE_LIMIT, FREE_LIMIT_ERROR_CODE } from "../shared/limits.js";
 import { contentLangOf, translationPayload } from "../shared/recipeLocales.js";
 import { localizeRecipe, displayIngredient, contentFingerprint, localizeAmount } from "./recipeLocale.js";
 import { applyPortionEstimate, servingsUnitOf } from "../shared/portionEstimate.js";
@@ -187,7 +188,6 @@ function storageSet(key, value) {
   window.localStorage.setItem(STORAGE_PREFIX + key, value);
 }
 
-const FREE_RECIPE_LIMIT = 50;
 const MAX_FAMILIES = 2;
 const PERSONAL = "personal";
 
@@ -223,7 +223,15 @@ export async function authedFetch(path, { method = "GET", body } = {}) {
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || translate("errors.requestFailed"));
+  if (!res.ok) {
+    // Sunucunun Free tarif sınırı hatası istemcinin dilinde gösteriliyor.
+    if (data.code === FREE_LIMIT_ERROR_CODE) {
+      const err = new Error(translate("errors.freeLimit", { limit: FREE_RECIPE_LIMIT }));
+      err.code = data.code;
+      throw err;
+    }
+    throw new Error(data.error || translate("errors.requestFailed"));
+  }
   return data;
 }
 
@@ -491,6 +499,8 @@ export default function TarifKutusu() {
   const [familiesLoaded, setFamiliesLoaded] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [modalView, setModalView] = useState(null); // "account" | "families" | "plus" | "settings" | null
+  // Free tarif sınırı dolunca yeni tarif eklemeye çalışınca açılan uyarı.
+  const [limitModalOpen, setLimitModalOpen] = useState(false);
   // modalView'ın (Aileler/Plus/Ayarlar/Hesabım) kapanışı da diğer "tam ekran"
   // view'larla aynı ortak çıkış animasyonunu (detail-screen-exit) kullanıyor —
   // true iken ModalSheet hâlâ render'da ama çıkış animasyonu oynuyor, animasyon
@@ -840,6 +850,8 @@ export default function TarifKutusu() {
     CapacitorApp.addListener("backButton", () => {
       if (openRoundingSheet.close) {
         openRoundingSheet.close();
+      } else if (limitModalOpen) {
+        setLimitModalOpen(false);
       } else if (languageModalOpenRef.current) {
         languageModalCloseRef.current();
       } else if (modalView) {
@@ -857,7 +869,7 @@ export default function TarifKutusu() {
     return () => {
       if (listenerHandle) listenerHandle.remove();
     };
-  }, [view, menuOpen, modalView, closeActiveScreen, closeModal]);
+  }, [view, menuOpen, modalView, limitModalOpen, closeActiveScreen, closeModal]);
 
   const [recipeBuckets, setRecipeBuckets] = useState({ [PERSONAL]: [] });
   const [saveTargets, setSaveTargets] = useState([PERSONAL]);
@@ -1003,7 +1015,11 @@ export default function TarifKutusu() {
     refreshRecipeBucket(pendingRecipeScopeRef.current);
   }, [pendingRecipeId, loaded, recipes, refreshRecipeBucket]);
 
-  const persistScope = useCallback(async (scopeKey, updatedList) => {
+  // rollback verilirse (yeni tarif ekleme, düzenleme) yazım başarısız olunca
+  // yalnızca bu değişiklik yerel listeden geri alınır ve hata çağırana iletilir
+  // — kullanıcı kaydedilmemiş bir tarifi kaydedilmiş sanmasın. Verilmezse
+  // (silme, geri al) eski davranış: yerel görünüm korunur.
+  const persistScope = useCallback(async (scopeKey, updatedList, rollback) => {
     const cleaned = updatedList.map(({ _scope, _scopes, ...rest }) => rest);
     setRecipeBuckets((prev) => ({ ...prev, [scopeKey]: cleaned }));
     try {
@@ -1012,9 +1028,38 @@ export default function TarifKutusu() {
       // eklediyse (bkz. api/data.js) yerel listeyi sunucuyla eşitle.
       if (result?.merged?.length) refreshRecipeBucket(scopeKey);
     } catch (e) {
-      // yazma başarısız olsa da yerel görünüm güncel kalsın
+      if (!rollback) return;
+      setRecipeBuckets((prev) => ({ ...prev, [scopeKey]: rollback(prev[scopeKey] || []) }));
+      throw e;
     }
   }, [refreshRecipeBucket]);
+
+  // Yeni tarifi seçilen yerlere yazar. Kişisel liste önce: Free sınırına
+  // takılırsa tarif ailelere de yazılmamış olur.
+  const saveNewRecipe = useCallback(
+    async (recipe, targets) => {
+      const withoutRecipe = (list) => list.filter((r) => r.id !== recipe.id);
+      if (targets.includes(PERSONAL)) {
+        await persistScope(PERSONAL, [recipe, ...(recipeBuckets[PERSONAL] || [])], withoutRecipe);
+      }
+      await Promise.all(
+        targets
+          .filter((scopeKey) => scopeKey !== PERSONAL)
+          .map((scopeKey) => persistScope(scopeKey, [recipe, ...(recipeBuckets[scopeKey] || [])], withoutRecipe))
+      );
+    },
+    [recipeBuckets, persistScope]
+  );
+
+  // Kayıt hatası: Free sınırıysa uyarı penceresi (true döner), değilse genel
+  // "kaydedilemedi" hatası fırlatır.
+  const handleSaveFailure = (e) => {
+    if (e?.code === FREE_LIMIT_ERROR_CODE) {
+      setLimitModalOpen(true);
+      return true;
+    }
+    throw new Error(t("errors.saveFailed"));
+  };
 
   // Bir tarifin kayıtlı olduğu TÜM yerlere aynı değişikliği uygular (favori,
   // kategori, isim, düzenleme) — sadece bir kopyasını güncelleyip diğerlerini
@@ -1025,8 +1070,9 @@ export default function TarifKutusu() {
       if (!recipe) return;
       await Promise.all(
         recipe._scopes.map((scopeKey) => {
+          const original = (recipeBuckets[scopeKey] || []).find((r) => r.id === id);
           const list = (recipeBuckets[scopeKey] || []).map((r) => (r.id === id ? updater(r) : r));
-          return persistScope(scopeKey, list);
+          return persistScope(scopeKey, list, (current) => current.map((r) => (r.id === id && original ? original : r)));
         })
       );
     },
@@ -1044,7 +1090,7 @@ export default function TarifKutusu() {
       return;
     }
     if (saveTargets.includes(PERSONAL) && !isPlus && (recipeBuckets[PERSONAL] || []).length >= FREE_RECIPE_LIMIT) {
-      setError(t("errors.freeLimit", { limit: FREE_RECIPE_LIMIT }));
+      setLimitModalOpen(true);
       return;
     }
     setBusy(true);
@@ -1059,7 +1105,11 @@ export default function TarifKutusu() {
         addedBy: personName || "",
         ...parsed,
       };
-      await Promise.all(saveTargets.map((scopeKey) => persistScope(scopeKey, [recipe, ...(recipeBuckets[scopeKey] || [])])));
+      try {
+        await saveNewRecipe(recipe, saveTargets);
+      } catch (e) {
+        if (handleSaveFailure(e)) return;
+      }
       setLink("");
       setCaption("");
       setNotes("");
@@ -1106,31 +1156,49 @@ export default function TarifKutusu() {
     setUndoState(null);
   };
 
+  // Tarif detayındaki küçük değişikliklerde (isim, favori, kategori) kayıt
+  // başarısızsa değişiklik geri alınır ve kısa bir hata gösterilir.
+  const [saveErrorToast, setSaveErrorToast] = useState("");
+  const saveErrorTimerRef = useRef(null);
+  const showSaveError = () => {
+    setSaveErrorToast(t("errors.saveFailed"));
+    if (saveErrorTimerRef.current) clearTimeout(saveErrorTimerRef.current);
+    saveErrorTimerRef.current = setTimeout(() => setSaveErrorToast(""), 4000);
+  };
+
   const handleRename = async (id, newTitle) => {
     const trimmed = newTitle.trim();
     if (!trimmed) return;
-    await applyToAllScopes(id, (r) => ({ ...r, title: trimmed }));
+    await applyToAllScopes(id, (r) => ({ ...r, title: trimmed })).catch(showSaveError);
   };
 
   const handleToggleFavorite = async (id) => {
-    await applyToAllScopes(id, (r) => ({ ...r, isFavorite: !r.isFavorite }));
+    await applyToAllScopes(id, (r) => ({ ...r, isFavorite: !r.isFavorite })).catch(showSaveError);
   };
 
   const handleChangeCategory = async (id, newCategory) => {
-    await applyToAllScopes(id, (r) => ({ ...r, category: newCategory }));
+    await applyToAllScopes(id, (r) => ({ ...r, category: newCategory })).catch(showSaveError);
   };
 
   const handleManualSave = async (data) => {
     // Elle yazılan tarifin içerik dili: yazıldığı sıradaki uygulama dili.
     const recipe = { id: uid(), createdAt: Date.now(), isFavorite: false, addedBy: personName || "", content_lang: language, ...data };
-    await Promise.all(saveTargets.map((scopeKey) => persistScope(scopeKey, [recipe, ...(recipeBuckets[scopeKey] || [])])));
+    try {
+      await saveNewRecipe(recipe, saveTargets);
+    } catch (e) {
+      if (handleSaveFailure(e)) return;
+    }
     setManualPrefill(null);
     setActiveId(recipe.id);
     setView("detail");
   };
 
   const handleEditSave = async (id, data) => {
-    await applyToAllScopes(id, (r) => ({ ...r, ...data }));
+    try {
+      await applyToAllScopes(id, (r) => ({ ...r, ...data }));
+    } catch (e) {
+      throw new Error(t("errors.saveFailed"));
+    }
     setView("detail");
   };
 
@@ -1140,6 +1208,7 @@ export default function TarifKutusu() {
   // taraf (PantryFinder) view/activeId'ye dokunmuyor.
   const handleSavePantrySuggestion = async (suggestion, category) => {
     if (!isPlus && (recipeBuckets[PERSONAL] || []).length >= FREE_RECIPE_LIMIT) {
+      setLimitModalOpen(true);
       throw new Error(t("errors.freeLimit", { limit: FREE_RECIPE_LIMIT }));
     }
     const n = suggestion.nutrition || {};
@@ -1162,7 +1231,11 @@ export default function TarifKutusu() {
       source: "pantry-ai",
       content_lang: "tr", // api/suggest-recipes.js önerileri Türkçe üretir
     };
-    await persistScope(PERSONAL, [recipe, ...(recipeBuckets[PERSONAL] || [])]);
+    try {
+      await saveNewRecipe(recipe, [PERSONAL]);
+    } catch (e) {
+      if (handleSaveFailure(e)) throw new Error(t("errors.freeLimit", { limit: FREE_RECIPE_LIMIT }));
+    }
   };
 
   const [shoppingInitialContext, setShoppingInitialContext] = useState(PERSONAL);
@@ -1450,6 +1523,7 @@ export default function TarifKutusu() {
                 isPlus={isPlus}
                 families={families}
                 personalCount={(recipeBuckets[PERSONAL] || []).length}
+                onFreeLimit={() => setLimitModalOpen(true)}
                 onSave={handleManualSave}
                 onCancel={() => {
                   setManualPrefill(null);
@@ -1552,6 +1626,16 @@ export default function TarifKutusu() {
             onImportFamily={(familyId) => loadRecipeBucket(familyId)}
           />
         </ModalSheet>
+      )}
+
+      {limitModalOpen && (
+        <FreeLimitModal
+          onUpgrade={() => {
+            setLimitModalOpen(false);
+            setModalView("plus");
+          }}
+          onClose={() => setLimitModalOpen(false)}
+        />
       )}
 
       {modalView === "plus" && (
@@ -1662,6 +1746,31 @@ export default function TarifKutusu() {
               {t("welcome.continue")}
             </button>
           </div>
+        </div>
+      )}
+
+      {saveErrorToast && !undoState && (
+        <div
+          role="alert"
+          style={{
+            position: "fixed",
+            left: "50%",
+            bottom: "20px",
+            transform: "translateX(-50%)",
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            background: COLORS.forestDark,
+            color: "#F3EFE6",
+            padding: "12px 16px",
+            borderRadius: "10px",
+            boxShadow: "0 6px 20px rgba(0,0,0,0.25)",
+            zIndex: 50,
+            fontSize: "14px",
+          }}
+        >
+          <AlertCircle size={16} style={{ flexShrink: 0 }} />
+          <span>{saveErrorToast}</span>
         </div>
       )}
 
@@ -4498,7 +4607,7 @@ function NutritionRow({ label, value, unit, last }) {
   );
 }
 
-function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setSaveTargets, isPlus, families, personalCount, onSave, onCancel }) {
+function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setSaveTargets, isPlus, families, personalCount, onFreeLimit, onSave, onCancel }) {
   const { t, categoryLabel, difficultyLabel, language } = useLanguage();
   // Düzenleme her zaman asıl (kayıtlı) metin üzerinde; uygulama başka dildeyse bunu söyle.
   // Kaydedince içerik değişir, çeviri önbelleğinin anahtarı da değişir (eski çeviri kullanılmaz).
@@ -4568,7 +4677,8 @@ function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setS
       return;
     }
     if (isNew && saveTargets.includes(PERSONAL) && !isPlus && personalCount >= FREE_RECIPE_LIMIT) {
-      setError(t("errors.freeLimit", { limit: FREE_RECIPE_LIMIT }));
+      if (onFreeLimit) onFreeLimit();
+      else setError(t("errors.freeLimit", { limit: FREE_RECIPE_LIMIT }));
       return;
     }
     setError("");
@@ -4586,7 +4696,7 @@ function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setS
         ? { servings_basis: nextServings ? "kullanici" : undefined, servings_calc: undefined, servings_note: undefined, servings_range: undefined }
         : {};
 
-    onSave({
+    Promise.resolve(onSave({
       ...servingsFields,
       title: title.trim(),
       category,
@@ -4602,7 +4712,7 @@ function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setS
         carbs_g: carbs.trim() ? Number(carbs) : undefined,
         fat_g: fat.trim() ? Number(fat) : undefined,
       },
-    });
+    })).catch((e) => setError(e?.message || t("errors.saveFailed")));
   };
 
   return (
@@ -5275,6 +5385,48 @@ function PantryFinder({ recipes, isPlus, families, onSelectRecipe, onSaveSuggest
   );
 }
 
+function FreeLimitModal({ onUpgrade, onClose }) {
+  const { t } = useLanguage();
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 80, display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" }}>
+      <div
+        onClick={onClose}
+        style={{ position: "absolute", inset: 0, background: "rgba(42,38,32,0.45)", backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)" }}
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        style={{
+          position: "relative",
+          width: "100%",
+          maxWidth: "360px",
+          background: COLORS.panel,
+          borderRadius: "16px",
+          boxShadow: "0 8px 40px rgba(0,0,0,0.3)",
+          padding: "20px",
+        }}
+      >
+        <h3 style={{ fontFamily: SERIF, fontSize: "17px", color: COLORS.ink, margin: "0 0 8px" }}>{t("limitModal.title")}</h3>
+        <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: "0 0 18px" }}>{t("errors.freeLimit", { limit: FREE_RECIPE_LIMIT })}</p>
+        <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+          <button
+            onClick={onClose}
+            style={{ padding: "10px 16px", borderRadius: "10px", border: `1px solid ${COLORS.line}`, background: "transparent", color: COLORS.inkSoft, fontSize: "14px", fontWeight: 600, cursor: "pointer" }}
+          >
+            {t("common.cancel")}
+          </button>
+          <button
+            onClick={onUpgrade}
+            style={{ padding: "10px 16px", borderRadius: "10px", border: "none", background: COLORS.mustard, color: COLORS.forestDark, fontSize: "14px", fontWeight: 700, cursor: "pointer" }}
+          >
+            {t("limitModal.upgrade")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CategoryPickerModal({ onSelect, onClose }) {
   const { t, categoryLabel } = useLanguage();
   return (
@@ -5689,7 +5841,7 @@ function PlusView({ isPlus, onToggle }) {
     }
   };
 
-  const benefits = [t("plus.benefit1"), t("plus.benefit2"), t("plus.benefit3")];
+  const benefits = [t("plus.benefit1", { limit: FREE_RECIPE_LIMIT }), t("plus.benefit2"), t("plus.benefit3")];
 
   return (
     <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.mustard}`, background: COLORS.panel, padding: "28px", boxShadow: CARD_SHADOW, textAlign: "center" }}>

@@ -1,9 +1,18 @@
 import { requireUser } from "./_lib/auth.js";
-import { redisGet, redisSet, redisGetJSON } from "./_lib/redis.js";
-import { getProfile, FREE_RECIPE_LIMIT } from "./_lib/profile.js";
+import { redisGet, redisSet, redisGetJSON, redisSetJSON } from "./_lib/redis.js";
+import { getProfile, FREE_RECIPE_LIMIT, FREE_LIMIT_ERROR_CODE, FREE_LIMIT_MESSAGE } from "./_lib/profile.js";
 import { acknowledgePendingJobRecipes, mergePendingJobRecipes, userOwner, familyOwner } from "./_lib/jobRecipes.js";
 
 const ALLOWED_BUCKETS = new Set(["recipes", "shopping-list", "pantry-items"]);
+
+// Kişisel listeden az önce çıkarılan tarif id'leri: "Geri al" (App.jsx,
+// 6 sn) silinen tarifi listeye geri yazıyor. Sınırın üstündeki Free
+// kullanıcıda bu yazım yeni tarif sayılıp reddedilirse silinen tarif kaybolurdu.
+const RECENTLY_REMOVED_TTL = 120;
+const MAX_RECENTLY_REMOVED = 30;
+const recentlyRemovedKey = (uid) => `user:${uid}:recentlyRemovedRecipes`;
+
+const idsOf = (list) => new Set((Array.isArray(list) ? list : []).map((r) => r && r.id).filter(Boolean));
 
 function bucketKey(scope, uid, familyId, bucket) {
   return scope === "family" ? `family:${familyId}:${bucket}` : `user:${uid}:${bucket}`;
@@ -94,14 +103,32 @@ export default async function handler(req, res) {
           const previous = await loadPrevious();
           const next = JSON.parse(value);
           if (Array.isArray(next) && next.length > FREE_RECIPE_LIMIT && next.length > previous.length) {
-            res.status(403).json({
-              error: `Ücretsiz hesaplar en fazla ${FREE_RECIPE_LIMIT} kişisel tarif ekleyebilir. Sınırsız eklemek için Plus'a geç.`,
-            });
-            return;
+            // Yalnızca gerçekten yeni tarif engelleniyor; az önce silinip geri
+            // alınan tarif yeni sayılmıyor. Düzenleme/silme uzunluğu artırmıyor.
+            const previousIds = idsOf(previous);
+            const recentlyRemoved = new Set(await redisGetJSON(recentlyRemovedKey(user.uid), []));
+            const hasNew = next.some((r) => r && !previousIds.has(r.id) && !recentlyRemoved.has(r.id));
+            if (hasNew) {
+              res.status(403).json({ error: FREE_LIMIT_MESSAGE, code: FREE_LIMIT_ERROR_CODE });
+              return;
+            }
           }
         } catch (e) {
           // ayrıştırma başarısızsa limit kontrolü atlanır, normal yazım denemesi devam eder
         }
+      }
+
+      try {
+        const previous = await loadPrevious();
+        const nextIds = idsOf(JSON.parse(value));
+        const removed = [...idsOf(previous)].filter((id) => !nextIds.has(id));
+        if (removed.length) {
+          const current = await redisGetJSON(recentlyRemovedKey(user.uid), []);
+          const merged = [...(Array.isArray(current) ? current : []), ...removed].slice(-MAX_RECENTLY_REMOVED);
+          await redisSetJSON(recentlyRemovedKey(user.uid), merged, RECENTLY_REMOVED_TTL);
+        }
+      } catch (e) {
+        // kayıt tutulamazsa yalnızca geri alma istisnası çalışmaz
       }
     }
 

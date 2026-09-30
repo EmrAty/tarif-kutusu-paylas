@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { waitUntil, getDeadline } from "@vercel/functions";
 import { requireUser } from "./_lib/auth.js";
 import { redisDel, redisGet, redisGetJSON, redisSet, redisSetJSON, redisSetNX } from "./_lib/redis.js";
-import { getProfile, FREE_RECIPE_LIMIT } from "./_lib/profile.js";
+import { getProfile, FREE_RECIPE_LIMIT, FREE_LIMIT_ERROR_CODE, FREE_LIMIT_MESSAGE } from "./_lib/profile.js";
 import { extractRecipeFromCaption } from "./_lib/extractRecipe.js";
 import { fcmTokensKey, notifyUserDevices } from "./_lib/fcm.js";
 import { addPendingJobRecipe, userOwner, familyOwner } from "./_lib/jobRecipes.js";
@@ -34,7 +34,7 @@ const MIN_FALLBACK_MS = 20_000;
 const MAX_CAPTION_CHARS = 20000;
 const MAX_TRANSCRIPT_CHARS = 12000;
 const SUPPORTED_LINK = /tiktok\.com|youtu\.be|youtube\.com|instagram\.com/i;
-const LIMIT_MESSAGE = `Ücretsiz hesaplar en fazla ${FREE_RECIPE_LIMIT} kişisel tarif ekleyebilir. Sınırsız eklemek için Plus'a geç.`;
+const LIMIT_MESSAGE = FREE_LIMIT_MESSAGE;
 const INSUFFICIENT_MESSAGE = "Bu videodan yeterli tarif bilgisi çıkaramadık.";
 
 // Caption'ın tek başına tarif için yeterli olup olmadığı: hashtag/mention/link
@@ -331,7 +331,7 @@ async function handlePost(req, res, uid) {
   if (target.scope === "personal" && !profile.isPlus) {
     const list = await redisGetJSON(recipesKey(uid), []);
     if (Array.isArray(list) && list.length >= FREE_RECIPE_LIMIT) {
-      res.status(403).json({ error: LIMIT_MESSAGE });
+      res.status(403).json({ error: LIMIT_MESSAGE, code: FREE_LIMIT_ERROR_CODE });
       return;
     }
   }
