@@ -377,7 +377,7 @@ export default function SharePanel() {
           <Loader2 size={12} className="spin" /> {t("sharePanel.familiesLoading")}
         </div>
       )}
-      {familyInfo.status === "error" && expectFamilies && (
+      {familyInfo.status === "error" && (
         <div style={{ fontSize: "12px", color: COLORS.inkSoft, marginBottom: "12px" }}>{t("sharePanel.familiesLoadFailed")}</div>
       )}
 
