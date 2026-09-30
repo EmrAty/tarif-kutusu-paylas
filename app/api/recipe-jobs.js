@@ -5,7 +5,8 @@ import { redisDel, redisGet, redisGetJSON, redisSet, redisSetJSON, redisSetNX } 
 import { getProfile, FREE_RECIPE_LIMIT } from "./_lib/profile.js";
 import { extractRecipeFromCaption } from "./_lib/extractRecipe.js";
 import { fcmTokensKey, notifyUserDevices } from "./_lib/fcm.js";
-import { addPendingJobRecipe } from "./_lib/jobRecipes.js";
+import { addPendingJobRecipe, userOwner, familyOwner } from "./_lib/jobRecipes.js";
+import { assertFamilyMember, familyRecipesKey } from "./_lib/families.js";
 import { isTikTokLink, tiktokTranscript } from "./_lib/tiktok.js";
 import { CATEGORIES } from "../shared/recipeExtraction.js";
 import { DEFAULT_CONTENT_LANG, isContentLanguage } from "../shared/recipeLocales.js";
@@ -68,7 +69,22 @@ function insufficientSourceError() {
 const recipesKey = (uid) => `user:${uid}:recipes`;
 const jobKey = (uid, jobId) => `job:${uid}:${jobId}`;
 const requestKey = (uid, requestId) => `job-req:${uid}:${requestId}`;
-const urlLockKey = (uid, url) => `job-url:${uid}:${crypto.createHash("sha1").update(url).digest("hex")}`;
+// Kişisel hedefte anahtar eskisiyle birebir aynı; aynı videonun bir aileye
+// gönderilmesi ayrı bir iş sayılıyor.
+const urlLockKey = (uid, url, target) => {
+  const lockSource = target.scope === "family" ? `${url}|family:${target.familyId}` : url;
+  return `job-url:${uid}:${crypto.createHash("sha1").update(lockSource).digest("hex")}`;
+};
+
+// Panelden gelen kayıt hedefi. Alan yoksa (eski panel) kişisel. Aile hedefi
+// burada yalnızca biçim olarak okunuyor; üyelik assertFamilyMember ile hem job
+// kabulünde hem kayıttan hemen önce doğrulanıyor.
+function parseTarget(body) {
+  const { target, familyId } = body || {};
+  if (target === undefined || target === null || target === "personal") return { scope: "personal" };
+  if (target === "family" && typeof familyId === "string" && familyId) return { scope: "family", familyId };
+  return null;
+}
 
 function genId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -103,8 +119,8 @@ async function patchJob(uid, jobId, patch) {
 
 // Liste bozuksa ([] fallback'i yerine) hata veriyoruz - aksi hâlde tek bir
 // ayrıştırma hatası kullanıcının tüm tariflerinin üzerine yazardı.
-async function readRecipeList(uid) {
-  const raw = await redisGet(recipesKey(uid));
+async function readRecipeList(key) {
+  const raw = await redisGet(key);
   if (raw == null) return [];
   let list;
   try {
@@ -116,7 +132,7 @@ async function readRecipeList(uid) {
   return list;
 }
 
-async function processRecipeJob({ uid, jobId, sourceUrl, caption, category, addedBy, language, lockKey }) {
+async function processRecipeJob({ uid, jobId, sourceUrl, caption, category, addedBy, language, lockKey, target }) {
   const startedAt = Date.now();
   const timings = {};
   let recipe = null;
@@ -174,13 +190,23 @@ async function processRecipeJob({ uid, jobId, sourceUrl, caption, category, adde
       addedBy: addedBy || "",
       source: "share",
     };
-    const profile = await getProfile(uid);
-    const list = await readRecipeList(uid);
-    if (!profile.isPlus && list.length >= FREE_RECIPE_LIMIT) throw new Error(LIMIT_MESSAGE);
-    // İşaretçi kayıttan ÖNCE yazılıyor: istemci bu tarifi görmeden listeyi geri
-    // yazarsa api/data.js onu koruyabilsin (bkz. _lib/jobRecipes.js).
-    await addPendingJobRecipe(uid, recipeId);
-    await redisSet(recipesKey(uid), JSON.stringify([recipe, ...list]));
+    if (target.scope === "family") {
+      // Job kuyruktayken Plus kapanmış ya da aileden çıkılmış olabilir: tekrar
+      // doğrulanıyor. Başarısızsa job başarısız olur, kişisel listeye yazılmaz.
+      await assertFamilyMember(uid, target.familyId);
+      const key = familyRecipesKey(target.familyId);
+      const list = await readRecipeList(key);
+      await addPendingJobRecipe(familyOwner(target.familyId), recipeId);
+      await redisSet(key, JSON.stringify([recipe, ...list]));
+    } else {
+      const profile = await getProfile(uid);
+      const list = await readRecipeList(recipesKey(uid));
+      if (!profile.isPlus && list.length >= FREE_RECIPE_LIMIT) throw new Error(LIMIT_MESSAGE);
+      // İşaretçi kayıttan ÖNCE yazılıyor: istemci bu tarifi görmeden listeyi geri
+      // yazarsa api/data.js onu koruyabilsin (bkz. _lib/jobRecipes.js).
+      await addPendingJobRecipe(userOwner(uid), recipeId);
+      await redisSet(recipesKey(uid), JSON.stringify([recipe, ...list]));
+    }
     timings.save = Date.now() - t;
     logStep(jobId, "save", timings.save);
   } catch (e) {
@@ -215,7 +241,12 @@ async function processRecipeJob({ uid, jobId, sourceUrl, caption, category, adde
   const notify = await notifyUserDevices(uid, {
     title: "Tarifin hazır 🍝",
     body: recipe.title ? `${recipe.title} tarifin hazır.` : "Tarifin hazır.",
-    data: { type: "recipe_ready", recipeId: recipe.id },
+    // Aile tarifinde uygulama doğru listeyi tazeleyebilsin diye kapsam da
+    // gidiyor; kişisel bildirimin payload'ı eskisiyle aynı.
+    data:
+      target.scope === "family"
+        ? { type: "recipe_ready", recipeId: recipe.id, scope: "family", familyId: target.familyId }
+        : { type: "recipe_ready", recipeId: recipe.id },
   }).catch((e) => ({ sent: 0, attempted: 0, error: e.message }));
   timings.fcm = Date.now() - t;
   timings.total = Date.now() - startedAt;
@@ -244,6 +275,11 @@ async function respondWithJob(res, uid, job, duplicate) {
 
 async function handlePost(req, res, uid) {
   const { requestId, sourceUrl, caption, category, addedBy, language } = req.body || {};
+  const target = parseTarget(req.body);
+  if (!target) {
+    res.status(400).json({ error: "Geçersiz kayıt hedefi." });
+    return;
+  }
 
   const url = typeof sourceUrl === "string" ? sourceUrl.trim() : "";
   if (!/^https?:\/\//i.test(url) || !SUPPORTED_LINK.test(url) || url.length > 2000) {
@@ -280,8 +316,19 @@ async function handlePost(req, res, uid) {
     }
   }
 
+  if (target.scope === "family") {
+    // Yetkisiz/yanlış aile: job hiç açılmıyor, hata dönüyor. Kişisel listeye
+    // sessizce düşürülmüyor.
+    try {
+      await assertFamilyMember(uid, target.familyId);
+    } catch (e) {
+      res.status(e.status || 403).json({ error: e.message });
+      return;
+    }
+  }
+
   const profile = await getProfile(uid);
-  if (!profile.isPlus) {
+  if (target.scope === "personal" && !profile.isPlus) {
     const list = await redisGetJSON(recipesKey(uid), []);
     if (Array.isArray(list) && list.length >= FREE_RECIPE_LIMIT) {
       res.status(403).json({ error: LIMIT_MESSAGE });
@@ -290,7 +337,7 @@ async function handlePost(req, res, uid) {
   }
 
   const jobId = genId();
-  const lockKey = urlLockKey(uid, url);
+  const lockKey = urlLockKey(uid, url, target);
   // Aynı video iki kez paylaşılırsa (ör. share intent iki kez tetiklenirse)
   // ikinci bir tarif oluşmasın.
   if (!(await redisSetNX(lockKey, jobId, URL_LOCK_TTL))) {
@@ -310,6 +357,8 @@ async function handlePost(req, res, uid) {
     status: "queued",
     sourceUrl: url,
     category,
+    scope: target.scope,
+    familyId: target.scope === "family" ? target.familyId : null,
     createdAt: now,
     updatedAt: now,
     recipeId: null,
@@ -329,6 +378,7 @@ async function handlePost(req, res, uid) {
       // Yalnızca çıktı dili; bilinmeyen değer varsayılan dile (tr) düşer.
       language: isContentLanguage(language) ? language : DEFAULT_CONTENT_LANG,
       lockKey,
+      target,
     })
   );
 

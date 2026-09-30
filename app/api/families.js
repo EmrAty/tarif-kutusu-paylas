@@ -192,6 +192,7 @@ export default async function handler(req, res) {
       redisDel(`family:${id}:recipes`),
       redisDel(`family:${id}:shopping-list`),
       redisDel(`family:${id}:pantry-items`),
+      redisDel(`family:${id}:pendingJobRecipes`),
       redisDel(inviteKey(meta.inviteCode)),
     ]);
     res.status(200).json({ ok: true });

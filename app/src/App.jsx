@@ -481,6 +481,13 @@ export default function TarifKutusu() {
   const [authUser, setAuthUser] = useState(null);
   const [isPlus, setIsPlus] = useState(false);
   const [families, setFamilies] = useState([]); // [{ id, name, inviteCode, members:[{uid,email,isAnonymous}] }]
+  // Uzun ömürlü native dinleyiciler (resume/bildirim) güncel aile listesini
+  // yeniden abone olmadan okuyabilsin diye.
+  const familiesRef = useRef(families);
+  familiesRef.current = families;
+  // Bildirimle açılacak tarif bir aile listesindeyse o listenin kimliği
+  // (paylaşım paneli job'u aile tarifine "familyId" ekliyor).
+  const pendingRecipeScopeRef = useRef(PERSONAL);
   const [familiesLoaded, setFamiliesLoaded] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [modalView, setModalView] = useState(null); // "account" | "families" | "plus" | "settings" | null
@@ -806,6 +813,7 @@ export default function TarifKutusu() {
     PushNotifications.addListener("pushNotificationActionPerformed", (action) => {
       const data = action?.notification?.data || {};
       if (data.recipeId) {
+        pendingRecipeScopeRef.current = data.scope === "family" && data.familyId ? data.familyId : PERSONAL;
         setPendingRecipeId(data.recipeId);
       } else if (data.type === "recipe_failed" && data.link) {
         // Paylaşım panelinden başlatılan tarif oluşturulamadı: eski "Yeni Tarif
@@ -904,9 +912,16 @@ export default function TarifKutusu() {
     let cancelled = false;
     const handles = [];
     const keep = (h) => (cancelled ? h.remove() : handles.push(h));
-    CapacitorApp.addListener("resume", () => refreshRecipeBucket(PERSONAL)).then(keep);
+    // Job aile listesine de yazabildiği için (paylaşım panelinde aile seçilince)
+    // dönüşte üyesi olunan ailelerin listeleri de tazeleniyor.
+    CapacitorApp.addListener("resume", () => {
+      refreshRecipeBucket(PERSONAL);
+      familiesRef.current.forEach((f) => refreshRecipeBucket(f.id));
+    }).then(keep);
     PushNotifications.addListener("pushNotificationReceived", (notification) => {
-      if (notification?.data?.type === "recipe_ready") refreshRecipeBucket(PERSONAL);
+      const data = notification?.data || {};
+      if (data.type !== "recipe_ready") return;
+      refreshRecipeBucket(data.scope === "family" && data.familyId ? data.familyId : PERSONAL);
     }).then(keep);
     return () => {
       cancelled = true;
@@ -985,7 +1000,7 @@ export default function TarifKutusu() {
     if (recipes.some((r) => r.id === pendingRecipeId)) return;
     if (pendingRefreshRef.current === pendingRecipeId) return;
     pendingRefreshRef.current = pendingRecipeId;
-    refreshRecipeBucket(PERSONAL);
+    refreshRecipeBucket(pendingRecipeScopeRef.current);
   }, [pendingRecipeId, loaded, recipes, refreshRecipeBucket]);
 
   const persistScope = useCallback(async (scopeKey, updatedList) => {

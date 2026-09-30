@@ -1,7 +1,7 @@
 import { requireUser } from "./_lib/auth.js";
 import { redisGet, redisSet, redisGetJSON } from "./_lib/redis.js";
 import { getProfile, FREE_RECIPE_LIMIT } from "./_lib/profile.js";
-import { acknowledgePendingJobRecipes, mergePendingJobRecipes } from "./_lib/jobRecipes.js";
+import { acknowledgePendingJobRecipes, mergePendingJobRecipes, userOwner, familyOwner } from "./_lib/jobRecipes.js";
 
 const ALLOWED_BUCKETS = new Set(["recipes", "shopping-list", "pantry-items"]);
 
@@ -44,12 +44,16 @@ export default async function handler(req, res) {
 
   const key = bucketKey(scope, user.uid, familyId, bucket);
   const isPersonalRecipes = bucket === "recipes" && scope === "personal";
+  // Paylaşım paneli job'u hem kişisel hem aile tarif listesine yazabiliyor
+  // (bkz. recipe-jobs.js); henüz okunmamış job tarifleri ikisinde de korunuyor.
+  const isRecipes = bucket === "recipes";
+  const pendingOwner = scope === "family" ? familyOwner(familyId) : userOwner(user.uid);
 
   if (req.method === "GET") {
     try {
       const value = await redisGet(key);
-      if (isPersonalRecipes && value) {
-        await acknowledgePendingJobRecipes(user.uid, value).catch(() => {});
+      if (isRecipes && value) {
+        await acknowledgePendingJobRecipes(pendingOwner, value).catch(() => {});
       }
       res.status(200).json({ value: value ?? null });
     } catch (e) {
@@ -66,14 +70,14 @@ export default async function handler(req, res) {
     }
 
     let merged = [];
-    if (isPersonalRecipes) {
-      let previous = null;
-      const loadPrevious = async () => {
-        if (previous === null) previous = (await redisGetJSON(key, [])) || [];
-        return previous;
-      };
+    let previous = null;
+    const loadPrevious = async () => {
+      if (previous === null) previous = (await redisGetJSON(key, [])) || [];
+      return previous;
+    };
+    if (isRecipes) {
       try {
-        const result = await mergePendingJobRecipes(user.uid, loadPrevious, JSON.parse(value));
+        const result = await mergePendingJobRecipes(pendingOwner, loadPrevious, JSON.parse(value));
         if (result.merged.length) {
           value = JSON.stringify(result.list);
           merged = result.merged;
@@ -81,7 +85,9 @@ export default async function handler(req, res) {
       } catch (e) {
         // ayrıştırılamazsa gelen değer olduğu gibi yazılır (önceki davranış)
       }
+    }
 
+    if (isPersonalRecipes) {
       const profile = await getProfile(user.uid);
       if (!profile.isPlus) {
         try {

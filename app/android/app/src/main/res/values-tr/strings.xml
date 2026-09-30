@@ -4,4 +4,5 @@
     <string name="title_activity_main">Tarif Kutusu</string>
     <string name="share_offline">Bağlantı kurulamadı. İnternetini kontrol edip tekrar paylaş.</string>
     <string name="share_close">Kapat</string>
+    <string name="share_expand">Uygulamayı tam ekran aç</string>
 </resources>

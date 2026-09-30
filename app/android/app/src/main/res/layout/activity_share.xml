@@ -1,84 +1,119 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Paylaşım paneli: üstte karartma (kaynak uygulama arkada görünür, dokununca
      kapanır), altta ekranın ~%78'i kadar krem panel. Oranlar layout_weight ile
-     verildi; böylece ekran yüksekliği koda hiç yazılmıyor. -->
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+     verildi; böylece ekran yüksekliği koda hiç yazılmıyor.
+     share_expand_fill panelin ARKASINDA duruyor ve yalnızca panel yukarı
+     sürüklenirken görünür: panel yukarı kaydıkça altta açılan boşluğu kremle
+     doldurur (panel ekranı kaplayana kadar büyüyormuş gibi görünür). -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:orientation="vertical">
+    android:layout_height="match_parent">
 
     <View
-        android:id="@+id/share_scrim"
+        android:id="@+id/share_expand_fill"
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="22"
-        android:background="@color/shareScrim"
-        android:clickable="true"
-        android:focusable="true" />
+        android:layout_height="match_parent"
+        android:background="@color/sharePaper"
+        android:visibility="gone" />
 
     <LinearLayout
-        android:id="@+id/share_sheet"
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="78"
-        android:background="@drawable/share_sheet_bg"
+        android:layout_height="match_parent"
         android:orientation="vertical">
 
         <View
-            android:layout_width="38dp"
-            android:layout_height="4dp"
-            android:layout_gravity="center_horizontal"
-            android:layout_marginTop="10dp"
-            android:layout_marginBottom="6dp"
-            android:background="@drawable/share_handle" />
-
-        <FrameLayout
+            android:id="@+id/share_scrim"
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_weight="1">
+            android:layout_weight="22"
+            android:background="@color/shareScrim"
+            android:clickable="true"
+            android:focusable="true" />
 
-            <WebView
-                android:id="@+id/share_webview"
+        <LinearLayout
+            android:id="@+id/share_sheet"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="78"
+            android:background="@drawable/share_sheet_bg"
+            android:orientation="vertical">
+
+            <!-- Tutamaç: görsel çizgi eskisiyle aynı (38x4dp, üstten 10dp).
+                 Yukarı sürükleme bu satırdan ve hemen altındaki
+                 share_drag_extension şeridinden başlıyor (toplam ~48dp
+                 dokunma alanı); WebView'a hiç dokunmuyor. -->
+            <FrameLayout
+                android:id="@+id/share_drag_handle"
                 android:layout_width="match_parent"
-                android:layout_height="match_parent" />
+                android:layout_height="20dp"
+                android:contentDescription="@string/share_expand">
 
-            <LinearLayout
-                android:id="@+id/share_loading"
+                <View
+                    android:layout_width="38dp"
+                    android:layout_height="4dp"
+                    android:layout_gravity="center_horizontal"
+                    android:layout_marginTop="10dp"
+                    android:background="@drawable/share_handle" />
+            </FrameLayout>
+
+            <FrameLayout
                 android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:background="@color/sharePaper"
-                android:gravity="center"
-                android:orientation="vertical">
+                android:layout_height="0dp"
+                android:layout_weight="1">
 
-                <ProgressBar
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content" />
-            </LinearLayout>
+                <WebView
+                    android:id="@+id/share_webview"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent" />
 
-            <LinearLayout
-                android:id="@+id/share_error"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:background="@color/sharePaper"
-                android:gravity="center"
-                android:orientation="vertical"
-                android:padding="24dp"
-                android:visibility="gone">
+                <LinearLayout
+                    android:id="@+id/share_loading"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:background="@color/sharePaper"
+                    android:gravity="center"
+                    android:orientation="vertical">
 
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="@string/share_offline"
-                    android:textColor="@color/shareInk"
-                    android:textSize="15sp" />
+                    <ProgressBar
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content" />
+                </LinearLayout>
 
-                <Button
-                    android:id="@+id/share_error_close"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="14dp"
-                    android:text="@string/share_close" />
-            </LinearLayout>
-        </FrameLayout>
+                <LinearLayout
+                    android:id="@+id/share_error"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:background="@color/sharePaper"
+                    android:gravity="center"
+                    android:orientation="vertical"
+                    android:padding="24dp"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/share_offline"
+                        android:textColor="@color/shareInk"
+                        android:textSize="15sp" />
+
+                    <Button
+                        android:id="@+id/share_error_close"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="14dp"
+                        android:text="@string/share_close" />
+                </LinearLayout>
+
+                <!-- Tutamacın dokunma alanının devamı: sayfanın başlık satırının
+                     ("Tarif Kutusu" yazısı) üstünde, ilk girişin (link kutusu)
+                     üstünde kalıyor. Görünmez; yalnızca sürüklemeyi yakalar. -->
+                <View
+                    android:id="@+id/share_drag_extension"
+                    android:layout_width="match_parent"
+                    android:layout_height="28dp"
+                    android:layout_gravity="top"
+                    android:importantForAccessibility="no" />
+            </FrameLayout>
+        </LinearLayout>
     </LinearLayout>
-</LinearLayout>
+</FrameLayout>

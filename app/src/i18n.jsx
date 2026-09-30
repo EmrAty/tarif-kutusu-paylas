@@ -387,6 +387,10 @@ const translations = {
     "sharePanel.openInAppHint": "Uygulamada aç (ekran görüntüsü ekle, aileye kaydet)",
     "sharePanel.noNotifyNote": "Bildirim kaydın yok; tarif hazır olunca uygulamada görünecek.",
     "sharePanel.willNotify": "Hazır olunca bildirim göndereceğiz.",
+    "sharePanel.saveToLabel": "Nereye kaydedilsin?",
+    "sharePanel.saveToPersonal": "Kendime",
+    "sharePanel.familiesLoading": "Aileler yükleniyor…",
+    "sharePanel.familiesLoadFailed": "Aile listesi yüklenemedi; tarif kendi tariflerine kaydedilecek.",
   },
 
   en: {
@@ -704,6 +708,10 @@ const translations = {
     "sharePanel.openInAppHint": "Open in app (add a screenshot, save to a family)",
     "sharePanel.noNotifyNote": "You don't have notifications registered; the recipe will show up in the app once it's ready.",
     "sharePanel.willNotify": "We'll send a notification once it's ready.",
+    "sharePanel.saveToLabel": "Save to",
+    "sharePanel.saveToPersonal": "My recipes",
+    "sharePanel.familiesLoading": "Loading families…",
+    "sharePanel.familiesLoadFailed": "Couldn't load your families; the recipe will be saved to your own recipes.",
   },
 };
 

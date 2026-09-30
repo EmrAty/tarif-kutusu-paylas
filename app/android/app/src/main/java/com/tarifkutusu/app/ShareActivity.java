@@ -8,7 +8,11 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.view.MotionEvent;
+import android.view.VelocityTracker;
 import android.view.View;
+import android.view.ViewConfiguration;
+import android.view.animation.DecelerateInterpolator;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -20,6 +24,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
+import androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat;
 import org.json.JSONObject;
 
 /**
@@ -43,6 +48,15 @@ public class ShareActivity extends AppCompatActivity {
     // İçerik uzaktan geldiği için JS hiç çalışmayabilir; yükleniyor katmanı
     // sonsuza kadar kalmasın diye tavan.
     private static final long READY_TIMEOUT_MS = 12000;
+    // Tutamaçtan yukarı sürükleme: tam uygulamaya geçmek için ya bu kadar
+    // yukarı çekmek ya da (en az MIN_FLING_DP çekip) bu hızda fırlatmak lazım.
+    // Karartma alanı ekranın ~%22'si (tipik telefonda ~170-190dp); 72dp onun
+    // yarısından az, bilinçli bir çekiş ama zorlayıcı değil.
+    private static final float EXPAND_DISTANCE_DP = 72f;
+    private static final float EXPAND_VELOCITY_DP_S = 800f;
+    private static final float MIN_FLING_DP = 24f;
+    private static final long EXPAND_MS = 200;
+    private static final long SNAP_BACK_MS = 180;
 
     private WebView webView;
     private View sheet;
@@ -51,6 +65,11 @@ public class ShareActivity extends AppCompatActivity {
     private String sharedText = "";
     private String sharedTitle = "";
     private boolean closing = false;
+    // Panel job'ı gönderdikten sonra tam uygulamaya geçilirse link "Yeni Tarif
+    // Çıkar"a tekrar taşınmıyor (aynı tarif ikinci kez oluşturulmasın).
+    private volatile boolean jobAccepted = false;
+    private View expandFill;
+    private float density;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -62,6 +81,8 @@ public class ShareActivity extends AppCompatActivity {
         loading = findViewById(R.id.share_loading);
         errorBox = findViewById(R.id.share_error);
         webView = findViewById(R.id.share_webview);
+        expandFill = findViewById(R.id.share_expand_fill);
+        density = getResources().getDisplayMetrics().density;
 
         findViewById(R.id.share_scrim).setOnClickListener(v -> closePanel());
         findViewById(R.id.share_error_close).setOnClickListener(v -> closePanel());
@@ -82,6 +103,7 @@ public class ShareActivity extends AppCompatActivity {
         });
 
         setupWebView();
+        setupExpandGesture();
         webView.loadUrl(PANEL_URL);
 
         sheet.post(() -> {
@@ -130,6 +152,125 @@ public class ShareActivity extends AppCompatActivity {
         });
     }
 
+    /**
+     * Tutamaçtan yukarı sürükleyince tam uygulama. Dinleyici yalnızca tutamaç
+     * satırında ve altındaki ince şeritte; WebView'ın kendi dokunma/kaydırma
+     * olayları hiç görülmüyor. Aşağı hareket paneli oynatmıyor (eski davranış).
+     */
+    @SuppressLint("ClickableViewAccessibility")
+    private void setupExpandGesture() {
+        final float touchSlop = ViewConfiguration.get(this).getScaledTouchSlop();
+        final float expandDistance = EXPAND_DISTANCE_DP * density;
+        final float expandVelocity = EXPAND_VELOCITY_DP_S * density;
+        final float minFling = MIN_FLING_DP * density;
+
+        View.OnTouchListener listener = new View.OnTouchListener() {
+            private float downY;
+            private boolean dragging;
+            private VelocityTracker velocity;
+
+            @Override
+            public boolean onTouch(View v, MotionEvent event) {
+                if (closing) return true;
+                switch (event.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN:
+                        downY = event.getRawY();
+                        dragging = false;
+                        sheet.animate().cancel();
+                        recycle();
+                        velocity = VelocityTracker.obtain();
+                        velocity.addMovement(event);
+                        return true;
+                    case MotionEvent.ACTION_MOVE: {
+                        if (velocity != null) velocity.addMovement(event);
+                        float up = downY - event.getRawY();
+                        if (!dragging && up > touchSlop) {
+                            dragging = true;
+                            showExpandFill();
+                        }
+                        if (dragging) sheet.setTranslationY(-clampLift(up));
+                        return true;
+                    }
+                    case MotionEvent.ACTION_UP: {
+                        float up = downY - event.getRawY();
+                        float upVelocity = 0f;
+                        if (velocity != null) {
+                            velocity.addMovement(event);
+                            velocity.computeCurrentVelocity(1000);
+                            upVelocity = -velocity.getYVelocity();
+                        }
+                        recycle();
+                        if (dragging && (up >= expandDistance || (up >= minFling && upVelocity >= expandVelocity))) {
+                            expandToApp();
+                        } else if (dragging) {
+                            snapBack();
+                        }
+                        dragging = false;
+                        return true;
+                    }
+                    case MotionEvent.ACTION_CANCEL:
+                        recycle();
+                        if (dragging) snapBack();
+                        dragging = false;
+                        return true;
+                    default:
+                        return true;
+                }
+            }
+
+            private void recycle() {
+                if (velocity != null) {
+                    velocity.recycle();
+                    velocity = null;
+                }
+            }
+        };
+
+        View handle = findViewById(R.id.share_drag_handle);
+        handle.setOnTouchListener(listener);
+        findViewById(R.id.share_drag_extension).setOnTouchListener(listener);
+
+        // Ekran okuyucu kullanıcıları sürükleyemediği için aynı işi yapan
+        // "genişlet" eylemi (düz dokunuş bunu tetiklemiyor).
+        ViewCompat.replaceAccessibilityAction(handle, AccessibilityActionCompat.ACTION_EXPAND, getString(R.string.share_expand), (view, args) -> {
+            expandToApp();
+            return true;
+        });
+    }
+
+    /** Panel en fazla ekranın tepesine kadar kalkabilir. */
+    private float clampLift(float up) {
+        return Math.max(0f, Math.min(up, sheet.getTop()));
+    }
+
+    /** Panelin arkasındaki krem dolguyu, panelin yuvarlak köşelerinin altından başlatır. */
+    private void showExpandFill() {
+        expandFill.setTranslationY(sheet.getTop() + 20 * density);
+        expandFill.setVisibility(View.VISIBLE);
+    }
+
+    private void snapBack() {
+        sheet.animate()
+            .translationY(0f)
+            .setDuration(SNAP_BACK_MS)
+            .setInterpolator(new DecelerateInterpolator())
+            .withEndAction(() -> expandFill.setVisibility(View.GONE))
+            .start();
+    }
+
+    /** Panel ekranın tepesine kadar büyür, sonra tam uygulama açılır. */
+    private void expandToApp() {
+        if (closing) return;
+        closing = true;
+        if (expandFill.getVisibility() != View.VISIBLE) showExpandFill();
+        sheet.animate()
+            .translationY(-sheet.getTop())
+            .setDuration(EXPAND_MS)
+            .setInterpolator(new DecelerateInterpolator())
+            .withEndAction(this::launchFullApp)
+            .start();
+    }
+
     private void hideLoading() {
         if (loading.getVisibility() == View.VISIBLE) loading.setVisibility(View.GONE);
     }
@@ -151,15 +292,36 @@ public class ShareActivity extends AppCompatActivity {
 
     /** Paylaşımı ana uygulamaya (eski tam ekran "Yeni Tarif Çıkar" akışı) devreder. */
     private void openInMainApp() {
+        startActivity(mainAppIntent(true));
+        finish();
+        overridePendingTransition(0, 0);
+    }
+
+    /**
+     * Yukarı sürüklemenin sonu. Paylaşım henüz gönderilmediyse link, "Uygulamada
+     * aç" ile aynı yoldan (ACTION_SEND -> ShareReceiverPlugin -> "Yeni Tarif
+     * Çıkar") taşınıyor; gönderildiyse uygulama olduğu gibi açılıyor. MainActivity
+     * singleTask: çalışıyorsa onNewIntent ile öne gelir, ikinci bir köprü açılmaz.
+     */
+    private void launchFullApp() {
+        startActivity(mainAppIntent(!jobAccepted));
+        finish();
+        overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out);
+    }
+
+    private Intent mainAppIntent(boolean withShare) {
         Intent intent = new Intent(this, MainActivity.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        if (!withShare) {
+            intent.setAction(Intent.ACTION_MAIN);
+            intent.addCategory(Intent.CATEGORY_LAUNCHER);
+            return intent;
+        }
         intent.setAction(Intent.ACTION_SEND);
         intent.setType("text/plain");
         intent.putExtra(Intent.EXTRA_TEXT, sharedText);
         intent.putExtra(Intent.EXTRA_SUBJECT, sharedTitle);
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        startActivity(intent);
-        finish();
-        overridePendingTransition(0, 0);
+        return intent;
     }
 
     @Override
@@ -190,6 +352,12 @@ public class ShareActivity extends AppCompatActivity {
         @JavascriptInterface
         public void close() {
             runOnUiThread(ShareActivity.this::closePanel);
+        }
+
+        /** SharePanel.jsx: sunucu job'ı kabul etti. */
+        @JavascriptInterface
+        public void jobAccepted() {
+            jobAccepted = true;
         }
 
         @JavascriptInterface
