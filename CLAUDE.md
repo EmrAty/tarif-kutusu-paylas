@@ -2,6 +2,20 @@
 
 Bu dosyayı her oturum başında otomatik okuyorum. Buradaki bilgiler güncel tutulmalı; büyük bir değişiklik yaptığımda bu dosyayı da güncellerim.
 
+## 🔖 Google Play hazırlığı (25 Ekim 2026) — imzalı AAB üretildi, Play Console onay bekliyor
+
+- **Karar: Play App Signing "A" seçeneği.** App signing key'i Google üretecek; mevcut v15 keystore (`alias android`, SHA-1 `66:4C:55:4E…`, SHA-256 `C1:AA:4F:2F…`) **yalnızca UPLOAD KEY**. Yeni keystore yok.
+- **İmzalı build kurulumu:** `app/android/local.properties` (`RELEASE_STORE_FILE/KEY_ALIAS/STORE_PASSWORD/KEY_PASSWORD` + `sdk.dir`) ve `app/android/android.keystore` — ikisi de git dışında (`app/android/.gitignore` + kök `.gitignore`). Keystore yerel yedeği: `C:\Users\emrea\Documents\TarifKutusu-Keys\android.keystore`.
+- **AAB komutu:** JDK 21 ile (`JAVA_HOME=C:\Users\emrea\.bubblewrap\jdk-21.0.12.1+1`; sistemdeki Java 19 yetmez) `cd app/android && ./gradlew bundleRelease` → `app/android/app/build/outputs/bundle/release/app-release.aab`. İlk AAB: `versionCode 15`, `versionName 15.0`, targetSdk 36.
+- `jarsigner -verify` "jar verified, with signer errors" der: self-signed sertifika ve AGP'nin MANIFEST.MF sırası yüzünden — Android imzası için normal, sertifika upload key ile aynı.
+- **TODO (CRITICAL) — ilk Play release hazırlanırken:**
+  1. Play Console → App integrity → **App signing key certificate** SHA-1 ve SHA-256 alınacak.
+  2. Bu değerler Firebase'deki Android app `com.tarifkutusu.app`'e eklenecek (yoksa Play'den indirilen uygulamada native Google Sign-In çalışmaz).
+  3. Güncel `google-services.json` indirilip `app/android/app/`'e konacak (mevcut dosyada Android OAuth/SHA kaydı görünmüyor).
+  4. Play dağıtımından (internal testing) Google Sign-In gerçek cihazda test edilecek.
+  - Play birden fazla sertifika gösterirse dikkat: **upload key** (C1:AA… / 66:4C…) ile **app signing key** karıştırılmayacak; Firebase'e Play'in app signing SHA'ları eklenecek (upload SHA'sı da kalabilir). Debug SHA (`12:A0:B0…`) ayrı.
+  - Telefona sideload edilmiş v15 (upload key imzalı) Play sürümüyle aynı imzayı taşımaz → Play'den kurmak için önce kaldırmak gerekir.
+
 ## 🔖 GÜNCEL ÜRÜN DURUMU (30 Eylül 2026) — production: `/version.json` → `1790778606770`, son commit `8d88469`
 
 > **Geçerli kural: Free kişisel tarif limiti 15'tir (eskiden 50).** Aşağıdaki eski notlarda geçen "50 tarif limiti" ifadeleri o tarihteki değeri anlatır; mevcut değer `app/shared/limits.js` → `FREE_RECIPE_LIMIT = 15`. Plus: kişisel tarif sınırsız.

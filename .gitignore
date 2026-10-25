@@ -1,0 +1,13 @@
+# Bağımlılıklar ve derleme çıktıları
+node_modules/
+dist/
+
+# Android imzalama gizli dosyaları (app/android/.gitignore ile birlikte)
+*.keystore
+*.jks
+local.properties
+keystore-password.txt
+
+# Ortam değişkenleri
+.env
+.env.*
