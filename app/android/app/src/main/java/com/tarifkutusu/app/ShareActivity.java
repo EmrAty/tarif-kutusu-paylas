@@ -42,8 +42,8 @@ import org.json.JSONObject;
  */
 public class ShareActivity extends AppCompatActivity {
 
-    private static final String PANEL_URL = "https://tarif-kutusu-paylas.vercel.app/?sharePanel=1";
-    private static final String PANEL_HOST = "tarif-kutusu-paylas.vercel.app";
+    private static final String PANEL_URL = "https://tarifkutusu.app/?sharePanel=1";
+    private static final String PANEL_HOST = "tarifkutusu.app";
     private static final long SLIDE_MS = 220;
     // İçerik uzaktan geldiği için JS hiç çalışmayabilir; yükleniyor katmanı
     // sonsuza kadar kalmasın diye tavan.

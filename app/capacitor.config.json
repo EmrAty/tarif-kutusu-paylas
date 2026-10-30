@@ -3,7 +3,7 @@
   "appName": "Tarif Kutusu",
   "webDir": "dist",
   "server": {
-    "url": "https://tarif-kutusu-paylas.vercel.app",
+    "url": "https://tarifkutusu.app",
     "cleartext": false
   },
   "android": {
