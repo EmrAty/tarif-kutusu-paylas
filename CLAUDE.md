@@ -20,15 +20,19 @@ Bu dosyayı her oturum başında otomatik okuyorum. Buradaki bilgiler güncel tu
 
 **Gizlilik / hesap silme sayfaları:** `app/public/privacy.html`, `app/public/delete-account.html`, ortak `legal.css`; `app/vercel.json` `/privacy` ve `/delete-account`'u bu dosyalara rewrite eder (projede SPA fallback yok). Statik HTML, JS yok, giriş istemez. Geliştirici: TK Studio, destek e-postası `tkworkss10@gmail.com` (geçici; değişirse iki sayfada `mailto` dahil 4 yerde).
 
-**TODO (CRITICAL) — deploy sonrası GERÇEK tek kullanımlık hesapla hesap silme testi (mevcut gerçek kullanıcılarla ASLA):**
-1. Yeni bir test e-posta hesabı ve ayrıca bir misafir (anonim) hesap oluştur.
-2. Tarif, kiler ve alışveriş listesi verisi ekle; mümkünse Plus + aile senaryosu (ikinci test hesabıyla ortak aile, biri sahip).
-3. Uygulamadan Hesabım → Hesabı Sil (ya da `DELETE /api/account`).
-4. Firebase Console → Authentication → Users'da kullanıcının yok olduğunu doğrula (servis hesabının kullanıcı silme yetkisi yalnızca burada kanıtlanır; yetki yoksa endpoint 500 döner, Redis verisi silinmiş olur, Firebase kullanıcısı kalır).
-5. Redis'te `user:<uid>:*`, `job*:<uid>:*` anahtarlarının kalmadığını; ailede sahiplik devri / tek üyeli ailenin silindiğini doğrula.
-6. Aynı credentials ile giriş yapılamadığını ve eski oturumun/token'ın API'de 401 aldığını doğrula.
-
-**Deploy sonrası kontrol:** `https://tarifkutusu.app/privacy` ve `/delete-account` 200, doğrudan açılış/yenileme 404 değil, mobilde okunur.
+**✅ TAMAMLANDI — production hesap silme testi (31 Ekim 2026, commit `8846efc` canlıdayken):**
+- Tek kullanımlık misafir (anonim) hesapla gerçek uçtan uca silme testi geçti (gerçek kullanıcılarla test yapılmadı).
+- Firebase kullanıcısı gerçek sunucu çağrısıyla silindi (`USER_NOT_FOUND` ile doğrulandı) — servis hesabının kullanıcı silme yetkisi var.
+- Test hesabına ait Redis kullanıcı verisi tamamen temizlendi (profile, recipes, shopping-list, pantry-items, fcmTokens); yalnızca 24 saatlik `deleted-account:<uid>` işareti kaldı.
+- Tek üyeli test ailesi (meta, members, recipes, shopping-list) ve davet kodu tamamen silindi.
+- Başka kullanıcı verisine dokunulmadı (Redis 92 → 83 anahtar: test hesabının 10 anahtarı silindi, 1 işaret eklendi).
+- Eski token bütün ilgili API'lerde (data okuma/yazma, profile, families, aile verisi, recipe-jobs) 401 "Bu hesap silindi." aldı.
+- İkinci `DELETE /api/account` çağrısı güvenli/idempotent şekilde 200 döndü (`firebase: "already_deleted"`).
+- `/privacy` ve `/delete-account` production'da 200, doğrudan açılış/yenileme çalışıyor.
+- `npm test` 78/78, `vite build` temiz.
+- **Google Play account deletion şartı production'da doğrulandı.**
+- Doğrulanmayanlar: başka üyeleri olan ailede sahiplik devri yalnızca otomatik testlerle doğrulandı (gerçek production testi yok); Android native görünüm testi henüz yapılmadı.
+- versionCode hâlâ 15; sonraki Play build 16 olacak.
 
 ## 🔖 Google Play hazırlığı (25 Ekim 2026) — imzalı AAB üretildi, Play Console onay bekliyor
 
