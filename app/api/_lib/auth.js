@@ -1,4 +1,5 @@
 import { jwtVerify, createRemoteJWKSet } from "jose";
+import { isAccountDeleted } from "./accountDeletion.js";
 
 // Firebase ID token'ları standart bir JWT — Google'ın herkese açık anahtarlarıyla
 // (servis hesabı/gizli bilgi gerekmeden) doğrulanabiliyor. Bu yüzden firebase-admin
@@ -11,7 +12,9 @@ const JWKS = createRemoteJWKSet(new URL(JWKS_URL));
 
 // req.body üzerinden değil, Authorization header'ından okunuyor — bu yüzden bu
 // fonksiyon hem GET hem POST endpoint'lerinde aynı şekilde çalışabiliyor.
-export async function requireUser(req) {
+// Silinmiş hesabın hâlâ geçerli (en fazla 1 saatlik) ID token'ı reddediliyor,
+// yoksa açık kalan bir cihaz silinen veriyi yeniden yazabilirdi.
+export async function requireUser(req, { allowDeleted = false } = {}) {
   const header = req.headers.authorization || req.headers.Authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : "";
   if (!token) {
@@ -20,10 +23,11 @@ export async function requireUser(req) {
     throw err;
   }
 
+  let user;
   try {
     const { payload } = await jwtVerify(token, JWKS, { issuer: ISSUER, audience: PROJECT_ID });
     if (!payload.sub) throw new Error("Token içinde kullanıcı kimliği yok.");
-    return {
+    user = {
       uid: payload.sub,
       email: payload.email || null,
       isAnonymous: payload.firebase?.sign_in_provider === "anonymous",
@@ -33,4 +37,20 @@ export async function requireUser(req) {
     err.status = 401;
     throw err;
   }
+
+  if (!allowDeleted) {
+    let deleted = false;
+    try {
+      deleted = await isAccountDeleted(user.uid);
+    } catch (e) {
+      // Veritabanı o an cevap vermiyorsa istek kendi Redis çağrısında zaten
+      // hata alacak; burada oturumu reddetmiyoruz.
+    }
+    if (deleted) {
+      const err = new Error("Bu hesap silindi.");
+      err.status = 401;
+      throw err;
+    }
+  }
+  return user;
 }

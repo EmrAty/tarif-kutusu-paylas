@@ -2,6 +2,34 @@
 
 Bu dosyayı her oturum başında otomatik okuyorum. Buradaki bilgiler güncel tutulmalı; büyük bir değişiklik yaptığımda bu dosyayı da güncellerim.
 
+## 🔖 Custom domain + hesap silme + gizlilik sayfaları (31 Ekim 2026)
+
+**Production domain artık `https://tarifkutusu.app`** (commit `9981d58`, push'lu). `app/capacitor.config.json` `server.url`, `ShareActivity.java` `PANEL_URL`/`PANEL_HOST` ve kökteki GitHub Pages shim'i (`share.html`) yeni domainde. API çağrıları zaten relative; Firebase `authDomain` (`tarif-kutusu.firebaseapp.com`) ve FCM linkleri (relative) değişmedi. Vercel'de `tarifkutusu.app`, `www.tarifkutusu.app` ve eski `tarif-kutusu-paylas.vercel.app` üçü de Production'a bağlı (apex www'ye yönlendirmiyor — ShareActivity host'u birebir karşılaştırdığı için yönlendirme paneli bozardı). Firebase Authorized Domains: `tarifkutusu.app` + `www.tarifkutusu.app` eklendi. Aşağıdaki notlarda geçen `tarif-kutusu-paylas.vercel.app` **eski production domain**dir.
+
+**v15 / v16 (Play):**
+- v15 (`versionCode 15`, mevcut imzalı AAB ve sideload APK) hâlâ eski `tarif-kutusu-paylas.vercel.app`'i açıyor. Bu domain Türkiye'de erişim sorunu yaşıyor (bu makineden de "connection reset"), yani v15 yeni production web sürümüne güvenilir şekilde erişemez.
+- Custom domain native config'de (Capacitor `server.url` + ShareActivity) olduğu için **yeni Android AAB şart.** Bir sonraki Play build'i **`versionCode 16`** olmalı (henüz yapılmadı; AAB komutu aşağıdaki Google Play bölümünde).
+- Uygulama içeriği sunucudan yüklendiği için hesap silme / gizlilik linki gibi web değişiklikleri v16 kurulu her telefona push ile gelir.
+
+**Hesap silme (Google Play account deletion şartı):**
+- `DELETE /api/account` (`app/api/account.js`, mantık `app/api/_lib/accountDeletion.js`). uid yalnızca doğrulanmış ID token'dan. Sıra: `deleted-account:<uid>` işareti (24 saat TTL) → aile üyelikleri → `user:<uid>:*` (sabit liste + SCAN) ve `job:`/`job-req:`/`job-url:` kayıtları → profil en son → Firebase kullanıcısı en son (Identity Toolkit `accounts:delete`, servis hesabı token'ı `app/api/_lib/googleAuth.js` — FCM de artık bunu kullanıyor). Tekrar çağrılabilir; `USER_NOT_FOUND` başarı sayılır. Hata → 500 `account_delete_failed`, genel mesaj.
+- Aile kuralı: tek üyeyse aile + tüm aile verisi + davet kodu silinir; başka üyeler varsa aile ve ortak listeler kalır, kullanıcı üyelikten çıkar; sahipse sahiplik **en eski katılan** üyeye (`joinedAt`, eşitlikte uid) geçer.
+- `requireUser` silinmiş hesabın hâlâ geçerli token'ını reddeder (`allowDeleted` yalnızca `/api/account`'ta). `recipe-jobs.js` job sürerken silinen hesaba tarif yazmaz, yazdıysa geri alır, job kaydını siler.
+- Uygulama: Hesabım ekranının altında "Hesabı Sil / Delete Account" kartı + onay penceresi (`DeleteAccountModal`); başarıda cihazdaki hesap kayıtları (plus-status, person-name, share-panel-has-families) temizlenir, oturum kapanır, sayfa yeniden yüklenir. Ayarlar'da "Gizlilik Politikası / Privacy Policy" linki (`PRIVACY_POLICY_URL`).
+- Testler: `app/test/accountDeletion.test.mjs` (`npm test`'e dahil; bellek içi Redis + sahte Google/Anthropic, gerçek sisteme istek atmaz).
+
+**Gizlilik / hesap silme sayfaları:** `app/public/privacy.html`, `app/public/delete-account.html`, ortak `legal.css`; `app/vercel.json` `/privacy` ve `/delete-account`'u bu dosyalara rewrite eder (projede SPA fallback yok). Statik HTML, JS yok, giriş istemez. Geliştirici: TK Studio, destek e-postası `tkworkss10@gmail.com` (geçici; değişirse iki sayfada `mailto` dahil 4 yerde).
+
+**TODO (CRITICAL) — deploy sonrası GERÇEK tek kullanımlık hesapla hesap silme testi (mevcut gerçek kullanıcılarla ASLA):**
+1. Yeni bir test e-posta hesabı ve ayrıca bir misafir (anonim) hesap oluştur.
+2. Tarif, kiler ve alışveriş listesi verisi ekle; mümkünse Plus + aile senaryosu (ikinci test hesabıyla ortak aile, biri sahip).
+3. Uygulamadan Hesabım → Hesabı Sil (ya da `DELETE /api/account`).
+4. Firebase Console → Authentication → Users'da kullanıcının yok olduğunu doğrula (servis hesabının kullanıcı silme yetkisi yalnızca burada kanıtlanır; yetki yoksa endpoint 500 döner, Redis verisi silinmiş olur, Firebase kullanıcısı kalır).
+5. Redis'te `user:<uid>:*`, `job*:<uid>:*` anahtarlarının kalmadığını; ailede sahiplik devri / tek üyeli ailenin silindiğini doğrula.
+6. Aynı credentials ile giriş yapılamadığını ve eski oturumun/token'ın API'de 401 aldığını doğrula.
+
+**Deploy sonrası kontrol:** `https://tarifkutusu.app/privacy` ve `/delete-account` 200, doğrudan açılış/yenileme 404 değil, mobilde okunur.
+
 ## 🔖 Google Play hazırlığı (25 Ekim 2026) — imzalı AAB üretildi, Play Console onay bekliyor
 
 - **Karar: Play App Signing "A" seçeneği.** App signing key'i Google üretecek; mevcut v15 keystore (`alias android`, SHA-1 `66:4C:55:4E…`, SHA-256 `C1:AA:4F:2F…`) **yalnızca UPLOAD KEY**. Yeni keystore yok.

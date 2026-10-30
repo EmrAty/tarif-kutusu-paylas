@@ -7,6 +7,7 @@ import { extractRecipeFromCaption } from "./_lib/extractRecipe.js";
 import { fcmTokensKey, notifyUserDevices } from "./_lib/fcm.js";
 import { addPendingJobRecipe, userOwner, familyOwner } from "./_lib/jobRecipes.js";
 import { assertFamilyMember, familyRecipesKey } from "./_lib/families.js";
+import { isAccountDeleted, accountDeletedError } from "./_lib/accountDeletion.js";
 import { isTikTokLink, tiktokTranscript } from "./_lib/tiktok.js";
 import { CATEGORIES } from "../shared/recipeExtraction.js";
 import { DEFAULT_CONTENT_LANG, isContentLanguage } from "../shared/recipeLocales.js";
@@ -132,6 +133,27 @@ async function readRecipeList(key) {
   return list;
 }
 
+async function discardJobOfDeletedAccount(uid, jobId, lockKey) {
+  logStep(jobId, "account-deleted", 0);
+  await redisDel(jobKey(uid, jobId)).catch(() => {});
+  await redisDel(lockKey).catch(() => {});
+}
+
+// Kişisel tarif: silinen hesabın anahtarları tamamen kaldırılıyor. Aile tarifi:
+// aile başka üyelerle sürüyorsa tarif ailenin ortak listesinde kalıyor (aileye
+// ait); aile silme sırasında kaldırıldıysa yeniden oluşan anahtarlar siliniyor.
+async function removeRecipeOfDeletedAccount(uid, recipeId, target) {
+  if (target.scope === "family") {
+    if ((await redisGet(`family:${target.familyId}:meta`)) == null) {
+      await redisDel(familyRecipesKey(target.familyId));
+      await redisDel(`family:${target.familyId}:pendingJobRecipes`);
+    }
+    return;
+  }
+  await redisDel(recipesKey(uid));
+  await redisDel(`user:${uid}:pendingJobRecipes`);
+}
+
 async function processRecipeJob({ uid, jobId, sourceUrl, caption, category, addedBy, language, lockKey, target }) {
   const startedAt = Date.now();
   const timings = {};
@@ -178,6 +200,9 @@ async function processRecipeJob({ uid, jobId, sourceUrl, caption, category, adde
     timings.claude = Date.now() - t;
     logStep(jobId, "claude", timings.claude, { outputTokens: usage?.output_tokens, stopReason });
 
+    // Job sürerken hesap silinmiş olabilir: silinen hesaba tarif yazılmıyor.
+    if (await isAccountDeleted(uid)) throw accountDeletedError();
+
     t = Date.now();
     const recipeId = genId();
     recipe = {
@@ -210,6 +235,10 @@ async function processRecipeJob({ uid, jobId, sourceUrl, caption, category, adde
     timings.save = Date.now() - t;
     logStep(jobId, "save", timings.save);
   } catch (e) {
+    if (e.accountDeleted || (await isAccountDeleted(uid).catch(() => false))) {
+      await discardJobOfDeletedAccount(uid, jobId, lockKey);
+      return;
+    }
     timings.total = Date.now() - startedAt;
     logStep(jobId, "failed", timings.total, { error: e.message, transcriptMeta });
     await patchJob(uid, jobId, {
@@ -224,6 +253,14 @@ async function processRecipeJob({ uid, jobId, sourceUrl, caption, category, adde
       body: e.notifyBody || "Paylaştığın videodan tarif çıkarılamadı. Dokun, uygulamada tekrar deneyelim.",
       data: { type: "recipe_failed", link: sourceUrl },
     }).catch(() => {});
+    return;
+  }
+
+  // Kontrol ile kayıt arasında hesap silindiyse az önce yazılan tarif geri
+  // alınıyor (silme bu anahtarları çoktan temizlemiş olabilir).
+  if (await isAccountDeleted(uid).catch(() => false)) {
+    await removeRecipeOfDeletedAccount(uid, recipe.id, target).catch(() => {});
+    await discardJobOfDeletedAccount(uid, jobId, lockKey);
     return;
   }
 

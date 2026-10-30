@@ -180,6 +180,8 @@ export function uid() {
 
 const STORAGE_PREFIX = "tarif-kutusu:";
 
+const PRIVACY_POLICY_URL = "https://tarifkutusu.app/privacy";
+
 export function storageGet(key) {
   try {
     const value = window.localStorage.getItem(STORAGE_PREFIX + key);
@@ -637,6 +639,22 @@ export default function TarifKutusu() {
   const handleGuestEntry = () => signInAnonymously(auth);
 
   const handleSignOut = () => signOut(auth);
+
+  // Hesap sunucuda silindikten sonra: bu hesaba ait cihazdaki kayıtlar
+  // (Plus önbelleği, görünen isim, paylaşım paneli aile ipucu) temizlenip oturum
+  // kapatılıyor; sayfa yeniden yüklenince bellekte de hesaptan iz kalmıyor.
+  // Dil tercihi cihaz ayarı olduğu için korunuyor.
+  const handleAccountDeleted = async () => {
+    try {
+      if (authUser) window.localStorage.removeItem(`${STORAGE_PREFIX}plus-status:${authUser.uid}`);
+      window.localStorage.removeItem(`${STORAGE_PREFIX}person-name`);
+      window.localStorage.removeItem(`${STORAGE_PREFIX}share-panel-has-families`);
+    } catch (e) {
+      // depolama yoksa temizlenecek bir şey de yok
+    }
+    await signOut(auth).catch(() => {});
+    window.location.replace("/");
+  };
 
   const showAuthGate = authChecked && !authUser;
 
@@ -1740,6 +1758,7 @@ export default function TarifKutusu() {
             personName={personName}
             onSignOut={handleSignOut}
             onImportPersonal={() => loadRecipeBucket(PERSONAL)}
+            onAccountDeleted={handleAccountDeleted}
           />
         </ModalSheet>
       )}
@@ -6011,8 +6030,9 @@ function PlusView({ isPlus, onToggle }) {
   );
 }
 
-function AccountView({ authUser, personName, onSignOut, onImportPersonal }) {
+function AccountView({ authUser, personName, onSignOut, onImportPersonal, onAccountDeleted }) {
   const { t } = useLanguage();
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [linking, setLinking] = useState(false);
   const [linkError, setLinkError] = useState("");
   const [importState, setImportState] = useState(null);
@@ -6270,6 +6290,132 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal }) {
         {importState === "done" && <div style={{ fontSize: "12px", color: COLORS.forest, marginTop: "8px" }}>{t("families.imported")}</div>}
         {importState === "hata" && <div style={{ fontSize: "12px", color: COLORS.danger, marginTop: "8px" }}>{t("families.importFailed")}</div>}
       </div>
+
+      <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>
+        <h3 style={{ fontFamily: SERIF, fontSize: "16px", color: COLORS.danger, margin: "0 0 8px" }}>{t("account.deleteTitle")}</h3>
+        <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: "0 0 12px" }}>{t("account.deleteBody")}</p>
+        <button
+          onClick={() => setDeleteOpen(true)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "6px",
+            padding: "8px 14px",
+            borderRadius: "8px",
+            fontSize: "13px",
+            fontWeight: 600,
+            background: "transparent",
+            color: COLORS.danger,
+            border: `1px solid ${COLORS.danger}`,
+            cursor: "pointer",
+          }}
+        >
+          <Trash2 size={13} /> {t("account.deleteButton")}
+        </button>
+      </div>
+
+      {deleteOpen && <DeleteAccountModal onClose={() => setDeleteOpen(false)} onDeleted={onAccountDeleted} />}
+    </div>
+  );
+}
+
+// "Hesabı Sil" onayı. Silme sunucuda (DELETE /api/account) yapılıyor; başarılı
+// olunca onDeleted cihazdaki hesap verisini temizleyip oturumu kapatıyor.
+function DeleteAccountModal({ onClose, onDeleted }) {
+  const { t } = useLanguage();
+  const [state, setState] = useState("idle"); // idle | busy | error | done
+
+  const handleDelete = async () => {
+    setState("busy");
+    try {
+      await authedFetch("/api/account", { method: "DELETE" });
+    } catch (e) {
+      setState("error");
+      return;
+    }
+    setState("done");
+    setTimeout(() => onDeleted(), 1200);
+  };
+
+  const busy = state === "busy" || state === "done";
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 80, display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" }}>
+      <div
+        onClick={busy ? undefined : onClose}
+        style={{ position: "absolute", inset: 0, background: "rgba(42,38,32,0.45)", backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)" }}
+      />
+      <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="delete-account-title"
+        style={{
+          position: "relative",
+          width: "100%",
+          maxWidth: "380px",
+          background: COLORS.panel,
+          borderRadius: "16px",
+          boxShadow: "0 8px 40px rgba(0,0,0,0.3)",
+          padding: "20px",
+        }}
+      >
+        {state === "done" ? (
+          <p style={{ fontSize: "15px", color: COLORS.ink, margin: "8px 0", textAlign: "center" }}>{t("account.deleteDone")}</p>
+        ) : (
+          <>
+            <h3 id="delete-account-title" style={{ fontFamily: SERIF, fontSize: "17px", color: COLORS.danger, margin: "0 0 10px" }}>
+              {t("account.deleteConfirmTitle")}
+            </h3>
+            <p style={{ fontSize: "13px", color: COLORS.ink, margin: "0 0 6px" }}>{t("account.deleteConfirmIntro")}</p>
+            <ul style={{ fontSize: "13px", color: COLORS.ink, margin: "0 0 10px", paddingLeft: "18px" }}>
+              <li>{t("account.deleteConfirmItem1")}</li>
+              <li>{t("account.deleteConfirmItem2")}</li>
+              <li>{t("account.deleteConfirmItem3")}</li>
+            </ul>
+            <p style={{ fontSize: "12px", color: COLORS.inkSoft, margin: "0 0 16px" }}>{t("account.deleteConfirmFamilies")}</p>
+            {state === "error" && <div style={{ fontSize: "12px", color: COLORS.danger, marginBottom: "12px" }}>{t("account.deleteFailed")}</div>}
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+              <button
+                onClick={handleDelete}
+                disabled={busy}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "6px",
+                  padding: "10px 14px",
+                  borderRadius: "8px",
+                  fontSize: "14px",
+                  fontWeight: 700,
+                  background: COLORS.danger,
+                  color: "#F3EFE6",
+                  border: "none",
+                  cursor: busy ? "default" : "pointer",
+                  opacity: busy ? 0.7 : 1,
+                }}
+              >
+                {state === "busy" ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
+                {state === "busy" ? t("account.deleteInProgress") : t("account.deleteConfirmButton")}
+              </button>
+              <button
+                onClick={onClose}
+                disabled={busy}
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: "8px",
+                  fontSize: "14px",
+                  fontWeight: 600,
+                  background: "transparent",
+                  color: COLORS.ink,
+                  border: `1px solid ${COLORS.line}`,
+                  cursor: busy ? "default" : "pointer",
+                }}
+              >
+                {t("common.cancel")}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -6356,6 +6502,19 @@ function SettingsView({ personName, nameDraft, setNameDraft, onSaveName, languag
         {currentLanguageLabel}
         <ChevronDown size={16} color={COLORS.inkSoft} style={{ transform: "rotate(-90deg)" }} />
       </button>
+
+      <div style={{ height: "1px", background: COLORS.line, margin: "20px 0 16px" }} />
+
+      <a
+        href={PRIVACY_POLICY_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "14px", fontWeight: 600, color: COLORS.forest }}
+      >
+        <FileText size={15} />
+        {t("settings.privacyPolicy")}
+        <ExternalLink size={13} />
+      </a>
 
       {langModalOpen && (
         <LanguagePickerModal

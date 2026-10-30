@@ -1,65 +1,17 @@
-import crypto from "node:crypto";
 import { redisGetJSON, redisSetJSON } from "./redis.js";
+import { getServiceAccountToken } from "./googleAuth.js";
 
-// FCM'e (Firebase Cloud Messaging) sunucudan push göndermek normalde
-// firebase-admin paketini gerektirir, ama o da bir servis hesabı JWT'sini
-// Google'ın OAuth2 endpoint'ine karşı değiş tokuş etmekten ibaret — burada
-// aynı işi node:crypto ile elle imzalayıp yapıyoruz, auth.js'teki "jose yeter,
-// firebase-admin gerekmez" tercihiyle tutarlı olsun diye.
-function base64url(input) {
-  const buf = Buffer.isBuffer(input) ? input : Buffer.from(input);
-  return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-let cachedToken = null; // { accessToken, projectId, expiresAt }
+// FCM'e (Firebase Cloud Messaging) sunucudan push göndermek için servis hesabı
+// erişim token'ı ortak yardımcıdan (googleAuth.js) alınıyor.
+const FCM_SCOPE = "https://www.googleapis.com/auth/firebase.messaging";
 
 async function getAccessToken() {
-  if (cachedToken && cachedToken.expiresAt > Date.now() + 60_000) {
-    return cachedToken;
+  try {
+    return await getServiceAccountToken(FCM_SCOPE, "Sunucu yapılandırması eksik: bildirim gönderme anahtarı tanımlı değil.");
+  } catch (e) {
+    if (e.status === 502) e.message = "Google'dan bildirim gönderme yetkisi alınamadı.";
+    throw e;
   }
-
-  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
-  if (!raw) {
-    const err = new Error("Sunucu yapılandırması eksik: bildirim gönderme anahtarı tanımlı değil.");
-    err.status = 500;
-    throw err;
-  }
-  const serviceAccount = JSON.parse(raw);
-
-  const now = Math.floor(Date.now() / 1000);
-  const header = { alg: "RS256", typ: "JWT" };
-  const claims = {
-    iss: serviceAccount.client_email,
-    scope: "https://www.googleapis.com/auth/firebase.messaging",
-    aud: "https://oauth2.googleapis.com/token",
-    iat: now,
-    exp: now + 3600,
-  };
-  const unsigned = `${base64url(JSON.stringify(header))}.${base64url(JSON.stringify(claims))}`;
-  const signature = crypto.sign("RSA-SHA256", Buffer.from(unsigned), serviceAccount.private_key);
-  const jwt = `${unsigned}.${base64url(signature)}`;
-
-  const res = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-      assertion: jwt,
-    }),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const err = new Error("Google'dan bildirim gönderme yetkisi alınamadı.");
-    err.status = 502;
-    throw err;
-  }
-
-  cachedToken = {
-    accessToken: data.access_token,
-    projectId: serviceAccount.project_id,
-    expiresAt: now * 1000 + data.expires_in * 1000,
-  };
-  return cachedToken;
 }
 
 export function fcmTokensKey(uid) {
