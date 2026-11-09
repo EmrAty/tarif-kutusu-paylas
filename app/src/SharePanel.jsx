@@ -43,6 +43,13 @@ function sharedLinkFrom(text) {
   return found.find((u) => /tiktok\.com|youtu\.be|youtube\.com|instagram\.com/i.test(u)) || "";
 }
 
+// TikTok'ta açıklama alınamasa da gönderilebiliyor: sunucu (recipe-jobs) altyazı
+// ya da konuşma metnine düşüyor, ikisi de yoksa job başarısız oluyor. Diğer
+// kaynaklarda böyle bir yol yok, açıklama hâlâ zorunlu.
+function isTikTokShareLink(url) {
+  return /^https?:\/\/([^/?#]*\.)?tiktok\.com(\/|$)/i.test(url || "");
+}
+
 const SPIN_CSS = `.spin { animation: spin 1s linear infinite; } @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`;
 
 export default function SharePanel() {
@@ -138,7 +145,7 @@ export default function SharePanel() {
       setError(t("errors.needCategory"));
       return;
     }
-    if (!caption.trim()) {
+    if (!caption.trim() && !isTikTokShareLink(link)) {
       setError(t("sharePanel.errorCaptionRequired"));
       return;
     }

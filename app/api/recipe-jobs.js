@@ -324,7 +324,10 @@ async function handlePost(req, res, uid) {
     return;
   }
   const captionText = typeof caption === "string" ? caption.trim() : "";
-  if (!captionText) {
+  // TikTok'ta açıklama boş olabilir: processRecipeJob yetersiz açıklamada zaten
+  // altyazı/konuşma metnine düşüyor, ikisi de yoksa job "failed" oluyor (tarif
+  // uydurulmuyor). Instagram/YouTube'da böyle bir yol olmadığı için açıklama şart.
+  if (!captionText && !isTikTokLink(url)) {
     res.status(400).json({ error: "Açıklama boş olamaz." });
     return;
   }

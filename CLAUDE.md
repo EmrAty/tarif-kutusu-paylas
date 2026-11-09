@@ -2,6 +2,18 @@
 
 Bu dosyayı her oturum başında otomatik okuyorum. Buradaki bilgiler güncel tutulmalı; büyük bir değişiklik yaptığımda bu dosyayı da güncellerim.
 
+## 🔖 TikTok paylaşımında açıklama regresyonu düzeltildi (9 Kasım 2026) — commit edilmedi, telefonda denenmedi
+
+**Kök sebep:** TikTok'un oEmbed ucu (`https://www.tiktok.com/oembed?url=…`) artık `title`/`author_name` döndürmüyor (yalnızca embed HTML'i; üç ayrı videoyla doğrulandı). `app/api/fetch-caption.js` `data.title || ""` ile **200 + boş caption** dönüyordu; Share Panel ve "Yeni Tarif Çıkar" bunu "açıklama alınamadı" sayıp alanı boş bırakıyordu → kullanıcı "Tarifi Çıkar"da ekran görüntüsü/not isteyen hatayı görüyordu. Bizim kodda değişiklik yoktu, TikTok tarafı değişti.
+
+**Düzeltme (sunucu + web, native değişiklik YOK → yeni APK gerekmez):**
+- `app/api/_lib/tiktok.js`: yeni `tiktokCaption(url)` — mevcut `loadVideoPage` (iPhone UA, `redirect: "follow"`) ile sayfadaki `itemStruct.desc` + `author.uniqueId` okunur; `vt.tiktok.com`/`vm.tiktok.com` kısa linkleri redirect ile çözülür (`resolvedUrl`). Sayfa alınamazsa null.
+- `app/api/fetch-caption.js`: TikTok'ta önce sayfa, sonra oEmbed (yalnızca `title` varsa). Açıklama bulunamazsa artık **502** (eskiden 200 + boş). Instagram/YouTube yolları aynı.
+- `app/api/recipe-jobs.js`: TikTok linkinde boş açıklama kabul ediliyor (job zaten altyazı/konuşma metnine düşüyor, ikisi de yoksa `failed`; uydurma yok). Instagram/YouTube'da "Açıklama boş olamaz." aynen.
+- `app/src/SharePanel.jsx`: TikTok linkinde açıklama boşken de "Tarife Ekle" gönderilebiliyor; diğer kaynaklarda eski hata mesajı.
+- **Yapılmayan:** uygulama içi "Yeni Tarif Çıkar" (`/api/extract`) için açıklama/not/görüntü zorunluluğu korundu — o uçta link üzerinden içerik çeken bir fallback yok, boş girdiyle Claude tarif uydururdu.
+- Testler: `app/test/fetchCaption.test.mjs`, `app/test/recipeJobsCaption.test.mjs` (`npm test` → 92/92). Canlı doğrulama (yerelden): tam link 1,1 sn, `vm.tiktok.com` kısa link 1,7 sn ile açıklama geldi; YouTube oEmbed değişmedi.
+
 ## 🔖 Custom domain + hesap silme + gizlilik sayfaları (31 Ekim 2026)
 
 **Production domain artık `https://tarifkutusu.app`** (commit `9981d58`, push'lu). `app/capacitor.config.json` `server.url`, `ShareActivity.java` `PANEL_URL`/`PANEL_HOST` ve kökteki GitHub Pages shim'i (`share.html`) yeni domainde. API çağrıları zaten relative; Firebase `authDomain` (`tarif-kutusu.firebaseapp.com`) ve FCM linkleri (relative) değişmedi. Vercel'de `tarifkutusu.app`, `www.tarifkutusu.app` ve eski `tarif-kutusu-paylas.vercel.app` üçü de Production'a bağlı (apex www'ye yönlendirmiyor — ShareActivity host'u birebir karşılaştırdığı için yönlendirme paneli bozardı). Firebase Authorized Domains: `tarifkutusu.app` + `www.tarifkutusu.app` eklendi. Aşağıdaki notlarda geçen `tarif-kutusu-paylas.vercel.app` **eski production domain**dir.

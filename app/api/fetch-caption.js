@@ -1,3 +1,5 @@
+import { isTikTokLink, tiktokCaption } from "./_lib/tiktok.js";
+
 // Instagram'ın herkese açık oEmbed API'si yok (Meta'nın resmi oEmbed API'si App
 // Review onayı istiyor). Bunun yerine, gönderi sayfasının HTML'indeki
 // og:description meta etiketi genelde girişsiz de görünüyor — onu okuyoruz.
@@ -62,6 +64,16 @@ export default async function handler(req, res) {
 
     let oembedUrl;
     if (/tiktok\.com/i.test(link)) {
+      // TikTok'un oEmbed yanıtı artık açıklamayı (title) taşımıyor; açıklama
+      // doğrudan video sayfasından okunuyor (kısa vt.tiktok.com linkleri de
+      // burada çözülüyor). oEmbed yalnızca sayfa alınamazsa son çare.
+      if (isTikTokLink(link)) {
+        const page = await tiktokCaption(link);
+        if (page && page.caption) {
+          res.status(200).json({ caption: page.caption, authorName: page.authorName, resolvedUrl: page.resolvedUrl });
+          return;
+        }
+      }
       oembedUrl = `https://www.tiktok.com/oembed?url=${encodeURIComponent(link)}`;
     } else if (/youtube\.com|youtu\.be/i.test(link)) {
       oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(link)}&format=json`;
@@ -76,7 +88,13 @@ export default async function handler(req, res) {
       return;
     }
     const data = await oembedRes.json();
-    res.status(200).json({ caption: data.title || "", authorName: data.author_name || "" });
+    // Açıklama yoksa 200 + boş caption yerine hata: istemciler (AddForm, Share
+    // Panel) "alınamadı" notunu ancak hata yanıtında gösteriyor.
+    if (!data.title) {
+      res.status(502).json({ error: "Video bilgisi alınamadı." });
+      return;
+    }
+    res.status(200).json({ caption: data.title, authorName: data.author_name || "" });
   } catch (e) {
     res.status(502).json({ error: "Video bilgisi alınamadı." });
   }

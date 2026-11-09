@@ -90,13 +90,38 @@ async function loadVideoPage(url) {
   if (!item) return null;
 
   const video = item.video || {};
+  const author = item.author || {};
   return {
     cookie,
+    // Kısa linkler (vt.tiktok.com/...) redirect: "follow" ile buraya kadar
+    // çözülüyor; res.url son (tam) video adresi.
+    resolvedUrl: res.url || url,
     desc: typeof item.desc === "string" ? item.desc : "",
+    authorName:
+      (typeof author.uniqueId === "string" && author.uniqueId) ||
+      (typeof author.nickname === "string" && author.nickname) ||
+      "",
     durationSeconds: Number(video.duration) || 0,
     subtitles: Array.isArray(video.subtitleInfos) ? video.subtitleInfos : [],
     mediaUrls: [video.playAddr, video.downloadAddr].filter((u) => typeof u === "string" && u),
   };
+}
+
+// Video açıklaması (caption) doğrudan sayfadan. TikTok'un oEmbed yanıtı artık
+// title/author_name alanlarını içermiyor (Kasım 2026'da gözlendi; yalnızca embed
+// HTML'i dönüyor), bu yüzden /api/fetch-caption açıklamayı buradan alıyor —
+// aynı itemStruct.desc alanı, aynı iPhone UA, kısa linkler redirect ile
+// çözülüyor. Sayfa alınamazsa/yapı değişmişse null döner, çağıran taraf
+// oEmbed'e düşer.
+export async function tiktokCaption(url) {
+  let page;
+  try {
+    page = await loadVideoPage(url);
+  } catch (e) {
+    return null;
+  }
+  if (!page) return null;
+  return { caption: page.desc, authorName: page.authorName, resolvedUrl: page.resolvedUrl };
 }
 
 // WEBVTT -> düz metin: zaman damgaları, cue numaraları, <c>/<00:00:01.000>
