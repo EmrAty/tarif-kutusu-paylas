@@ -22,6 +22,7 @@ const REFERER = "https://www.tiktok.com/";
 const MAX_VIDEO_SECONDS = 180;
 const MAX_VIDEO_BYTES = Math.min(20 * 1024 * 1024, OPENAI_MAX_FILE_BYTES);
 const PAGE_TIMEOUT_MS = 15_000;
+const PAGE_RETRY_TIMEOUT_MS = 5_000;
 const SUBTITLE_TIMEOUT_MS = 15_000;
 const DOWNLOAD_TIMEOUT_MS = 60_000;
 const MIN_TRANSCRIPT_CHARS = 200;
@@ -79,20 +80,26 @@ function findItemStruct(html) {
 }
 
 async function loadVideoPage(url) {
-  const res = await fetchWithTimeout(url, {
-    timeoutMs: PAGE_TIMEOUT_MS,
+  const fetchPage = (accept, timeoutMs) => fetchWithTimeout(url, {
+    timeoutMs,
     redirect: "follow",
-    headers: { "User-Agent": IPHONE_UA, "Accept-Language": "tr-TR,tr;q=0.9,en;q=0.8", Accept: "text/html" },
+    headers: { "User-Agent": IPHONE_UA, "Accept-Language": "tr-TR,tr;q=0.9,en;q=0.8", Accept: accept },
   });
+  let res = await fetchPage("text/html", PAGE_TIMEOUT_MS);
   if (!res.ok) return null;
-  const cookie = readSetCookies(res.headers);
-  const item = findItemStruct(await res.text());
+  let item = findItemStruct(await res.text());
+  // TikTok bazen aynı video için HTTP 200 ile video verisi olmayan bir sayfa döndürüyor.
+  if (!item) {
+    res = await fetchPage("*/*", PAGE_RETRY_TIMEOUT_MS);
+    if (!res.ok) return null;
+    item = findItemStruct(await res.text());
+  }
   if (!item) return null;
 
   const video = item.video || {};
   const author = item.author || {};
   return {
-    cookie,
+    cookie: readSetCookies(res.headers),
     // Kısa linkler (vt.tiktok.com/...) redirect: "follow" ile buraya kadar
     // çözülüyor; res.url son (tam) video adresi.
     resolvedUrl: res.url || url,
@@ -198,7 +205,7 @@ async function downloadVideo(mediaUrls, cookie) {
 // Caption yetersiz kaldığında çağrılıyor. Sırayla: TikTok altyazısı -> videoyu
 // indirip konuşmayı metne çevirme. Hiçbiri yeterli metin vermezse null döner,
 // çağıran taraf job'ı "failed" yapar (tarif uydurulmaz).
-export async function tiktokTranscript(url, { budgetMs, log }) {
+export async function tiktokTranscript(url, { budgetMs, captionIsSufficient, log }) {
   const timings = {};
   const meta = {};
   const note = (step, ms, extra) => {
@@ -218,6 +225,9 @@ export async function tiktokTranscript(url, { budgetMs, log }) {
   if (!page) return { transcript: "", method: "none", timings, meta };
 
   meta.durationSeconds = page.durationSeconds;
+  if (captionIsSufficient?.(page.desc)) {
+    return { caption: page.desc, transcript: "", method: "caption", timings, meta };
+  }
 
   const subtitle = pickSubtitle(page.subtitles);
   if (subtitle) {

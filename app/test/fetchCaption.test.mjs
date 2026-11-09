@@ -112,6 +112,19 @@ test("regresyon: sayfa alınamaz ve oEmbed title taşımazsa 200+boş caption DE
   assert.equal(r.body.caption, undefined);
 });
 
+test("TikTok 200 yanıtında video verisi yoksa sayfa bir kez daha denenir", async () => {
+  reset({
+    "https://www.tiktok.com/@": (_url, init) =>
+      init.headers.Accept === "text/html"
+        ? html('<script id="api-data" type="application/json">{"videoDetail":{"statusCode":10204}}</script>')
+        : html(tiktokPage(), FULL_URL),
+  });
+  const r = await get(FULL_URL);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.caption, CAPTION);
+  assert.deepEqual(calls.map(({ init }) => init.headers.Accept), ["text/html", "*/*"]);
+});
+
 test("sayfa alınamazsa eski oEmbed yanıtı (title'lı) hâlâ yedek olarak çalışır", async () => {
   reset({
     "https://www.tiktok.com/@": () => new Response("", { status: 403 }),

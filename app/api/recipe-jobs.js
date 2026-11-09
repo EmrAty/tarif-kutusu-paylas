@@ -167,8 +167,8 @@ async function processRecipeJob({ uid, jobId, sourceUrl, caption, category, adde
     await patchJob(uid, jobId, { status: "processing", startedAt, budgetMs });
 
     // Caption tarif için yeterliyse akış hiç değişmiyor (eski hızlı yol).
-    // Yetersizse ve link TikTok'sa önce altyazı, sonra konuşma metni deneniyor;
-    // ikisi de yoksa job başarısız oluyor — eksik bilgiyle tarif uydurulmuyor.
+    // Panel açıklamayı boş gönderdiyse TikTok sayfasında yeniden aranıyor.
+    // Yeterli açıklama yoksa önce altyazı, sonra konuşma metni deneniyor.
     let recipeText = caption;
     if (isTikTokLink(sourceUrl) && !captionLooksSufficient(caption)) {
       const fallbackBudget = remainingMs() - RESERVE_MS - MIN_CLAUDE_MS;
@@ -176,16 +176,21 @@ async function processRecipeJob({ uid, jobId, sourceUrl, caption, category, adde
         fallbackBudget >= MIN_FALLBACK_MS
           ? await tiktokTranscript(sourceUrl, {
               budgetMs: fallbackBudget,
+              captionIsSufficient: caption ? undefined : captionLooksSufficient,
               log: (step, ms, extra) => logStep(jobId, step, ms, extra),
             })
           : { transcript: "", method: "none", timings: {}, meta: { skipped: "süre kalmadı" } };
       Object.assign(timings, fallback.timings);
       transcriptMeta = { method: fallback.method, ...fallback.meta };
-      if (!fallback.transcript) throw insufficientSourceError();
-      recipeText = `${caption}\n\n--- Videonun konuşma metni (otomatik çıkarıldı) ---\n${fallback.transcript.slice(
-        0,
-        MAX_TRANSCRIPT_CHARS
-      )}`;
+      if (fallback.caption) {
+        recipeText = fallback.caption.slice(0, MAX_CAPTION_CHARS);
+      } else {
+        if (!fallback.transcript) throw insufficientSourceError();
+        recipeText = `${caption}\n\n--- Videonun konuşma metni (otomatik çıkarıldı) ---\n${fallback.transcript.slice(
+          0,
+          MAX_TRANSCRIPT_CHARS
+        )}`;
+      }
     }
 
     const claudeTimeout = Math.max(15_000, Math.min(MAX_CLAUDE_MS, remainingMs() - RESERVE_MS));

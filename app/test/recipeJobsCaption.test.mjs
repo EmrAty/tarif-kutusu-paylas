@@ -44,6 +44,8 @@ const SUBTITLE_URL = "https://v16-webapp.tiktok.com/subtitle.vtt";
 const TRANSCRIPT_LINE = "Önce iki yemek kaşığı tereyağını eritiyoruz, bir su bardağı un ekleyip kavuruyoruz.";
 let claudeBodies = [];
 let tiktokPageHits = 0;
+let pageCaption = "";
+let fcmMessages = [];
 
 function tiktokPage() {
   const data = {
@@ -51,7 +53,7 @@ function tiktokPage() {
       "webapp.video-detail": {
         itemInfo: {
           itemStruct: {
-            desc: "",
+            desc: pageCaption,
             author: { uniqueId: "sef" },
             video: {
               duration: 46,
@@ -92,6 +94,13 @@ globalThis.fetch = async (input, init = {}) => {
     return res;
   }
   if (url === SUBTITLE_URL) return new Response(vtt(), { status: 200 });
+  if (url === "https://oauth2.googleapis.com/token") {
+    return json(200, { access_token: "test-fcm-access-token", expires_in: 3600 });
+  }
+  if (url === "https://fcm.googleapis.com/v1/projects/tarif-kutusu/messages:send") {
+    fcmMessages.push(JSON.parse(init.body).message);
+    return json(200, { name: "test-fcm-message" });
+  }
   if (url === "https://api.anthropic.com/v1/messages") {
     claudeBodies.push(JSON.parse(init.body));
     const recipe = { title: "Altyazıdan Tarif", ingredients: [], instructions: [] };
@@ -162,14 +171,16 @@ function seed() {
   db.clear();
   claudeBodies = [];
   tiktokPageHits = 0;
+  pageCaption = "";
+  fcmMessages = [];
   db.set("user:A:profile", JSON.stringify({ isPlus: false, families: [] }));
   db.set("user:A:recipes", JSON.stringify([]));
 }
 
-async function waitForJob(jobId) {
+async function waitForJob(jobId, { waitForNotification = false } = {}) {
   for (let i = 0; i < 300; i++) {
     const job = read(`job:A:${jobId}`);
-    if (job && (job.status === "completed" || job.status === "failed")) return job;
+    if (job?.status === "failed" || (job?.status === "completed" && (!waitForNotification || job.notify))) return job;
     await sleep(10);
   }
   throw new Error("job bitmedi");
@@ -206,6 +217,27 @@ test(
     assert.equal(job.status, "completed", JSON.stringify(job));
     assert.equal(job.sourceUrl, SHORT_URL);
     assert.equal(tiktokPageHits, 1);
+  })
+);
+
+test(
+  "Panel açıklamayı boş gönderirse job TikTok sayfasındaki tarif metnini kullanır ve bildirim gönderir",
+  quiet(async () => {
+    seed();
+    pageCaption = "Fit Tavuk Tantuni: 600 g tavuk göğsü, 2 yemek kaşığı zeytinyağı, 1 çay kaşığı tuz. Tavuğu küp doğrayın, suyunu çekene kadar pişirin ve lavaşa sarın.";
+    db.set("user:A:fcmTokens", JSON.stringify(["test-device"]));
+    const r = await post(body({ sourceUrl: SHORT_URL, caption: "" }));
+    assert.equal(r.status, 200);
+    assert.equal(r.body.notifyDevices, 1);
+    const job = await waitForJob(r.body.jobId, { waitForNotification: true });
+    assert.equal(job.status, "completed", JSON.stringify(job));
+    assert.equal(job.transcriptMeta.method, "caption");
+    assert.equal(tiktokPageHits, 1);
+    assert.match(JSON.stringify(claudeBodies[0].messages), /Fit Tavuk Tantuni/);
+    assert.equal(read("user:A:recipes")[0].id, job.recipeId);
+    assert.equal(fcmMessages[0]?.token, "test-device");
+    assert.deepEqual(fcmMessages[0]?.data, { type: "recipe_ready", recipeId: job.recipeId });
+    assert.equal(job.notify.sent, 1);
   })
 );
 
