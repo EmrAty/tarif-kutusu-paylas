@@ -6038,6 +6038,30 @@ const PLUS_DUO_ICONS = {
   },
 };
 
+// Plus üst ikonu: referans tasarımdaki şef şapkası (üç bölümlü bulut tepe,
+// düz yanlar, yuvarlak köşeli alt bant, bandın sağında kısa çizgi). viewBox
+// x ekseninde simetrik (0–64, merkez 32): SVG'nin merkezi şapkanın merkezi.
+function PlusHeroHat({ size = 72, color = COLORS.mustard }) {
+  return (
+    <svg
+      width={size}
+      height={size * (60 / 64)}
+      viewBox="0 0 64 60"
+      fill="none"
+      stroke={color}
+      strokeWidth={3.4}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      style={{ display: "block" }}
+    >
+      <path d="M15 46V37C8 36 4.5 30.5 6 25 7.6 19 14 15.6 20.5 17.5 22.5 9.5 27 5.5 32 5.5S41.5 9.5 43.5 17.5C50 15.6 56.4 19 58 25 59.5 30.5 56 36 49 37V46" />
+      <rect x="15" y="46" width="34" height="10" rx="2.6" />
+      <path d="M38.5 51H43" />
+    </svg>
+  );
+}
+
 function PlusDuoIcon({ name, size = 24, strokeWidth = 1.8 }) {
   const icon = PLUS_DUO_ICONS[name];
   const layer = (nodes, color) => (
@@ -6310,12 +6334,13 @@ function PlusModal({ closing, onClose, isPlus, onToggleTest }) {
           {/* Tek merkez ekseni: içerik sütunu flex column + center; X absolute
               olduğu için akışı/ortalamayı etkilemiyor. */}
           <div style={{ maxWidth: "520px", margin: "0 auto", display: "flex", flexDirection: "column", alignItems: "stretch" }}>
-          {/* Üst ikon: hardal şef şapkası + sağ üstte büyük ve küçük iki parıltı.
-              Şapka + parıltılar tek grup (80×72 kutu) olarak yatay merkezde. */}
-          <div aria-hidden="true" style={{ position: "relative", width: "80px", height: "72px", margin: "4px auto 12px", flexShrink: 0 }}>
-            <ChefHat size={64} color={COLORS.mustard} strokeWidth={1.6} style={{ position: "absolute", left: 0, top: "8px", display: "block" }} />
-            <Sparkle size={20} color={COLORS.mustard} fill={COLORS.mustard} strokeWidth={1.4} style={{ position: "absolute", left: "54px", top: 0, display: "block" }} />
-            <Sparkle size={11} color={COLORS.mustard} fill={COLORS.mustard} strokeWidth={1.4} style={{ position: "absolute", left: "69px", top: "21px", display: "block" }} />
+          {/* Üst ikon: kapsayıcı yalnızca şapka kadar geniş ve margin auto ile
+              ortada → şapkanın merkezi = sheet'in merkezi. Parıltılar şapkaya göre
+              mutlak konumlu (sağ üst), akışa/genişliğe katılmıyor, merkezi kaydırmıyor. */}
+          <div aria-hidden="true" style={{ position: "relative", width: "72px", margin: "10px auto 12px", flexShrink: 0 }}>
+            <PlusHeroHat size={72} />
+            <Sparkle size={20} color={COLORS.mustard} fill={COLORS.mustard} strokeWidth={1.4} style={{ position: "absolute", left: "100%", top: "-4px", display: "block" }} />
+            <Sparkle size={11} color={COLORS.mustard} fill={COLORS.mustard} strokeWidth={1.4} style={{ position: "absolute", left: "calc(100% + 16px)", top: "12px", display: "block" }} />
           </div>
           <h2 id="plus-modal-title" style={{ fontFamily: SERIF, fontSize: "28px", lineHeight: 1.15, fontWeight: 700, color: COLORS.forestDark, margin: "0 0 10px", textAlign: "center" }}>
             {t("plusModal.title")}
