@@ -6057,7 +6057,6 @@ function PlusModal({ closing, onClose, isPlus, onToggleTest }) {
         display: "flex",
         alignItems: "flex-end",
         justifyContent: "center",
-        padding: "0 4vw max(12px, env(safe-area-inset-bottom))",
       }}
     >
       <style>{`
@@ -6093,10 +6092,10 @@ function PlusModal({ closing, onClose, isPlus, onToggleTest }) {
         style={{
           position: "relative",
           width: "100%",
-          maxWidth: "440px",
-          maxHeight: "86dvh",
+          maxHeight: "90dvh",
           background: COLORS.paper,
-          borderRadius: "28px",
+          // Tam genişlik alt sayfa: sol/sağ/alt kenara yapışık, yalnızca üst köşeler yuvarlak.
+          borderRadius: "28px 28px 0 0",
           boxShadow: "0 -8px 40px rgba(0,0,0,0.3)",
           display: "flex",
           flexDirection: "column",
@@ -6129,7 +6128,18 @@ function PlusModal({ closing, onClose, isPlus, onToggleTest }) {
           <X size={20} />
         </button>
 
-        <div style={{ overflowY: "auto", overscrollBehavior: "contain", padding: "18px 22px 20px", textAlign: "center" }}>
+        {/* Alt boşluk içeriğe veriliyor (sheet'in kendisine değil): krem zemin
+            ekranın en altına kadar uzanır, içerik gezinme çubuğunun üstünde kalır.
+            Geniş ekranlarda içerik sütunu ortada, sheet yine kenardan kenara. */}
+        <div
+          style={{
+            overflowY: "auto",
+            overscrollBehavior: "contain",
+            padding: "18px 22px calc(20px + env(safe-area-inset-bottom, 0px))",
+            textAlign: "center",
+          }}
+        >
+          <div style={{ maxWidth: "520px", margin: "0 auto" }}>
           <div aria-hidden="true" style={{ position: "relative", width: "64px", height: "64px", margin: "6px auto 10px" }}>
             <Crown size={64} color={COLORS.mustard} strokeWidth={1.6} />
             <LockKeyhole size={20} color={COLORS.mustard} strokeWidth={2.2} style={{ position: "absolute", left: "22px", top: "30px" }} />
@@ -6244,6 +6254,7 @@ function PlusModal({ closing, onClose, isPlus, onToggleTest }) {
             <a href={TERMS_URL} target="_blank" rel="noopener noreferrer" style={{ color: COLORS.ink, textDecoration: "none", padding: "6px 2px" }}>
               {t("plusModal.terms")}
             </a>
+          </div>
           </div>
         </div>
       </div>
