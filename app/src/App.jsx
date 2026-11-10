@@ -156,8 +156,22 @@ const LABELSANS = "'Helvetica Neue Condensed', 'Arial Narrow', Arial, sans-serif
 const CARD_SHADOW = "0 1px 2px rgba(42,38,32,0.05), 0 8px 24px rgba(42,38,32,0.06)";
 // Kilitli tarif kartı: kartın kendisi aynı, üstünde hafif koyu yeşil/krem ton,
 // soluk içerik ve hardal kilit ikonu.
-const LOCKED_TINT = "rgba(47,74,61,0.07)";
-const LOCKED_OPACITY = 0.5;
+// Free hesapta limit üstündeki (kilitli) tarif kartlarının üstüne konan katman:
+// kartın içeriği altta kalır, koyu yeşil örtü + ortada hardal kilit. Tüm
+// listeler (kenar çubuğu, Favoriler, Elimde Bunlar Var) bunu kullanır.
+// Kapsayan kartın position: relative + overflow: hidden olması gerekir.
+const LOCKED_OVERLAY_OPACITY = 0.78;
+
+function LockedOverlay({ size = 22 }) {
+  return (
+    <span aria-hidden="true" style={{ position: "absolute", inset: 0, pointerEvents: "none", borderRadius: "inherit" }}>
+      <span style={{ position: "absolute", inset: 0, background: COLORS.forest, opacity: LOCKED_OVERLAY_OPACITY, borderRadius: "inherit" }} />
+      <span style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <Lock size={size} color={COLORS.mustard} strokeWidth={2.4} />
+      </span>
+    </span>
+  );
+}
 const SCREEN_EXIT_MS = 200; // mobil "ekran" kapanış animasyonunun süresi (gerçek view değişiminden önce)
 // Mobilde/Capacitor'da tarif listesinin (Sidebar) üstünde kalmayıp onun yerine
 // tam ekran açılan, kendi giriş/çıkış animasyonu + scroll-üste-sıfırlama olan view'lar.
@@ -2529,14 +2543,16 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, isRecipeLo
           onPointerLeave={cancelPress}
           onPointerCancel={cancelPress}
           style={{
+            position: "relative",
             display: "flex",
             alignItems: "center",
             gap: "4px",
             borderRadius: "6px",
-            border: `1px solid ${isActive ? COLORS.forest : locked ? COLORS.line : "transparent"}`,
-            background: isActive ? COLORS.forest : locked ? LOCKED_TINT : "transparent",
+            border: `1px solid ${isActive ? COLORS.forest : "transparent"}`,
+            background: isActive ? COLORS.forest : "transparent",
           }}
         >
+          {locked && <LockedOverlay size={20} />}
           <button
             onClick={() => {
               if (longPressFiredRef.current) {
@@ -2557,7 +2573,6 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, isRecipeLo
               border: "none",
               color: isActive ? "#F3EFE6" : COLORS.ink,
               cursor: locked ? "default" : "pointer",
-              opacity: locked ? LOCKED_OPACITY : 1,
             }}
           >
             <div style={{ fontSize: "13px", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -2573,8 +2588,8 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, isRecipeLo
             </div>
           </button>
           {locked ? (
-            <span title={t("recipe.locked")} style={{ padding: "8px", display: "flex", flexShrink: 0 }}>
-              <Lock size={15} color={COLORS.mustardDark} aria-hidden="true" />
+            <span aria-hidden="true" style={{ padding: "8px", display: "flex", flexShrink: 0 }}>
+              <span style={{ width: "15px", height: "15px" }} />
             </span>
           ) : (
             <button
@@ -2598,9 +2613,9 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, isRecipeLo
               onDelete(r.id);
             }}
             aria-label={t("sidebar.deleteRecipe")}
-            style={{ padding: "8px", background: "transparent", border: "none", cursor: "pointer", flexShrink: 0 }}
+            style={{ padding: "8px", background: "transparent", border: "none", cursor: "pointer", flexShrink: 0, ...(locked ? { position: "relative", zIndex: 1 } : null) }}
           >
-            <Trash2 size={14} color={isActive ? "#C9C2AE" : COLORS.inkSoft} />
+            <Trash2 size={14} color={isActive || locked ? "#C9C2AE" : COLORS.inkSoft} />
           </button>
         </div>
         {isFam && (
@@ -5368,16 +5383,16 @@ function PantryFinder({ recipes, isPlus, families, isRecipeLocked, onSelectRecip
                     aria-label={locked ? `${recipe.title || t("common.untitledRecipe")} — ${t("recipe.locked")}` : undefined}
                     style={{
                       position: "relative",
+                      overflow: "hidden",
                       textAlign: "left",
                       borderRadius: "10px",
                       border: `1px solid ${isFull ? COLORS.forest : COLORS.line}`,
-                      background: locked ? LOCKED_TINT : COLORS.panel,
+                      background: COLORS.panel,
                       padding: "16px",
                       cursor: locked ? "default" : "pointer",
-                      opacity: locked ? LOCKED_OPACITY : 1,
                     }}
                   >
-                    {locked && <Lock size={15} color={COLORS.mustardDark} aria-hidden="true" style={{ position: "absolute", top: "10px", right: "10px" }} />}
+                    {locked && <LockedOverlay size={24} />}
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: missing.length > 0 ? "8px" : 0 }}>
                       <div style={{ fontFamily: SERIF, fontSize: "16px", color: COLORS.ink }}>{recipe.title || t("common.untitledRecipe")}</div>
                       <span
@@ -5624,6 +5639,8 @@ function FavoritesView({ recipes, familyNameById, isRecipeLocked, onSelect }) {
                 aria-disabled={locked || undefined}
                 aria-label={locked ? `${r.title || t("common.untitledRecipe")} — ${t("recipe.locked")}` : undefined}
                 style={{
+                  position: "relative",
+                  overflow: "hidden",
                   textAlign: "left",
                   display: "flex",
                   alignItems: "center",
@@ -5632,14 +5649,14 @@ function FavoritesView({ recipes, familyNameById, isRecipeLocked, onSelect }) {
                   padding: "12px 14px",
                   borderRadius: "10px",
                   border: `1px solid ${COLORS.line}`,
-                  background: locked ? LOCKED_TINT : COLORS.paper,
+                  background: COLORS.paper,
                   cursor: locked ? "default" : "pointer",
                 }}
               >
-                <span style={{ fontFamily: SERIF, fontSize: "15px", color: COLORS.ink, opacity: locked ? LOCKED_OPACITY : 1 }}>{r.title || t("common.untitledRecipe")}</span>
+                {locked && <LockedOverlay size={22} />}
+                <span style={{ fontFamily: SERIF, fontSize: "15px", color: COLORS.ink }}>{r.title || t("common.untitledRecipe")}</span>
                 <span style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: COLORS.inkSoft, flexShrink: 0 }}>
-                  <span style={{ opacity: locked ? LOCKED_OPACITY : 1 }}>{scopeLabels(r, familyNameById, t).join(" + ")}</span>
-                  {locked && <Lock size={15} color={COLORS.mustardDark} aria-hidden="true" />}
+                  <span>{scopeLabels(r, familyNameById, t).join(" + ")}</span>
                 </span>
               </button>
             );
