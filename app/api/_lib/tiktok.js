@@ -37,11 +37,16 @@ export function isTikTokLink(url) {
   })());
 }
 
-async function fetchWithTimeout(url, { timeoutMs, ...init }) {
+// Zaman aşımı gövdenin okunmasını da kapsıyor: read(res) bitene kadar sayaç
+// açık. Eskiden sayaç başlıklar gelince kapanıyordu; gövdesi takılan bir yanıt
+// (ör. video indirmesi) fonksiyonu Vercel'in 300 sn sınırına kadar bekletip
+// job'ı "processing"te ve bildirimsiz bırakabilirdi.
+async function fetchWithTimeout(url, { timeoutMs, ...init }, read = (res) => res) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    const res = await fetch(url, { ...init, signal: controller.signal });
+    return await read(res);
   } finally {
     clearTimeout(timer);
   }
@@ -80,19 +85,23 @@ function findItemStruct(html) {
 }
 
 async function loadVideoPage(url) {
-  const fetchPage = (accept, timeoutMs) => fetchWithTimeout(url, {
-    timeoutMs,
-    redirect: "follow",
-    headers: { "User-Agent": IPHONE_UA, "Accept-Language": "tr-TR,tr;q=0.9,en;q=0.8", Accept: accept },
-  });
-  let res = await fetchPage("text/html", PAGE_TIMEOUT_MS);
+  const fetchPage = (accept, timeoutMs) => fetchWithTimeout(
+    url,
+    {
+      timeoutMs,
+      redirect: "follow",
+      headers: { "User-Agent": IPHONE_UA, "Accept-Language": "tr-TR,tr;q=0.9,en;q=0.8", Accept: accept },
+    },
+    async (res) => ({ res, html: res.ok ? await res.text() : "" })
+  );
+  let { res, html } = await fetchPage("text/html", PAGE_TIMEOUT_MS);
   if (!res.ok) return null;
-  let item = findItemStruct(await res.text());
+  let item = findItemStruct(html);
   // TikTok bazen aynı video için HTTP 200 ile video verisi olmayan bir sayfa döndürüyor.
   if (!item) {
-    res = await fetchPage("*/*", PAGE_RETRY_TIMEOUT_MS);
+    ({ res, html } = await fetchPage("*/*", PAGE_RETRY_TIMEOUT_MS));
     if (!res.ok) return null;
-    item = findItemStruct(await res.text());
+    item = findItemStruct(html);
   }
   if (!item) return null;
 
@@ -157,12 +166,14 @@ function pickSubtitle(subtitles) {
 }
 
 async function fetchSubtitle(subtitle, cookie) {
-  const res = await fetchWithTimeout(subtitle.Url, {
-    timeoutMs: SUBTITLE_TIMEOUT_MS,
-    headers: { "User-Agent": IPHONE_UA, Referer: REFERER, ...(cookie ? { Cookie: cookie } : {}) },
-  });
-  if (!res.ok) return "";
-  return vttToPlainText(await res.text());
+  return fetchWithTimeout(
+    subtitle.Url,
+    {
+      timeoutMs: SUBTITLE_TIMEOUT_MS,
+      headers: { "User-Agent": IPHONE_UA, Referer: REFERER, ...(cookie ? { Cookie: cookie } : {}) },
+    },
+    async (res) => (res.ok ? vttToPlainText(await res.text()) : "")
+  );
 }
 
 // Boyut sınırı hem Content-Length'ten hem akarken sayarak uygulanıyor: sunucu
@@ -170,34 +181,36 @@ async function fetchSubtitle(subtitle, cookie) {
 async function downloadVideo(mediaUrls, cookie) {
   let lastStatus = 0;
   for (const url of mediaUrls) {
-    const res = await fetchWithTimeout(url, {
-      timeoutMs: DOWNLOAD_TIMEOUT_MS,
-      headers: { "User-Agent": IPHONE_UA, Referer: REFERER, Accept: "*/*", ...(cookie ? { Cookie: cookie } : {}) },
-    });
-    if (!res.ok || !res.body) {
-      lastStatus = res.status;
+    const result = await fetchWithTimeout(
+      url,
+      {
+        timeoutMs: DOWNLOAD_TIMEOUT_MS,
+        headers: { "User-Agent": IPHONE_UA, Referer: REFERER, Accept: "*/*", ...(cookie ? { Cookie: cookie } : {}) },
+      },
+      async (res) => {
+        if (!res.ok || !res.body) return { status: res.status };
+        const declared = Number(res.headers.get("content-length")) || 0;
+        if (declared > MAX_VIDEO_BYTES) {
+          await res.body.cancel().catch(() => {});
+          return { tooLarge: true, bytes: declared };
+        }
+        const chunks = [];
+        let total = 0;
+        // break, async iterator'ın return()'ünü tetikleyip akışı kapatıyor; kilitli
+        // bir akışta cancel() çağırmak yerine bu tercih edildi.
+        for await (const chunk of res.body) {
+          total += chunk.length;
+          if (total > MAX_VIDEO_BYTES) return { tooLarge: true, bytes: total };
+          chunks.push(chunk);
+        }
+        return { bytes: Buffer.concat(chunks), contentType: res.headers.get("content-type") || "video/mp4" };
+      }
+    );
+    if (result.status !== undefined) {
+      lastStatus = result.status;
       continue;
     }
-    const declared = Number(res.headers.get("content-length")) || 0;
-    if (declared > MAX_VIDEO_BYTES) {
-      await res.body.cancel().catch(() => {});
-      return { tooLarge: true, bytes: declared };
-    }
-    const chunks = [];
-    let total = 0;
-    let tooLarge = false;
-    // break, async iterator'ın return()'ünü tetikleyip akışı kapatıyor; kilitli
-    // bir akışta cancel() çağırmak yerine bu tercih edildi.
-    for await (const chunk of res.body) {
-      total += chunk.length;
-      if (total > MAX_VIDEO_BYTES) {
-        tooLarge = true;
-        break;
-      }
-      chunks.push(chunk);
-    }
-    if (tooLarge) return { tooLarge: true, bytes: total };
-    return { bytes: Buffer.concat(chunks), contentType: res.headers.get("content-type") || "video/mp4" };
+    return result;
   }
   return { error: `video indirilemedi (${lastStatus || "yanıt yok"})` };
 }

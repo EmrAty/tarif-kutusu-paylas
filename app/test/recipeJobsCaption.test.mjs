@@ -11,6 +11,7 @@ process.env.KV_REST_API_URL = KV;
 process.env.KV_REST_API_TOKEN = "test-token";
 process.env.ANTHROPIC_API_KEY = "test-key";
 delete process.env.OPENAI_API_KEY;
+process.env.RECIPE_JOB_NOTIFY_MIN_DELAY_MS = "0";
 
 const { publicKey, privateKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
 const jwk = { ...publicKey.export({ format: "jwk" }), kid: "test-kid", alg: "RS256", use: "sig" };

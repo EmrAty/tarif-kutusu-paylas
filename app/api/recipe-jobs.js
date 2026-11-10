@@ -34,6 +34,14 @@ const MIN_CLAUDE_MS = 60_000;
 const MIN_FALLBACK_MS = 20_000;
 const MAX_CAPTION_CHARS = 20000;
 const MAX_TRANSCRIPT_CHARS = 12000;
+// Android, uygulama ön plandayken gelen FCM "notification" mesajını sistem
+// çubuğunda GÖSTERMİYOR (onMessageReceived'e veriyor; Capacitor'da
+// presentationOptions tanımlı değil). Paylaşım paneli (ShareActivity) job kabul
+// edildikten sonra ~1,4 sn + kapanma animasyonu boyunca açık kaldığı için o
+// arada gönderilen bildirim kayboluyordu: ör. 401 ile ~0,1 sn'de düşen job'ın
+// "Tarif oluşturulamadı" bildirimi hiç görünmüyordu. Bildirim, job başladıktan
+// en az bu kadar sonra gönderiliyor. (Testler ortam değişkeniyle kısaltıyor.)
+const NOTIFY_MIN_DELAY_MS = 5000;
 const SUPPORTED_LINK = /tiktok\.com|youtu\.be|youtube\.com|instagram\.com/i;
 const LIMIT_MESSAGE = FREE_LIMIT_MESSAGE;
 const INSUFFICIENT_MESSAGE = "Bu videodan yeterli tarif bilgisi çıkaramadık.";
@@ -93,6 +101,17 @@ function genId() {
 
 function logStep(jobId, step, ms, extra) {
   console.log(JSON.stringify({ tag: "recipe-job", jobId, step, ms, ...extra }));
+}
+
+function notifyMinDelayMs() {
+  const override = process.env.RECIPE_JOB_NOTIFY_MIN_DELAY_MS;
+  const value = override === undefined || override === "" ? NaN : Number(override);
+  return Number.isFinite(value) && value >= 0 ? value : NOTIFY_MIN_DELAY_MS;
+}
+
+async function waitForSharePanelToClose(startedAt) {
+  const wait = startedAt + notifyMinDelayMs() - Date.now();
+  if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
 }
 
 // Fonksiyon öldürüldüyse job sonsuza kadar "processing" görünmesin: yeterince
@@ -253,11 +272,17 @@ async function processRecipeJob({ uid, jobId, sourceUrl, caption, category, adde
       transcriptMeta,
     }).catch(() => {});
     await redisDel(lockKey).catch(() => {});
-    await notifyUserDevices(uid, {
+    await waitForSharePanelToClose(startedAt);
+    const t = Date.now();
+    const notify = await notifyUserDevices(uid, {
       title: "Tarif oluşturulamadı",
       body: e.notifyBody || "Paylaştığın videodan tarif çıkarılamadı. Dokun, uygulamada tekrar deneyelim.",
       data: { type: "recipe_failed", link: sourceUrl },
-    }).catch(() => {});
+    }).catch((err) => ({ sent: 0, attempted: 0, error: err.message }));
+    // Başarısız job'da da bildirim sonucu kayda yazılıyor (önceden yalnızca
+    // başarılı yolda vardı; "bildirim geldi mi" sorusu yanıtsız kalıyordu).
+    logStep(jobId, "fcm", Date.now() - t, { sent: notify.sent, attempted: notify.attempted, kind: "failed" });
+    await patchJob(uid, jobId, { notify }).catch(() => {});
     return;
   }
 
@@ -279,6 +304,7 @@ async function processRecipeJob({ uid, jobId, sourceUrl, caption, category, adde
     transcriptMeta,
   }).catch(() => {});
 
+  await waitForSharePanelToClose(startedAt);
   const t = Date.now();
   const notify = await notifyUserDevices(uid, {
     title: "Tarifin hazır 🍝",
