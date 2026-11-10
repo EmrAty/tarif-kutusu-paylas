@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import {
   ChefHat, Plus, Minus, Link2, ExternalLink, Trash2, Loader2, ArrowLeft, ArrowRight, AlertCircle,
   FileText, Pencil, Check, ChevronDown, Star, Search, ShoppingCart, Clock, Gauge, Undo2, X, Package, Download,
-  Mail, LogOut, Users, Crown, Settings, UserCircle, Copy, Sparkles, LogIn, Bell, Info, Lock, LockKeyhole, NotebookPen,
+  Mail, LogOut, Users, Crown, Settings, UserCircle, Copy, Sparkles, Sparkle, LogIn, Bell, Info, Lock,
 } from "lucide-react";
 import { auth, googleProvider, requestFcmToken } from "./firebase.js";
 import {
@@ -5995,6 +5995,75 @@ function plusNotConnected(action, detail) {
 }
 
 const PLUS_SHEET_IN_MS = 280;
+
+// Plus avantaj kartındaki iki renkli ikonlar. Geometri Lucide'ın NotebookPen,
+// LockKeyhole ve Users ikonlarıyla aynı (24×24, yuvarlak uç/birleşim); parçalar
+// iki katmana ayrılıyor: ana çizgiler COLORS.forest, vurgu COLORS.mustard.
+const PLUS_DUO_ICONS = {
+  notebookPen: {
+    primary: [
+      ["path", { d: "M13.4 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7.4" }],
+      ["path", { d: "M2 6h4" }],
+      ["path", { d: "M2 10h4" }],
+      ["path", { d: "M2 14h4" }],
+      ["path", { d: "M2 18h4" }],
+    ],
+    accent: [
+      // kalem
+      ["path", { d: "M21.378 5.626a1 1 0 1 0-3.004-3.004l-5.01 5.012a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506z" }],
+    ],
+  },
+  lockKeyhole: {
+    primary: [
+      ["rect", { x: "3", y: "10", width: "18", height: "12", rx: "2" }],
+      ["path", { d: "M7 10V7a5 5 0 0 1 10 0v3" }],
+    ],
+    accent: [
+      // anahtar deliği: dolu daire + kısa çubuk (Lucide'daki r=1 noktadan belirgin)
+      ["circle", { cx: "12", cy: "15.2", r: "1.4", fill: "currentColor", strokeWidth: 1.2 }],
+      ["path", { d: "M12 16.6v2" }],
+    ],
+  },
+  users: {
+    primary: [
+      // öndeki kişi
+      ["path", { d: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" }],
+      ["circle", { cx: "9", cy: "7", r: "4" }],
+    ],
+    accent: [
+      // arkadaki (ikinci) kişi
+      ["path", { d: "M22 21v-2a4 4 0 0 0-3-3.87" }],
+      ["path", { d: "M16 3.13a4 4 0 0 1 0 7.75" }],
+    ],
+  },
+};
+
+function PlusDuoIcon({ name, size = 24, strokeWidth = 1.8 }) {
+  const icon = PLUS_DUO_ICONS[name];
+  const layer = (nodes, color) => (
+    <g stroke={color} style={{ color }}>
+      {nodes.map(([Tag, attrs], i) => (
+        <Tag key={i} {...attrs} />
+      ))}
+    </g>
+  );
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      style={{ display: "block" }}
+    >
+      {layer(icon.primary, COLORS.forest)}
+      {layer(icon.accent, COLORS.mustard)}
+    </svg>
+  );
+}
 // Tutamaçtan sürükleyerek kapatma eşikleri: sheet yüksekliğinin %22'si kadar
 // aşağı çekmek ya da ≥0,6 px/ms (600 px/sn) hızla en az 24 px aşağı fırlatmak.
 const PLUS_DRAG_CLOSE_RATIO = 0.22;
@@ -6094,9 +6163,9 @@ function PlusModal({ closing, onClose, isPlus, onToggleTest }) {
   };
 
   const benefits = [
-    { icon: NotebookPen, text: t("plusModal.benefitUnlimited") },
-    { icon: LockKeyhole, text: t("plusModal.benefitUnlock") },
-    { icon: Users, text: t("plusModal.benefitFamilies") },
+    { icon: "notebookPen", text: t("plusModal.benefitUnlimited") },
+    { icon: "lockKeyhole", text: t("plusModal.benefitUnlock") },
+    { icon: "users", text: t("plusModal.benefitFamilies") },
   ];
   const plans = [
     { key: "monthly", label: t("plusModal.monthly"), suffix: t("plusModal.perMonth") },
@@ -6241,15 +6310,12 @@ function PlusModal({ closing, onClose, isPlus, onToggleTest }) {
           {/* Tek merkez ekseni: içerik sütunu flex column + center; X absolute
               olduğu için akışı/ortalamayı etkilemiyor. */}
           <div style={{ maxWidth: "520px", margin: "0 auto", display: "flex", flexDirection: "column", alignItems: "stretch" }}>
-          <div aria-hidden="true" style={{ position: "relative", width: "64px", height: "64px", margin: "6px auto 12px", flexShrink: 0 }}>
-            <Crown size={64} color={COLORS.mustard} strokeWidth={1.6} style={{ display: "block" }} />
-            {/* Kilit tacın gövdesinin ortasında: yatayda tam merkez (left 50% + translateX). */}
-            <LockKeyhole
-              size={20}
-              color={COLORS.mustard}
-              strokeWidth={2.2}
-              style={{ position: "absolute", left: "50%", top: "25px", transform: "translateX(-50%)", display: "block" }}
-            />
+          {/* Üst ikon: hardal şef şapkası + sağ üstte büyük ve küçük iki parıltı.
+              Şapka + parıltılar tek grup (80×72 kutu) olarak yatay merkezde. */}
+          <div aria-hidden="true" style={{ position: "relative", width: "80px", height: "72px", margin: "4px auto 12px", flexShrink: 0 }}>
+            <ChefHat size={64} color={COLORS.mustard} strokeWidth={1.6} style={{ position: "absolute", left: 0, top: "8px", display: "block" }} />
+            <Sparkle size={20} color={COLORS.mustard} fill={COLORS.mustard} strokeWidth={1.4} style={{ position: "absolute", left: "54px", top: 0, display: "block" }} />
+            <Sparkle size={11} color={COLORS.mustard} fill={COLORS.mustard} strokeWidth={1.4} style={{ position: "absolute", left: "69px", top: "21px", display: "block" }} />
           </div>
           <h2 id="plus-modal-title" style={{ fontFamily: SERIF, fontSize: "28px", lineHeight: 1.15, fontWeight: 700, color: COLORS.forestDark, margin: "0 0 10px", textAlign: "center" }}>
             {t("plusModal.title")}
@@ -6274,10 +6340,10 @@ function PlusModal({ closing, onClose, isPlus, onToggleTest }) {
               textAlign: "left",
             }}
           >
-            {benefits.map(({ icon: Icon, text }) => (
+            {benefits.map(({ icon, text }) => (
               <li key={text} style={{ display: "contents" }}>
                 <span aria-hidden="true" style={{ width: "32px", height: "32px", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <Icon size={24} color={COLORS.forest} strokeWidth={1.8} style={{ display: "block" }} />
+                  <PlusDuoIcon name={icon} size={24} strokeWidth={1.8} />
                 </span>
                 <span style={{ fontSize: "15px", lineHeight: 1.35, color: COLORS.ink }}>{text}</span>
               </li>
