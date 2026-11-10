@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import {
   ChefHat, Plus, Minus, Link2, ExternalLink, Trash2, Loader2, ArrowLeft, ArrowRight, AlertCircle,
   FileText, Pencil, Check, ChevronDown, Star, Search, ShoppingCart, Clock, Gauge, Undo2, X, Package, Download,
-  Mail, LogOut, Users, Crown, Settings, UserCircle, Copy, Sparkles, Sparkle, LogIn, Bell, Info, Lock,
+  Mail, LogOut, Users, Crown, Settings, UserCircle, Copy, Sparkles, LogIn, Bell, Info, Lock,
 } from "lucide-react";
 import { auth, googleProvider, requestFcmToken } from "./firebase.js";
 import {
@@ -6038,29 +6038,15 @@ const PLUS_DUO_ICONS = {
   },
 };
 
-// Plus üst ikonu: referans tasarımdaki şef şapkası (üç bölümlü bulut tepe,
-// düz yanlar, yuvarlak köşeli alt bant, bandın sağında kısa çizgi). viewBox
-// x ekseninde simetrik (0–64, merkez 32): SVG'nin merkezi şapkanın merkezi.
-function PlusHeroHat({ size = 72, color = COLORS.mustard }) {
-  return (
-    <svg
-      width={size}
-      height={size * (60 / 64)}
-      viewBox="0 0 64 60"
-      fill="none"
-      stroke={color}
-      strokeWidth={3.4}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      style={{ display: "block" }}
-    >
-      <path d="M15 46V37C8 36 4.5 30.5 6 25 7.6 19 14 15.6 20.5 17.5 22.5 9.5 27 5.5 32 5.5S41.5 9.5 43.5 17.5C50 15.6 56.4 19 58 25 59.5 30.5 56 36 49 37V46" />
-      <rect x="15" y="46" width="34" height="10" rx="2.6" />
-      <path d="M38.5 51H43" />
-    </svg>
-  );
-}
+// Plus üst ikonu: hazır PNG (public/tarif-kutusu-plus-sef-sapkasi.png, 205×178,
+// şapka + iki yıldız tek görselde, şeffaf zemin). Şapka gövdesi görselin içinde
+// x = 3–171 px aralığında (merkez 87); görselin merkezi 102,5. Görsel kendi
+// genişliğinin (102,5 − 87) / 205 = %7,56'sı kadar sağa kaydırılınca şapka
+// gövdesinin merkezi kapsayıcının (= sheet'in) merkezine oturur. Yıldızlar bu
+// hesaba katılmıyor; oran yüzde olduğu için her boyutta geçerli.
+const PLUS_HERO_IMAGE = "/tarif-kutusu-plus-sef-sapkasi.png";
+const PLUS_HERO_ASPECT = 178 / 205;
+const PLUS_HERO_HAT_CENTER_SHIFT = "7.561%";
 
 function PlusDuoIcon({ name, size = 24, strokeWidth = 1.8 }) {
   const icon = PLUS_DUO_ICONS[name];
@@ -6334,13 +6320,17 @@ function PlusModal({ closing, onClose, isPlus, onToggleTest }) {
           {/* Tek merkez ekseni: içerik sütunu flex column + center; X absolute
               olduğu için akışı/ortalamayı etkilemiyor. */}
           <div style={{ maxWidth: "520px", margin: "0 auto", display: "flex", flexDirection: "column", alignItems: "stretch" }}>
-          {/* Üst ikon: kapsayıcı yalnızca şapka kadar geniş ve margin auto ile
-              ortada → şapkanın merkezi = sheet'in merkezi. Parıltılar şapkaya göre
-              mutlak konumlu (sağ üst), akışa/genişliğe katılmıyor, merkezi kaydırmıyor. */}
-          <div aria-hidden="true" style={{ position: "relative", width: "72px", margin: "10px auto 12px", flexShrink: 0 }}>
-            <PlusHeroHat size={72} />
-            <Sparkle size={20} color={COLORS.mustard} fill={COLORS.mustard} strokeWidth={1.4} style={{ position: "absolute", left: "100%", top: "-4px", display: "block" }} />
-            <Sparkle size={11} color={COLORS.mustard} fill={COLORS.mustard} strokeWidth={1.4} style={{ position: "absolute", left: "calc(100% + 16px)", top: "12px", display: "block" }} />
+          {/* Üst ikon: PNG en-boy oranı korunarak 88 px genişlikte, margin auto ile
+              ortada; translateX ile şapka gövdesinin merkezi tam ortaya alınıyor. */}
+          <div aria-hidden="true" style={{ width: "88px", margin: "8px auto 12px", flexShrink: 0 }}>
+            <img
+              src={PLUS_HERO_IMAGE}
+              alt=""
+              width={88}
+              height={Math.round(88 * PLUS_HERO_ASPECT)}
+              draggable={false}
+              style={{ display: "block", width: "100%", height: "auto", transform: `translateX(${PLUS_HERO_HAT_CENTER_SHIFT})` }}
+            />
           </div>
           <h2 id="plus-modal-title" style={{ fontFamily: SERIF, fontSize: "28px", lineHeight: 1.15, fontWeight: 700, color: COLORS.forestDark, margin: "0 0 10px", textAlign: "center" }}>
             {t("plusModal.title")}
