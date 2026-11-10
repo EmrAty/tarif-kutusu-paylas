@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import {
   ChefHat, Plus, Minus, Link2, ExternalLink, Trash2, Loader2, ArrowLeft, ArrowRight, AlertCircle,
   FileText, Pencil, Check, ChevronDown, Star, Search, ShoppingCart, Clock, Gauge, Undo2, X, Package, Download,
-  Mail, LogOut, Users, Crown, Settings, UserCircle, Copy, Sparkles, LogIn, Bell, Info, Lock,
+  Mail, LogOut, Users, Crown, Settings, UserCircle, Copy, Sparkles, LogIn, Bell, Info, Lock, LockKeyhole, NotebookPen,
 } from "lucide-react";
 import { auth, googleProvider, requestFcmToken } from "./firebase.js";
 import {
@@ -154,8 +154,6 @@ export const SERIF = "Charter, 'Iowan Old Style', 'Georgia', 'Times New Roman', 
 export const BODY = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
 const LABELSANS = "'Helvetica Neue Condensed', 'Arial Narrow', Arial, sans-serif";
 const CARD_SHADOW = "0 1px 2px rgba(42,38,32,0.05), 0 8px 24px rgba(42,38,32,0.06)";
-// Kilitli tarif kartı: kartın kendisi aynı, üstünde hafif koyu yeşil/krem ton,
-// soluk içerik ve hardal kilit ikonu.
 // Free hesapta limit üstündeki (kilitli) tarif kartlarının üstüne konan katman:
 // kartın içeriği altta kalır, koyu yeşil örtü + ortada hardal kilit. Tüm
 // listeler (kenar çubuğu, Favoriler, Elimde Bunlar Var) bunu kullanır.
@@ -195,6 +193,7 @@ export function uid() {
 const STORAGE_PREFIX = "tarif-kutusu:";
 
 const PRIVACY_POLICY_URL = "https://tarifkutusu.app/privacy";
+const TERMS_URL = "https://tarifkutusu.app/terms";
 
 export function storageGet(key) {
   try {
@@ -1566,6 +1565,7 @@ export default function TarifKutusu() {
               listScrollYRef.current = window.scrollY;
               openRecipe(id);
             }}
+            onOpenPlus={() => setModalView("plus")}
             onAdd={() => {
               if (view !== "add") listScrollYRef.current = window.scrollY;
               setError("");
@@ -1708,6 +1708,7 @@ export default function TarifKutusu() {
                 families={families}
                 isRecipeLocked={isRecipeLocked}
                 onSelectRecipe={openRecipe}
+                onOpenPlus={() => setModalView("plus")}
                 onSaveSuggestion={handleSavePantrySuggestion}
                 pantryModalOpenRef={pantryModalOpenRef}
                 pantryModalCloseRef={pantryModalCloseRef}
@@ -1722,6 +1723,7 @@ export default function TarifKutusu() {
                 familyNameById={familyNameById}
                 isRecipeLocked={isRecipeLocked}
                 onSelect={openRecipe}
+                onOpenPlus={() => setModalView("plus")}
               />
             </div>
           )}
@@ -1753,16 +1755,16 @@ export default function TarifKutusu() {
       )}
 
       {modalView === "plus" && (
-        <ModalSheet title={t("menu.plus")} onClose={closeModal} closing={modalClosing}>
-          <PlusView
-            isPlus={isPlus}
-            onToggle={async (next) => {
-              const profile = await setPlusFlag(next);
-              rememberPlusStatus(!!profile?.isPlus);
-              await loadFamiliesState();
-            }}
-          />
-        </ModalSheet>
+        <PlusModal
+          closing={modalClosing}
+          onClose={closeModal}
+          isPlus={isPlus}
+          onToggleTest={async (next) => {
+            const profile = await setPlusFlag(next);
+            rememberPlusStatus(!!profile?.isPlus);
+            await loadFamiliesState();
+          }}
+        />
       )}
 
       {modalView === "account" && (
@@ -2474,7 +2476,7 @@ function scopeLabels(recipe, familyNameById, t) {
   return scopes.map((s) => (s === PERSONAL ? t("common.personal") : familyNameById?.[s] || t("families.fallbackName")));
 }
 
-function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, isRecipeLocked, onSelect, onAdd, onManual, onPantry, onShopping, onToggleFavorite, onDelete, onSendNotification }) {
+function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, isRecipeLocked, onSelect, onOpenPlus, onAdd, onManual, onPantry, onShopping, onToggleFavorite, onDelete, onSendNotification }) {
   const { t, language, categoryLabel } = useLanguage();
   const [listOpen, setListOpen] = useState(true);
   const [openCats, setOpenCats] = useState({});
@@ -2559,10 +2561,13 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, isRecipeLo
                 longPressFiredRef.current = false;
                 return;
               }
-              if (locked) return;
+              // Kilitli tarif açılmaz; dokunuş Plus modalını açar.
+              if (locked) {
+                onOpenPlus?.();
+                return;
+              }
               onSelect(r.id);
             }}
-            aria-disabled={locked || undefined}
             aria-label={locked ? `${r.title || t("common.untitledRecipe")} — ${t("recipe.locked")}` : undefined}
             style={{
               flex: 1,
@@ -2572,7 +2577,7 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, isRecipeLo
               background: "transparent",
               border: "none",
               color: isActive ? "#F3EFE6" : COLORS.ink,
-              cursor: locked ? "default" : "pointer",
+              cursor: "pointer",
             }}
           >
             <div style={{ fontSize: "13px", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -2588,7 +2593,7 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, isRecipeLo
             </div>
           </button>
           {locked ? (
-            <span aria-hidden="true" style={{ padding: "8px", display: "flex", flexShrink: 0 }}>
+            <span aria-hidden="true" onClick={() => onOpenPlus?.()} style={{ padding: "8px", display: "flex", flexShrink: 0, cursor: "pointer" }}>
               <span style={{ width: "15px", height: "15px" }} />
             </span>
           ) : (
@@ -5149,7 +5154,7 @@ function ingredientIsAvailable(ingredientName, pantryItems) {
   });
 }
 
-function PantryFinder({ recipes, isPlus, families, isRecipeLocked, onSelectRecipe, onSaveSuggestion, pantryModalOpenRef, pantryModalCloseRef }) {
+function PantryFinder({ recipes, isPlus, families, isRecipeLocked, onSelectRecipe, onOpenPlus, onSaveSuggestion, pantryModalOpenRef, pantryModalCloseRef }) {
   const { t } = useLanguage();
   const [context, setContext] = useState(PERSONAL);
   const [items, setItems] = useState([]);
@@ -5378,8 +5383,7 @@ function PantryFinder({ recipes, isPlus, families, isRecipeLocked, onSelectRecip
                 return (
                   <button
                     key={recipe.id}
-                    onClick={() => !locked && onSelectRecipe(recipe.id)}
-                    aria-disabled={locked || undefined}
+                    onClick={() => (locked ? onOpenPlus?.() : onSelectRecipe(recipe.id))}
                     aria-label={locked ? `${recipe.title || t("common.untitledRecipe")} — ${t("recipe.locked")}` : undefined}
                     style={{
                       position: "relative",
@@ -5389,7 +5393,7 @@ function PantryFinder({ recipes, isPlus, families, isRecipeLocked, onSelectRecip
                       border: `1px solid ${isFull ? COLORS.forest : COLORS.line}`,
                       background: COLORS.panel,
                       padding: "16px",
-                      cursor: locked ? "default" : "pointer",
+                      cursor: "pointer",
                     }}
                   >
                     {locked && <LockedOverlay size={24} />}
@@ -5616,7 +5620,7 @@ function CategoryPickerModal({ onSelect, onClose }) {
   );
 }
 
-function FavoritesView({ recipes, familyNameById, isRecipeLocked, onSelect }) {
+function FavoritesView({ recipes, familyNameById, isRecipeLocked, onSelect, onOpenPlus }) {
   const { t } = useLanguage();
   const favorites = recipes.filter((r) => r.isFavorite);
   return (
@@ -5635,8 +5639,7 @@ function FavoritesView({ recipes, familyNameById, isRecipeLocked, onSelect }) {
             return (
               <button
                 key={r.id}
-                onClick={() => !locked && onSelect(r.id)}
-                aria-disabled={locked || undefined}
+                onClick={() => (locked ? onOpenPlus?.() : onSelect(r.id))}
                 aria-label={locked ? `${r.title || t("common.untitledRecipe")} — ${t("recipe.locked")}` : undefined}
                 style={{
                   position: "relative",
@@ -5650,7 +5653,7 @@ function FavoritesView({ recipes, familyNameById, isRecipeLocked, onSelect }) {
                   borderRadius: "10px",
                   border: `1px solid ${COLORS.line}`,
                   background: COLORS.paper,
-                  cursor: locked ? "default" : "pointer",
+                  cursor: "pointer",
                 }}
               >
                 {locked && <LockedOverlay size={22} />}
@@ -5970,79 +5973,280 @@ function FamiliesView({ isPlus, families, personName, currentUid, onReload, onOp
   );
 }
 
-function PlusView({ isPlus, onToggle }) {
-  const { t } = useLanguage();
-  const [busy, setBusy] = useState(false);
+// Plus satın alma modalı — ŞİMDİLİK YALNIZCA ARAYÜZ. Ödeme altyapısı (Google
+// Play Billing / StoreKit / RevenueCat) bağlı değil: "Satın alımları geri
+// yükle" ve "Kodun var mı?" hiçbir işlem yapmıyor. Ana CTA kapalı test
+// süresince test Plus anahtarını açıp kapatıyor (aşağıdaki CLOSED TEST notu).
+// Kilitli tarif kartına dokununca, yan menüdeki "Plus"tan, ücretsiz limit
+// penceresinden ve Aileler'den açılır (modalView === "plus"). Kapanış:
+// X, karartılmış alana dokunma, Android geri tuşu, Escape — hepsi App'teki
+// closeModal() ile aynı yoldan (çıkış animasyonu SCREEN_EXIT_MS).
+//
+// FİYATLAR YER TUTUCU: gerçek fiyatlar ileride mağazadan (yerelleştirilmiş)
+// okunacak. Buradaki "XX,XX" değerleri bilerek rakam içermiyor.
+const PLUS_PRICE_PLACEHOLDER = {
+  monthly: "₺XX,XX",
+  yearly: "₺XXX,XX",
+};
 
-  const handleToggle = async () => {
-    setBusy(true);
+// Mağaza bağlanana kadar butonlar bilerek işlevsiz; geliştirmede konsola not düşülüyor.
+function plusNotConnected(action, detail) {
+  if (import.meta.env.DEV) console.info(`[PlusModal] ${action}: ödeme sistemi henüz bağlı değil`, detail ?? "");
+}
+
+const PLUS_SHEET_IN_MS = 280;
+
+function PlusModal({ closing, onClose, isPlus, onToggleTest }) {
+  const { t } = useLanguage();
+  const [plan, setPlan] = useState("monthly"); // "monthly" | "yearly" — yalnızca bu modalın state'i
+  const [testBusy, setTestBusy] = useState(false);
+  const closeButtonRef = useRef(null);
+
+  // Arka plan kaymasın; açılınca odak X'e gelsin; Escape (web) kapatır.
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const previouslyFocused = document.activeElement;
+    closeButtonRef.current?.focus({ preventScroll: true });
+    const onKey = (e) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKey);
+      if (previouslyFocused && typeof previouslyFocused.focus === "function") previouslyFocused.focus({ preventScroll: true });
+    };
+  }, [onClose]);
+
+  const handleTestToggle = async () => {
+    setTestBusy(true);
     try {
-      await onToggle(!isPlus);
+      await onToggleTest(!isPlus);
     } finally {
-      setBusy(false);
+      setTestBusy(false);
     }
   };
 
-  const benefits = [t("plus.benefit1", { limit: FREE_RECIPE_LIMIT }), t("plus.benefit2"), t("plus.benefit3")];
+  const benefits = [
+    { icon: NotebookPen, text: t("plusModal.benefitUnlimited") },
+    { icon: LockKeyhole, text: t("plusModal.benefitUnlock") },
+    { icon: Users, text: t("plusModal.benefitFamilies") },
+  ];
+  const plans = [
+    { key: "monthly", label: t("plusModal.monthly"), suffix: t("plusModal.perMonth") },
+    { key: "yearly", label: t("plusModal.yearly"), suffix: t("plusModal.perYear") },
+  ];
+  const activePlan = plans.find((p) => p.key === plan);
+  const linkButton = {
+    background: "transparent",
+    border: "none",
+    padding: "6px 4px",
+    fontSize: "15px",
+    textDecoration: "underline",
+    textUnderlineOffset: "3px",
+    cursor: "pointer",
+  };
 
   return (
-    <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.mustard}`, background: COLORS.panel, padding: "28px", boxShadow: CARD_SHADOW, textAlign: "center" }}>
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 90,
+        display: "flex",
+        alignItems: "flex-end",
+        justifyContent: "center",
+        padding: "0 4vw max(12px, env(safe-area-inset-bottom))",
+      }}
+    >
+      <style>{`
+        @keyframes plusBackdropIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes plusBackdropOut { from { opacity: 1; } to { opacity: 0; } }
+        @keyframes plusSheetIn { from { transform: translateY(105%); } to { transform: translateY(0); } }
+        @keyframes plusSheetOut { from { transform: translateY(0); } to { transform: translateY(105%); } }
+        .plus-backdrop-enter { animation: plusBackdropIn ${PLUS_SHEET_IN_MS}ms ease-out both; }
+        .plus-backdrop-exit { animation: plusBackdropOut ${SCREEN_EXIT_MS}ms ease-in both; }
+        .plus-sheet-enter { animation: plusSheetIn ${PLUS_SHEET_IN_MS}ms cubic-bezier(0.22, 0.8, 0.24, 1) both; }
+        .plus-sheet-exit { animation: plusSheetOut ${SCREEN_EXIT_MS}ms ease-in both; }
+        @media (prefers-reduced-motion: reduce) {
+          .plus-backdrop-enter, .plus-backdrop-exit, .plus-sheet-enter, .plus-sheet-exit { animation: none; }
+        }
+        .plus-plan-btn:focus-visible, .plus-close-btn:focus-visible, .plus-cta:focus-visible { outline: 2px solid ${COLORS.forest}; outline-offset: 2px; }
+      `}</style>
       <div
+        onClick={onClose}
+        className={closing ? "plus-backdrop-exit" : "plus-backdrop-enter"}
         style={{
-          width: "52px",
-          height: "52px",
-          borderRadius: "9999px",
-          background: COLORS.mustard,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          margin: "0 auto 14px",
+          position: "absolute",
+          inset: 0,
+          background: "rgba(42,38,32,0.5)",
+          backdropFilter: "blur(6px)",
+          WebkitBackdropFilter: "blur(6px)",
         }}
-      >
-        <Crown size={24} color={COLORS.forestDark} />
-      </div>
-      <h2 style={{ fontFamily: SERIF, fontSize: "22px", color: COLORS.ink, margin: "0 0 8px" }}>{t("appName")} Plus</h2>
-      <ul
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="plus-modal-title"
+        className={closing ? "plus-sheet-exit" : "plus-sheet-enter"}
         style={{
-          listStyle: "none",
-          padding: 0,
-          margin: "0 0 20px",
+          position: "relative",
+          width: "100%",
+          maxWidth: "440px",
+          maxHeight: "86dvh",
+          background: COLORS.paper,
+          borderRadius: "28px",
+          boxShadow: "0 -8px 40px rgba(0,0,0,0.3)",
           display: "flex",
           flexDirection: "column",
-          gap: "10px",
-          textAlign: "left",
-          maxWidth: "320px",
-          marginLeft: "auto",
-          marginRight: "auto",
+          overflow: "hidden",
         }}
       >
-        {benefits.map((b) => (
-          <li key={b} style={{ display: "flex", alignItems: "flex-start", gap: "8px", fontSize: "14px", color: COLORS.ink }}>
-            <Sparkles size={15} color={COLORS.mustardDark} style={{ marginTop: "2px", flexShrink: 0 }} />
-            {b}
-          </li>
-        ))}
-      </ul>
-      <p style={{ fontSize: "12px", color: COLORS.inkSoft, marginBottom: "16px" }}>
-        {t("plus.testNote")}
-      </p>
-      <button
-        onClick={handleToggle}
-        disabled={busy}
-        style={{
-          padding: "10px 20px",
-          borderRadius: "9999px",
-          fontWeight: 700,
-          fontSize: "14px",
-          background: isPlus ? "transparent" : COLORS.mustard,
-          color: isPlus ? COLORS.danger : COLORS.forestDark,
-          border: isPlus ? `1px solid ${COLORS.danger}` : "none",
-          cursor: busy ? "default" : "pointer",
-          opacity: busy ? 0.6 : 1,
-        }}
-      >
-        {isPlus ? t("plus.disable") : t("plus.enable")}
-      </button>
+        <div aria-hidden="true" style={{ width: "44px", height: "5px", borderRadius: "9999px", background: COLORS.line, margin: "10px auto 0", flexShrink: 0 }} />
+        <button
+          ref={closeButtonRef}
+          onClick={onClose}
+          aria-label={t("common.close")}
+          className="plus-close-btn"
+          style={{
+            position: "absolute",
+            top: "14px",
+            right: "14px",
+            width: "44px",
+            height: "44px",
+            borderRadius: "9999px",
+            border: `1px solid ${COLORS.line}`,
+            background: "transparent",
+            color: COLORS.forestDark,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: "pointer",
+            zIndex: 1,
+          }}
+        >
+          <X size={20} />
+        </button>
+
+        <div style={{ overflowY: "auto", overscrollBehavior: "contain", padding: "18px 22px 20px", textAlign: "center" }}>
+          <div aria-hidden="true" style={{ position: "relative", width: "64px", height: "64px", margin: "6px auto 10px" }}>
+            <Crown size={64} color={COLORS.mustard} strokeWidth={1.6} />
+            <LockKeyhole size={20} color={COLORS.mustard} strokeWidth={2.2} style={{ position: "absolute", left: "22px", top: "30px" }} />
+          </div>
+          <h2 id="plus-modal-title" style={{ fontFamily: SERIF, fontSize: "28px", lineHeight: 1.15, fontWeight: 700, color: COLORS.forestDark, margin: "0 0 10px" }}>
+            {t("plusModal.title")}
+          </h2>
+          <p style={{ fontSize: "15px", lineHeight: 1.45, color: COLORS.ink, margin: "0 auto 18px", maxWidth: "340px" }}>{t("plusModal.subtitle")}</p>
+
+          <ul
+            style={{
+              listStyle: "none",
+              margin: "0 0 16px",
+              padding: "16px 18px",
+              border: `1px solid ${COLORS.line}`,
+              borderRadius: "16px",
+              display: "flex",
+              flexDirection: "column",
+              gap: "14px",
+              textAlign: "left",
+            }}
+          >
+            {benefits.map(({ icon: Icon, text }) => (
+              <li key={text} style={{ display: "flex", alignItems: "center", gap: "14px", fontSize: "15px", lineHeight: 1.35, color: COLORS.ink }}>
+                <span style={{ width: "36px", display: "flex", justifyContent: "center", flexShrink: 0 }}>
+                  <Icon size={26} color={COLORS.forest} strokeWidth={1.8} />
+                </span>
+                {text}
+              </li>
+            ))}
+          </ul>
+
+          <div style={{ border: `1px solid ${COLORS.line}`, borderRadius: "18px", overflow: "hidden", marginBottom: "16px" }}>
+            <div role="radiogroup" aria-label={t("plusModal.planLabel")} style={{ display: "flex", padding: "4px", gap: "4px", borderBottom: `1px solid ${COLORS.line}` }}>
+              {plans.map((p) => {
+                const selected = plan === p.key;
+                return (
+                  <button
+                    key={p.key}
+                    role="radio"
+                    aria-checked={selected}
+                    className="plus-plan-btn"
+                    onClick={() => setPlan(p.key)}
+                    style={{
+                      flex: 1,
+                      minHeight: "44px",
+                      borderRadius: "9999px",
+                      border: "none",
+                      background: selected ? COLORS.mustard : "transparent",
+                      color: COLORS.forestDark,
+                      fontSize: "16px",
+                      fontWeight: selected ? 700 : 600,
+                      cursor: "pointer",
+                      transition: "background 160ms ease",
+                    }}
+                  >
+                    {p.label}
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ padding: "12px 16px 14px" }}>
+              <div style={{ fontSize: "16px", fontWeight: 600, color: COLORS.forestDark }}>{t("appName")} Plus</div>
+              <div style={{ marginTop: "2px", color: COLORS.forestDark }}>
+                <span style={{ fontSize: "32px", fontWeight: 800, letterSpacing: "-0.01em" }}>{PLUS_PRICE_PLACEHOLDER[plan]}</span>
+                <span style={{ fontSize: "17px", marginLeft: "6px" }}>{activePlan.suffix}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* GEÇİCİ — CLOSED TEST: ana CTA şimdilik eski Plus ekranındaki test
+              anahtarını çalıştırıyor (onToggleTest → App'teki setPlusFlag +
+              rememberPlusStatus + loadFamiliesState; /api/profile isPlus). Seçili
+              plan (aylık/yıllık) bu işlemi etkilemez. Gerçek ödeme altyapısı
+              bağlandığında bu test toggle kaldırılacak ve CTA gerçek satın alma
+              akışına bağlanacak. */}
+          <button
+            className="plus-cta"
+            onClick={handleTestToggle}
+            disabled={testBusy}
+            aria-busy={testBusy || undefined}
+            style={{
+              width: "100%",
+              minHeight: "54px",
+              borderRadius: "9999px",
+              border: "none",
+              background: COLORS.mustard,
+              color: COLORS.forestDark,
+              fontSize: "18px",
+              fontWeight: 700,
+              cursor: testBusy ? "default" : "pointer",
+              opacity: testBusy ? 0.6 : 1,
+              boxShadow: CARD_SHADOW,
+            }}
+          >
+            {isPlus ? t("plusModal.ctaDisableTest") : t("plusModal.cta")}
+          </button>
+
+          <button onClick={() => plusNotConnected("Satın alımları geri yükle")} style={{ ...linkButton, color: COLORS.forestDark, marginTop: "10px" }}>
+            {t("plusModal.restore")}
+          </button>
+          <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: "2px 0 6px" }}>{t("plusModal.manageNote")}</p>
+          <button onClick={() => plusNotConnected("Kodun var mı?")} style={{ ...linkButton, color: COLORS.mustardDark }}>
+            {t("plusModal.promo")}
+          </button>
+
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "10px", marginTop: "12px", fontSize: "13px" }}>
+            <a href={PRIVACY_POLICY_URL} target="_blank" rel="noopener noreferrer" style={{ color: COLORS.ink, textDecoration: "none", padding: "6px 2px" }}>
+              {t("settings.privacyPolicy")}
+            </a>
+            <span aria-hidden="true" style={{ color: COLORS.inkSoft }}>•</span>
+            <a href={TERMS_URL} target="_blank" rel="noopener noreferrer" style={{ color: COLORS.ink, textDecoration: "none", padding: "6px 2px" }}>
+              {t("plusModal.terms")}
+            </a>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
