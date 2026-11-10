@@ -5995,19 +5995,27 @@ function plusNotConnected(action, detail) {
 }
 
 const PLUS_SHEET_IN_MS = 280;
+// Tutamaçtan sürükleyerek kapatma eşikleri: sheet yüksekliğinin %22'si kadar
+// aşağı çekmek ya da ≥0,6 px/ms (600 px/sn) hızla en az 24 px aşağı fırlatmak.
+const PLUS_DRAG_CLOSE_RATIO = 0.22;
+const PLUS_DRAG_CLOSE_VELOCITY = 0.6;
+const PLUS_DRAG_MIN_SWIPE_PX = 24;
+const PLUS_DRAG_VELOCITY_WINDOW_MS = 100;
+const PLUS_DRAG_SNAP_MS = 220;
 
 function PlusModal({ closing, onClose, isPlus, onToggleTest }) {
   const { t } = useLanguage();
   const [plan, setPlan] = useState("monthly"); // "monthly" | "yearly" — yalnızca bu modalın state'i
   const [testBusy, setTestBusy] = useState(false);
-  const closeButtonRef = useRef(null);
+  const sheetRef = useRef(null);
 
   // Arka plan kaymasın; açılınca odak X'e gelsin; Escape (web) kapatır.
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const previouslyFocused = document.activeElement;
-    closeButtonRef.current?.focus({ preventScroll: true });
+    // Odak diyaloğun kendisine (X'e değil): X etrafında odak halkası açılışta görünmesin.
+    sheetRef.current?.focus({ preventScroll: true });
     const onKey = (e) => {
       if (e.key === "Escape") onClose();
     };
@@ -6025,6 +6033,63 @@ function PlusModal({ closing, onClose, isPlus, onToggleTest }) {
       await onToggleTest(!isPlus);
     } finally {
       setTestBusy(false);
+    }
+  };
+
+  // Üstteki tutamaçtan aşağı sürükleyerek kapatma. Hareket yalnızca tutamaç
+  // bölgesinden başlar (touch-action: none yalnızca orada), içerik kaydırması
+  // etkilenmez. Sürükleme kaydırması iç sheet'e (sheetRef) yazılır; açılış/
+  // kapanış animasyonu dış sarmalayıcıda kaldığı için ikisi çakışmaz. Kapanış
+  // her zamanki onClose() → closeModal() yolundan gider.
+  const dragRef = useRef(null); // { pointerId, startY, dy, height, samples: [{ y, t }] }
+  const setSheetOffset = (dy, animate) => {
+    const el = sheetRef.current;
+    if (!el) return;
+    el.style.transition = animate ? `transform ${PLUS_DRAG_SNAP_MS}ms cubic-bezier(0.22, 0.8, 0.24, 1)` : "none";
+    el.style.transform = dy > 0 ? `translateY(${dy}px)` : "";
+  };
+  const onHandlePointerDown = (e) => {
+    if (closing || (e.pointerType === "mouse" && e.button !== 0)) return;
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch (err) {
+      // Yakalama desteklenmiyorsa hareket yine tutamaç üzerinde izlenir.
+    }
+    const now = performance.now();
+    dragRef.current = {
+      pointerId: e.pointerId,
+      startY: e.clientY,
+      dy: 0,
+      height: sheetRef.current?.getBoundingClientRect().height || window.innerHeight,
+      samples: [{ y: e.clientY, t: now }],
+    };
+    setSheetOffset(0, false);
+  };
+  const onHandlePointerMove = (e) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    // Yukarı çekmek sheet'i başlangıç konumunun üstüne taşımaz.
+    drag.dy = Math.max(0, e.clientY - drag.startY);
+    const now = performance.now();
+    drag.samples.push({ y: e.clientY, t: now });
+    while (drag.samples.length > 2 && now - drag.samples[0].t > PLUS_DRAG_VELOCITY_WINDOW_MS) drag.samples.shift();
+    setSheetOffset(drag.dy, false);
+  };
+  const endDrag = (e, cancelled) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    dragRef.current = null;
+    const first = drag.samples[0];
+    const last = drag.samples[drag.samples.length - 1];
+    const elapsed = last.t - first.t;
+    const velocity = elapsed > 0 ? (last.y - first.y) / elapsed : 0; // px/ms, aşağı pozitif
+    const farEnough = drag.dy >= drag.height * PLUS_DRAG_CLOSE_RATIO;
+    const fastSwipe = velocity >= PLUS_DRAG_CLOSE_VELOCITY && drag.dy >= PLUS_DRAG_MIN_SWIPE_PX;
+    if (!cancelled && (farEnough || fastSwipe)) {
+      // Sheet bulunduğu yerden aşağı kayarak kapanır (dış sarmalayıcının çıkış animasyonu).
+      onClose();
+    } else {
+      setSheetOffset(0, true);
     }
   };
 
@@ -6046,6 +6111,7 @@ function PlusModal({ closing, onClose, isPlus, onToggleTest }) {
     textDecoration: "underline",
     textUnderlineOffset: "3px",
     cursor: "pointer",
+    alignSelf: "center",
   };
 
   return (
@@ -6084,11 +6150,14 @@ function PlusModal({ closing, onClose, isPlus, onToggleTest }) {
           WebkitBackdropFilter: "blur(6px)",
         }}
       />
+      {/* Dış sarmalayıcı: açılış/kapanış (slide) animasyonu. İç sheet: sürükleme kaydırması. */}
+      <div className={closing ? "plus-sheet-exit" : "plus-sheet-enter"} style={{ position: "relative", width: "100%", display: "flex" }}>
       <div
+        ref={sheetRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby="plus-modal-title"
-        className={closing ? "plus-sheet-exit" : "plus-sheet-enter"}
         style={{
           position: "relative",
           width: "100%",
@@ -6100,32 +6169,58 @@ function PlusModal({ closing, onClose, isPlus, onToggleTest }) {
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
+          outline: "none",
+          willChange: "transform",
         }}
       >
-        <div aria-hidden="true" style={{ width: "44px", height: "5px", borderRadius: "9999px", background: COLORS.line, margin: "10px auto 0", flexShrink: 0 }} />
+        {/* Sürükleme tutamacı: görünen çizgi küçük, dokunma alanı 120×32 px.
+            touch-action: none yalnızca burada → içerik kaydırmasıyla çakışmaz. */}
+        <div
+          aria-hidden="true"
+          onPointerDown={onHandlePointerDown}
+          onPointerMove={onHandlePointerMove}
+          onPointerUp={(e) => endDrag(e, false)}
+          onPointerCancel={(e) => endDrag(e, true)}
+          style={{
+            alignSelf: "center",
+            width: "120px",
+            height: "32px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+            touchAction: "none",
+            cursor: "grab",
+            zIndex: 1,
+          }}
+        >
+          <span style={{ width: "44px", height: "5px", borderRadius: "9999px", background: COLORS.line }} />
+        </div>
+        {/* Görünen yalnızca X; 44×44 px dokunma alanı korunuyor. */}
         <button
-          ref={closeButtonRef}
           onClick={onClose}
           aria-label={t("common.close")}
           className="plus-close-btn"
           style={{
             position: "absolute",
-            top: "14px",
-            right: "14px",
+            top: "10px",
+            right: "10px",
             width: "44px",
             height: "44px",
+            padding: 0,
+            border: "none",
             borderRadius: "9999px",
-            border: `1px solid ${COLORS.line}`,
             background: "transparent",
+            boxShadow: "none",
             color: COLORS.forestDark,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             cursor: "pointer",
-            zIndex: 1,
+            zIndex: 2,
           }}
         >
-          <X size={20} />
+          <X size={22} />
         </button>
 
         {/* Alt boşluk içeriğe veriliyor (sheet'in kendisine değil): krem zemin
@@ -6135,39 +6230,56 @@ function PlusModal({ closing, onClose, isPlus, onToggleTest }) {
           style={{
             overflowY: "auto",
             overscrollBehavior: "contain",
-            padding: "18px 22px calc(20px + env(safe-area-inset-bottom, 0px))",
+            // Kaydırma çubuğu yer kaplayan ortamlarda (masaüstü) içerik sola
+            // kaymasın: iki yanda eşit boşluk ayrılır. Android'de çubuk üstte
+            // durduğu için etkisi yok.
+            scrollbarGutter: "stable both-edges",
+            padding: "4px 22px calc(20px + env(safe-area-inset-bottom, 0px))",
             textAlign: "center",
           }}
         >
-          <div style={{ maxWidth: "520px", margin: "0 auto" }}>
-          <div aria-hidden="true" style={{ position: "relative", width: "64px", height: "64px", margin: "6px auto 10px" }}>
-            <Crown size={64} color={COLORS.mustard} strokeWidth={1.6} />
-            <LockKeyhole size={20} color={COLORS.mustard} strokeWidth={2.2} style={{ position: "absolute", left: "22px", top: "30px" }} />
+          {/* Tek merkez ekseni: içerik sütunu flex column + center; X absolute
+              olduğu için akışı/ortalamayı etkilemiyor. */}
+          <div style={{ maxWidth: "520px", margin: "0 auto", display: "flex", flexDirection: "column", alignItems: "stretch" }}>
+          <div aria-hidden="true" style={{ position: "relative", width: "64px", height: "64px", margin: "6px auto 12px", flexShrink: 0 }}>
+            <Crown size={64} color={COLORS.mustard} strokeWidth={1.6} style={{ display: "block" }} />
+            {/* Kilit tacın gövdesinin ortasında: yatayda tam merkez (left 50% + translateX). */}
+            <LockKeyhole
+              size={20}
+              color={COLORS.mustard}
+              strokeWidth={2.2}
+              style={{ position: "absolute", left: "50%", top: "25px", transform: "translateX(-50%)", display: "block" }}
+            />
           </div>
-          <h2 id="plus-modal-title" style={{ fontFamily: SERIF, fontSize: "28px", lineHeight: 1.15, fontWeight: 700, color: COLORS.forestDark, margin: "0 0 10px" }}>
+          <h2 id="plus-modal-title" style={{ fontFamily: SERIF, fontSize: "28px", lineHeight: 1.15, fontWeight: 700, color: COLORS.forestDark, margin: "0 0 10px", textAlign: "center" }}>
             {t("plusModal.title")}
           </h2>
-          <p style={{ fontSize: "15px", lineHeight: 1.45, color: COLORS.ink, margin: "0 auto 18px", maxWidth: "340px" }}>{t("plusModal.subtitle")}</p>
+          <p style={{ fontSize: "15px", lineHeight: 1.45, color: COLORS.ink, margin: "0 auto 20px", maxWidth: "340px", textAlign: "center" }}>{t("plusModal.subtitle")}</p>
 
+          {/* Avantajlar: sabit 32 px ikon sütunu + esnek metin sütunu (grid).
+              Bütün ikonlar aynı dikey eksende, metinler aynı x'ten başlıyor; satır
+              iki satıra düşerse ikon metin bloğunun dikey ortasında kalıyor. */}
           <ul
             style={{
               listStyle: "none",
               margin: "0 0 16px",
-              padding: "16px 18px",
+              padding: "16px 20px",
               border: `1px solid ${COLORS.line}`,
               borderRadius: "16px",
-              display: "flex",
-              flexDirection: "column",
-              gap: "14px",
+              display: "grid",
+              gridTemplateColumns: "32px minmax(0, 1fr)",
+              columnGap: "14px",
+              rowGap: "14px",
+              alignItems: "center",
               textAlign: "left",
             }}
           >
             {benefits.map(({ icon: Icon, text }) => (
-              <li key={text} style={{ display: "flex", alignItems: "center", gap: "14px", fontSize: "15px", lineHeight: 1.35, color: COLORS.ink }}>
-                <span style={{ width: "36px", display: "flex", justifyContent: "center", flexShrink: 0 }}>
-                  <Icon size={26} color={COLORS.forest} strokeWidth={1.8} />
+              <li key={text} style={{ display: "contents" }}>
+                <span aria-hidden="true" style={{ width: "32px", height: "32px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <Icon size={24} color={COLORS.forest} strokeWidth={1.8} style={{ display: "block" }} />
                 </span>
-                {text}
+                <span style={{ fontSize: "15px", lineHeight: 1.35, color: COLORS.ink }}>{text}</span>
               </li>
             ))}
           </ul>
@@ -6184,8 +6296,13 @@ function PlusModal({ closing, onClose, isPlus, onToggleTest }) {
                     className="plus-plan-btn"
                     onClick={() => setPlan(p.key)}
                     style={{
-                      flex: 1,
+                      flex: "1 1 0",
+                      minWidth: 0,
                       minHeight: "44px",
+                      padding: "0 8px",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
                       borderRadius: "9999px",
                       border: "none",
                       background: selected ? COLORS.mustard : "transparent",
@@ -6201,11 +6318,12 @@ function PlusModal({ closing, onClose, isPlus, onToggleTest }) {
                 );
               })}
             </div>
-            <div style={{ padding: "12px 16px 14px" }}>
+            <div style={{ padding: "12px 16px 14px", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" }}>
               <div style={{ fontSize: "16px", fontWeight: 600, color: COLORS.forestDark }}>{t("appName")} Plus</div>
-              <div style={{ marginTop: "2px", color: COLORS.forestDark }}>
-                <span style={{ fontSize: "32px", fontWeight: 800, letterSpacing: "-0.01em" }}>{PLUS_PRICE_PLACEHOLDER[plan]}</span>
-                <span style={{ fontSize: "17px", marginLeft: "6px" }}>{activePlan.suffix}</span>
+              {/* Fiyat + "/ ay": ortak taban çizgisinde, satır kartın ortasında. */}
+              <div style={{ marginTop: "2px", display: "flex", alignItems: "baseline", justifyContent: "center", gap: "6px", color: COLORS.forestDark }}>
+                <span style={{ fontSize: "32px", lineHeight: 1.2, fontWeight: 800, letterSpacing: "-0.01em" }}>{PLUS_PRICE_PLACEHOLDER[plan]}</span>
+                <span style={{ fontSize: "17px" }}>{activePlan.suffix}</span>
               </div>
             </div>
           </div>
@@ -6224,6 +6342,11 @@ function PlusModal({ closing, onClose, isPlus, onToggleTest }) {
             style={{
               width: "100%",
               minHeight: "54px",
+              padding: "0 20px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              textAlign: "center",
               borderRadius: "9999px",
               border: "none",
               background: COLORS.mustard,
@@ -6241,7 +6364,7 @@ function PlusModal({ closing, onClose, isPlus, onToggleTest }) {
           <button onClick={() => plusNotConnected("Satın alımları geri yükle")} style={{ ...linkButton, color: COLORS.forestDark, marginTop: "10px" }}>
             {t("plusModal.restore")}
           </button>
-          <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: "2px 0 6px" }}>{t("plusModal.manageNote")}</p>
+          <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: "2px 0 6px", textAlign: "center" }}>{t("plusModal.manageNote")}</p>
           <button onClick={() => plusNotConnected("Kodun var mı?")} style={{ ...linkButton, color: COLORS.mustardDark }}>
             {t("plusModal.promo")}
           </button>
@@ -6257,6 +6380,7 @@ function PlusModal({ closing, onClose, isPlus, onToggleTest }) {
           </div>
           </div>
         </div>
+      </div>
       </div>
     </div>
   );
