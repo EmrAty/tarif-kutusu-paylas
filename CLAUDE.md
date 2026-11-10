@@ -40,7 +40,17 @@ Bu dosyayı her oturum başında otomatik okuyorum. Buradaki bilgiler güncel tu
 
 **iOS:** Tamamlanmadı. Capacitor iOS projesi repoda var (`app/ios/App`, `GoogleService-Info.plist` dosyası da mevcut) ama Mac/Xcode işlemi hiç yapılmadı. **[repo]** Yapılacaklar: Apple Developer Program, App Store Connect, Xcode build + imzalama, Firebase iOS yapılandırmasının doğrulanması, APNs/FCM, Google Sign-In iOS, gerekirse Sign in with Apple, iOS Share Extension, TestFlight. Apple'da 12 tester / 14 gün şartı yok. (iOS uygulama adı notu için 26 Eylül bölümüne bak.)
 
+**Kilitli kartlar + Plus modalı (10 Kasım 2026, hepsi main'de, yalnızca web → yeni APK gerekmez) [repo]:**
+- `c733130` Kilitli tarif kartları: soluklaştırma yerine kartın üstüne `COLORS.forest` örtü (opaklık 0.78) + ortada hardal `Lock`. Ortak `LockedOverlay` bileşeni; kenar çubuğu (liste/arama/kategoriler/favoriler grubu), Favoriler ekranı ve Elimde Bunlar Var aynı bileşeni kullanıyor. Kilitli satırda çöp kutusu örtünün üstünde, çalışıyor. Kilit mantığı (`recipeLocks.js`) değişmedi.
+- `506f6f7` Yeni `PlusModal` (eski `PlusView` ve onun Plus ekranı kaldırıldı). Kilitli karta dokunma, yan menü Plus, ücretsiz limit penceresi ve Aileler'deki "Plus'a Geç" aynı modalı açar (`modalView === "plus"`, kapanış `closeModal()`; X / arka plan / Escape / Android geri). Aylık/Yıllık yalnızca modal state'i; fiyatlar `PLUS_PRICE_PLACEHOLDER` (`₺XX,XX` / `₺XXX,XX`), gerçek fiyat değil. "Satın alımları geri yükle" ve "Kodun var mı?" işlevsiz (`plusNotConnected`). Metinler `i18n.jsx` → `plusModal.*`.
+- **GEÇİCİ — CLOSED TEST:** ana CTA eski test anahtarını çalıştırıyor (`onToggleTest` → `setPlusFlag` + `rememberPlusStatus` + `loadFamiliesState`; `/api/profile` `isPlus`). Free'de "Plus’a Geç", Plus'ta "Plus’ı Kapat (test)". Gerçek ödeme (RevenueCat / Play Billing / StoreKit) bağlanınca bu kaldırılıp CTA satın almaya bağlanacak. Ödeme altyapısı HENÜZ YOK.
+- `a103880` + `fe9e275` Modal kenardan kenara alt sheet: sol/sağ/alt 0, yalnızca üst köşeler 28 px, `maxHeight: 90dvh`, alt güvenli alan içeriğin padding'inde, `scrollbarGutter: stable both-edges`. Tutamaçtan sürükleyerek kapatma (Pointer Events; eşik yüksekliğin %22'si veya ≥0,6 px/ms ve ≥24 px; açılış/kapanış animasyonu dış sarmalayıcıda, sürükleme iç sheet'te). X yalnızca ikon, 44×44 dokunma alanı; açılışta odak diyalogda.
+- `429d089` Avantaj ikonları iki renkli (`PlusDuoIcon`: forest gövde + mustard vurgu).
+- `f7b6646` Üst ikon artık kullanıcının verdiği PNG: `app/public/tarif-kutusu-plus-sef-sapkasi.png` (205×178, şapka + 2 yıldız). 88 px; şapka gövdesi PNG'de x 3–171 olduğundan `translateX(7.561%)` ile gövde merkezi sheet merkezine hizalı (360/390 px'te 0 px fark ölçüldü).
+- Telefonda doğrulanmayanlar: tutamaçla sürükleyerek kapatma (yalnızca tarayıcıda sentetik olaylarla denendi), Android geri tuşu ile modal kapanışı, en alttaki güvenli alan boşluğu.
+
 ### Açık işler — öncelik sırası
+0. Deploy sonrası telefonda Plus modalı: görünüm, sürükleyerek kapatma, geri tuşu, test CTA ile Plus aç/kapat → kilitler açılıp kapanıyor mu.
 1. ~~Vercel `ANTHROPIC_API_KEY`~~ → kullanıcı yeniledi, tarif oluşturma telefonda çalışıyor **[kullanıcı]**. `3fbd312` deploy edildikten sonra hızlı hata bildiriminin telefonda göründüğü henüz doğrulanmadı.
 2. Telefonda TikTok → Paylaş → Tarif Kutusu: başarı bildirimi ve (bilerek hatalı bir linkle) hata bildirimi görünüyor mu, job kaydındaki `notify` alanıyla birlikte kontrol et.
 3. Play App Signing SHA-1/SHA-256 değerleri Firebase'de mi, doğrula. Sonra Play sürümünde Google Sign-In'i dene.
