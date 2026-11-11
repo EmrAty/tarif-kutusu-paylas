@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import {
   ChefHat, Plus, Minus, Link2, ExternalLink, Trash2, Loader2, ArrowLeft, ArrowRight, AlertCircle,
@@ -30,6 +30,8 @@ import { scaleIngredient, FRACTION_GLYPHS, scaleNutrition, perServingNutrition, 
 import { CATEGORIES, recipeSystemPrompt, buildRecipeUserText } from "../shared/recipeExtraction.js";
 import { FREE_RECIPE_LIMIT, FREE_LIMIT_ERROR_CODE } from "../shared/limits.js";
 import { lockedRecipeIds } from "./recipeLocks.js";
+import { createBucketStore, createDataTransport, parseBucketValue, BUCKET_STATUS, NOT_LOADED, CONFLICT_EXHAUSTED } from "./syncedBuckets.js";
+import { appUpdateGate, clientOutdatedError, isClientOutdatedResponse, reloadForUpdate, reloadDidNotHelp, CLIENT_OUTDATED } from "./updateRequired.js";
 import { contentLangOf, translationPayload } from "../shared/recipeLocales.js";
 import { localizeRecipe, displayIngredient, contentFingerprint, localizeAmount } from "./recipeLocale.js";
 import { applyPortionEstimate, servingsUnitOf } from "../shared/portionEstimate.js";
@@ -231,6 +233,8 @@ function notifyResultMessage(result, t) {
 // o ailenin tüm üyelerine ait — hangisi olduğu her istekte scope/familyId ile
 // belirtiliyor. Kimlik doğrulaması Firebase ID token'ıyla yapılıyor.
 export async function authedFetch(path, { method = "GET", body } = {}) {
+  // Sunucu bu istemciyi eski bulduysa (426) hiçbir yazım isteği gönderilmez.
+  if (method !== "GET" && appUpdateGate.isRequired()) throw clientOutdatedError(translate("errors.clientOutdated"));
   const user = auth.currentUser;
   if (!user) throw new Error(translate("errors.sessionNotFound"));
   const token = await user.getIdToken();
@@ -244,6 +248,10 @@ export async function authedFetch(path, { method = "GET", body } = {}) {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
+    if (isClientOutdatedResponse(res.status, data)) {
+      appUpdateGate.markRequired();
+      throw clientOutdatedError(translate("errors.clientOutdated"));
+    }
     // Sunucunun Free tarif sınırı hatası istemcinin dilinde gösteriliyor.
     if (data.code === FREE_LIMIT_ERROR_CODE) {
       const err = new Error(translate("errors.freeLimit", { limit: FREE_RECIPE_LIMIT }));
@@ -255,24 +263,55 @@ export async function authedFetch(path, { method = "GET", body } = {}) {
   return data;
 }
 
-function scopeQuery(scopeKey) {
-  return scopeKey === PERSONAL ? { scope: "personal" } : { scope: "family", familyId: scopeKey };
+// Tarif / alışveriş listesi / kiler verisi: sürümlü, çakışma güvenli depo
+// (bkz. src/syncedBuckets.js ve api/_lib/versionedBucket.js). Okuma hatası
+// asla "boş" sayılmaz; değişiklikler niyet (updater) olarak gönderilir.
+async function dataRequest(method, { query, body }) {
+  const user = auth.currentUser;
+  if (!user) throw new Error(translate("errors.sessionNotFound"));
+  const token = await user.getIdToken();
+  const url = method === "GET" ? `/api/data?${new URLSearchParams(query).toString()}` : "/api/data";
+  const res = await fetch(url, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(body ? { "Content-Type": "application/json" } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => null);
+  return { status: res.status, body: data };
 }
 
-async function bucketGet(bucket, scopeKey) {
-  const { scope, familyId } = scopeQuery(scopeKey);
-  const qs = new URLSearchParams({ bucket, scope, ...(familyId ? { familyId } : {}) });
-  try {
-    const data = await authedFetch(`/api/data?${qs.toString()}`);
-    return data.value == null ? null : { value: data.value };
-  } catch (e) {
-    return null;
-  }
+// Eski kategori adları okunurken yenisine çevrilir (bir sonraki yazımda kalıcı olur).
+function normalizeBucket(bucket, data) {
+  if (bucket !== "recipes" || !data.some((r) => r && r.category && LEGACY_CATEGORY_MAP[r.category])) return data;
+  return data.map((r) => (r && r.category && LEGACY_CATEGORY_MAP[r.category] ? { ...r, category: LEGACY_CATEGORY_MAP[r.category] } : r));
 }
 
-async function bucketSet(bucket, scopeKey, value) {
-  const { scope, familyId } = scopeQuery(scopeKey);
-  return authedFetch("/api/data", { method: "POST", body: { bucket, scope, familyId, value } });
+const dataStore = createBucketStore({
+  transport: createDataTransport(dataRequest),
+  normalize: normalizeBucket,
+  updateGate: appUpdateGate,
+});
+
+function useBucket(bucket, scopeKey) {
+  const state = useSyncExternalStore(dataStore.subscribe, dataStore.getState);
+  useEffect(() => {
+    // Ekran her açıldığında tazelenir; hata olursa son bilinen veri korunur.
+    if (scopeKey) dataStore.refresh(bucket, scopeKey);
+  }, [bucket, scopeKey]);
+  return state[`${bucket}|${scopeKey}`] || null;
+}
+
+const isSettled = (snap) => !!snap && (snap.status === BUCKET_STATUS.READY || snap.status === BUCKET_STATUS.ERROR);
+
+// Kayıt hatasının kullanıcıya gösterilecek metni.
+function saveErrorMessage(e, t) {
+  if (e?.code === NOT_LOADED) return t("errors.dataNotLoaded");
+  if (e?.code === CONFLICT_EXHAUSTED) return t("errors.saveConflict");
+  if (e?.code === CLIENT_OUTDATED) return t("errors.clientOutdated");
+  return t("errors.saveFailed");
 }
 
 async function fetchFamilies(memberName) {
@@ -330,13 +369,22 @@ async function importLegacyInto(scopeKey) {
       results[bucket] = "yok";
       continue;
     }
-    const current = await bucketGet(bucket, scopeKey);
-    if (current && current.value) {
+    // Hedef okunamazsa hata: "okunamadı" hiçbir zaman "boş" sayılıp üzerine yazılmaz.
+    await dataStore.refresh(bucket, scopeKey);
+    const current = dataStore.get(bucket, scopeKey);
+    if (!current || current.status !== BUCKET_STATUS.READY) throw new Error(translate("errors.dataNotLoaded"));
+    if (current.version > 0) {
       results[bucket] = "atlandı (hedefte zaten veri var)";
       continue;
     }
-    await bucketSet(bucket, scopeKey, legacyValue);
-    results[bucket] = "aktarıldı";
+    const legacyData = parseBucketValue(bucket, legacyValue);
+    // Hedef boşsa aktarılır; arada biri hedefe yazdıysa (çakışma sonrası güncel
+    // veri boş değil) aktarım atlanır, mevcut veri ezilmez.
+    const saved = await dataStore.mutate(bucket, scopeKey, (cur) => {
+      const empty = Array.isArray(cur) ? cur.length === 0 : Object.keys(cur || {}).length === 0;
+      return empty ? legacyData : undefined;
+    });
+    results[bucket] = saved === legacyData ? "aktarıldı" : "atlandı (hedefte zaten veri var)";
   }
   return results;
 }
@@ -409,8 +457,18 @@ function mapAuthError(code, t) {
   }
 }
 
+// Tek güncelleme sistemi, iki seviye:
+//   updateAvailable: /version.json'da yeni paket var -> kapatılabilir bant
+//   updateRequired : sunucu bu istemcinin yazımını 426 ile reddetti ->
+//                    kapatılamayan "Yenile" penceresi, yazımlar engelli
+// İkisi de aynı reloadApp'i kullanır; yenileme yalnızca kullanıcı dokununca.
+function reloadApp() {
+  reloadForUpdate({ version: __APP_VERSION__ });
+}
+
 function useUpdateAvailable() {
   const [updateAvailable, setUpdateAvailable] = useState(false);
+  const updateRequired = useSyncExternalStore(appUpdateGate.subscribe, appUpdateGate.isRequired);
 
   useEffect(() => {
     let cancelled = false;
@@ -442,7 +500,73 @@ function useUpdateAvailable() {
     };
   }, []);
 
-  return updateAvailable;
+  return { updateAvailable, updateRequired };
+}
+
+function UpdateRequiredModal({ onReload }) {
+  const { t } = useLanguage();
+  // Yenilemeden sonra yine aynı (eski) paket geldiyse: kendiliğinden tekrar
+  // yenilemiyoruz, kullanıcıya uygulamayı kapatıp açmasını söylüyoruz.
+  const reloadFailed = reloadDidNotHelp({ version: __APP_VERSION__ });
+  return createPortal(
+    <div
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="update-required-title"
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 10000,
+        background: "rgba(20, 32, 24, 0.72)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "16px",
+      }}
+    >
+      <div
+        style={{
+          width: "100%",
+          maxWidth: "360px",
+          background: COLORS.paper,
+          color: COLORS.ink,
+          borderRadius: "16px",
+          padding: "24px 20px 20px",
+          textAlign: "center",
+          fontFamily: BODY,
+          boxShadow: "0 12px 40px rgba(0,0,0,0.25)",
+        }}
+      >
+        <Download size={28} style={{ color: COLORS.forest }} />
+        <h2 id="update-required-title" style={{ fontFamily: SERIF, fontSize: "20px", margin: "10px 0 8px", color: COLORS.forestDark }}>
+          {t("updateRequired.title")}
+        </h2>
+        <p style={{ fontSize: "14px", lineHeight: 1.5, margin: "0 0 6px", color: COLORS.inkSoft }}>{t("updateRequired.body")}</p>
+        {reloadFailed && (
+          <p style={{ fontSize: "13px", lineHeight: 1.5, margin: "6px 0 0", color: "#A2462A" }}>{t("updateRequired.reloadDidNotHelp")}</p>
+        )}
+        <button
+          autoFocus
+          onClick={onReload}
+          style={{
+            marginTop: "16px",
+            width: "100%",
+            minHeight: "44px",
+            borderRadius: "9999px",
+            border: "none",
+            background: COLORS.forest,
+            color: "#F8F5EC",
+            fontSize: "15px",
+            fontWeight: 700,
+            cursor: "pointer",
+          }}
+        >
+          {t("updateRequired.button")}
+        </button>
+      </div>
+    </div>,
+    document.body
+  );
 }
 
 function UpdateBanner({ onUpdate }) {
@@ -489,7 +613,11 @@ function UpdateBanner({ onUpdate }) {
 
 export default function TarifKutusu() {
   const { t, categoryLabel, language } = useLanguage();
-  const [loaded, setLoaded] = useState(false);
+  // Tüm sürümlü kovaların (tarif/alışveriş/kiler) durumu: idle | loading | ready | error.
+  const storeState = useSyncExternalStore(dataStore.subscribe, dataStore.getState);
+  const personalRecipesSnap = storeState[`recipes|${PERSONAL}`] || null;
+  // Kişisel liste için yükleme denemesi bitti mi (başarılı ya da hatalı).
+  const loaded = isSettled(personalRecipesSnap);
   const [view, setView] = useState("list");
   const [activeId, setActiveId] = useState(null);
   const [pendingRecipeId, setPendingRecipeId] = useState(null);
@@ -534,7 +662,7 @@ export default function TarifKutusu() {
   const [modalClosing, setModalClosing] = useState(false);
   const modalClosingRef = React.useRef(false);
   const [manualPrefill, setManualPrefill] = useState(null);
-  const updateAvailable = useUpdateAvailable();
+  const { updateAvailable, updateRequired } = useUpdateAvailable();
   const listScrollYRef = React.useRef(0);
   const prevViewRef = React.useRef(view);
   // Hangi "tam ekran" view'ın (bkz. FULLSCREEN_VIEWS) şu an kapanış animasyonunu
@@ -925,7 +1053,10 @@ export default function TarifKutusu() {
     if (!isAndroidNative) return;
     let listenerHandle;
     CapacitorApp.addListener("backButton", () => {
-      if (openRoundingSheet.close) {
+      if (appUpdateGate.isRequired()) {
+        // Güncelleme penceresi geri tuşuyla kapanmaz; uygulama arka plana alınır.
+        CapacitorApp.minimizeApp();
+      } else if (openRoundingSheet.close) {
         openRoundingSheet.close();
       } else if (limitModalOpen) {
         setLimitModalOpen(false);
@@ -948,53 +1079,25 @@ export default function TarifKutusu() {
     };
   }, [view, menuOpen, modalView, limitModalOpen, closeActiveScreen, closeModal]);
 
-  const [recipeBuckets, setRecipeBuckets] = useState({ [PERSONAL]: [] });
+  // Yalnızca başarıyla yüklenmiş tarif kovaları (gösterim = onaylı veri +
+  // bekleyen değişiklikler). Yüklenemeyen kova burada hiç yer almaz; boş liste
+  // olarak gösterilmez ve üzerine yazılmaz.
+  const recipeBuckets = useMemo(() => {
+    const out = {};
+    Object.values(storeState).forEach((snap) => {
+      if (snap.bucket === "recipes" && snap.data) out[snap.scope] = snap.data;
+    });
+    return out;
+  }, [storeState]);
   const [saveTargets, setSaveTargets] = useState([PERSONAL]);
 
-  const loadRecipeBucket = useCallback(async (scopeKey) => {
-    try {
-      const res = await bucketGet("recipes", scopeKey);
-      const parsed = res && res.value ? JSON.parse(res.value) : [];
-      let migrated = false;
-      const next = parsed.map((r) => {
-        if (r.category && LEGACY_CATEGORY_MAP[r.category]) {
-          migrated = true;
-          return { ...r, category: LEGACY_CATEGORY_MAP[r.category] };
-        }
-        return r;
-      });
-      setRecipeBuckets((prev) => ({ ...prev, [scopeKey]: next }));
-      if (migrated) {
-        try {
-          await bucketSet("recipes", scopeKey, JSON.stringify(next));
-        } catch (e) {
-          // geçiş kaydedilemese de mevcut oturumda güncel görünüm kalsın
-        }
-      }
-    } catch (e) {
-      // henüz kayıtlı tarif yok
-    }
+  // Sunucudan tazeleme (resume, bildirim, "tekrar dene"). Hata olursa eldeki
+  // doğru liste korunur (stale), hiç yüklenmemişse kova "error" durumunda kalır.
+  const refreshRecipeBucket = useCallback((scopeKey) => {
+    if (!auth.currentUser) return Promise.resolve();
+    return dataStore.refresh("recipes", scopeKey);
   }, []);
-
-  // Sunucunun arka planda eklediği tarifleri (Android paylaşım paneli job'u)
-  // almak için. loadRecipeBucket'tan farkı: istek başarısız olursa eldeki listeyi
-  // boşaltmıyor — boş liste sonraki bir kayıtta sunucudaki tarifleri silerdi.
-  const refreshRecipeBucket = useCallback(async (scopeKey) => {
-    if (!auth.currentUser) return;
-    try {
-      const { scope, familyId } = scopeQuery(scopeKey);
-      const qs = new URLSearchParams({ bucket: "recipes", scope, ...(familyId ? { familyId } : {}) });
-      const data = await authedFetch(`/api/data?${qs.toString()}`);
-      const parsed = data.value ? JSON.parse(data.value) : [];
-      if (!Array.isArray(parsed)) return;
-      const next = parsed.map((r) =>
-        r.category && LEGACY_CATEGORY_MAP[r.category] ? { ...r, category: LEGACY_CATEGORY_MAP[r.category] } : r
-      );
-      setRecipeBuckets((prev) => ({ ...prev, [scopeKey]: next }));
-    } catch (e) {
-      // yenilenemezse mevcut liste korunur
-    }
-  }, []);
+  const loadRecipeBucket = refreshRecipeBucket;
 
   useEffect(() => {
     if (!Capacitor.isNativePlatform() || !authUser) return;
@@ -1018,25 +1121,35 @@ export default function TarifKutusu() {
     };
   }, [authUser, refreshRecipeBucket]);
 
+  // Oturum (uid) değişince önceki hesabın verisi ve bekleyen yazımları atılır.
+  const authUid = authUser ? authUser.uid : null;
   useEffect(() => {
-    if (!authUser) return;
-    let cancelled = false;
-    (async () => {
-      await loadRecipeBucket(PERSONAL);
-      if (!cancelled) setLoaded(true);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [authUser, loadRecipeBucket]);
+    dataStore.reset();
+    if (!authUid) return;
+    dataStore.load("recipes", PERSONAL);
+  }, [authUid]);
 
   useEffect(() => {
     if (!familiesLoaded) return;
-    families.forEach((f) => {
-      if (!(f.id in recipeBuckets)) loadRecipeBucket(f.id);
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    families.forEach((f) => dataStore.ensureLoaded("recipes", f.id));
   }, [familiesLoaded, families]);
+
+  // Yüklenemeyen tarif kovaları (ilk yükleme hatası) ve tazelenemeyenler.
+  const recipeLoadProblems = useMemo(() => {
+    const scopes = [PERSONAL, ...families.map((f) => f.id)];
+    const failed = [];
+    const stale = [];
+    scopes.forEach((scope) => {
+      const snap = storeState[`recipes|${scope}`];
+      if (!snap) return;
+      if (snap.status === BUCKET_STATUS.ERROR) failed.push(scope);
+      else if (snap.stale) stale.push(scope);
+    });
+    return { failed, stale };
+  }, [storeState, families]);
+  const retryRecipeLoads = useCallback(() => {
+    [...recipeLoadProblems.failed, ...recipeLoadProblems.stale].forEach((scope) => dataStore.refresh("recipes", scope));
+  }, [recipeLoadProblems]);
 
   const familyNameById = useMemo(() => {
     const map = {};
@@ -1114,40 +1227,22 @@ export default function TarifKutusu() {
     refreshRecipeBucket(pendingRecipeScopeRef.current);
   }, [pendingRecipeId, loaded, recipes, refreshRecipeBucket]);
 
-  // rollback verilirse (yeni tarif ekleme, düzenleme) yazım başarısız olunca
-  // yalnızca bu değişiklik yerel listeden geri alınır ve hata çağırana iletilir
-  // — kullanıcı kaydedilmemiş bir tarifi kaydedilmiş sanmasın. Verilmezse
-  // (silme, geri al) eski davranış: yerel görünüm korunur.
-  const persistScope = useCallback(async (scopeKey, updatedList, rollback) => {
-    const cleaned = updatedList.map(({ _scope, _scopes, ...rest }) => rest);
-    setRecipeBuckets((prev) => ({ ...prev, [scopeKey]: cleaned }));
-    try {
-      const result = await bucketSet("recipes", scopeKey, JSON.stringify(cleaned));
-      // Sunucu, bu cihazın henüz görmediği arka plan tariflerini listeye geri
-      // eklediyse (bkz. api/data.js) yerel listeyi sunucuyla eşitle.
-      if (result?.merged?.length) refreshRecipeBucket(scopeKey);
-    } catch (e) {
-      if (!rollback) return;
-      setRecipeBuckets((prev) => ({ ...prev, [scopeKey]: rollback(prev[scopeKey] || []) }));
-      throw e;
-    }
-  }, [refreshRecipeBucket]);
+  // Tarif listesine niyet olarak değişiklik: updater sunucunun güncel listesine
+  // uygulanır (çakışmada yeniden), başarısız olursa yalnızca bu değişiklik
+  // görünümden geri alınır ve hata çağırana iletilir.
+  const mutateRecipes = useCallback((scopeKey, updater) => dataStore.mutate("recipes", scopeKey, updater), []);
 
   // Yeni tarifi seçilen yerlere yazar. Kişisel liste önce: Free sınırına
   // takılırsa tarif ailelere de yazılmamış olur.
   const saveNewRecipe = useCallback(
     async (recipe, targets) => {
-      const withoutRecipe = (list) => list.filter((r) => r.id !== recipe.id);
+      const addRecipe = (list) => (list.some((r) => r.id === recipe.id) ? list : [recipe, ...list]);
       if (targets.includes(PERSONAL)) {
-        await persistScope(PERSONAL, [recipe, ...(recipeBuckets[PERSONAL] || [])], withoutRecipe);
+        await mutateRecipes(PERSONAL, addRecipe);
       }
-      await Promise.all(
-        targets
-          .filter((scopeKey) => scopeKey !== PERSONAL)
-          .map((scopeKey) => persistScope(scopeKey, [recipe, ...(recipeBuckets[scopeKey] || [])], withoutRecipe))
-      );
+      await Promise.all(targets.filter((scopeKey) => scopeKey !== PERSONAL).map((scopeKey) => mutateRecipes(scopeKey, addRecipe)));
     },
-    [recipeBuckets, persistScope]
+    [mutateRecipes]
   );
 
   // Kayıt hatası: Free sınırıysa uyarı penceresi (true döner), değilse genel
@@ -1157,7 +1252,7 @@ export default function TarifKutusu() {
       setLimitModalOpen(true);
       return true;
     }
-    throw new Error(t("errors.saveFailed"));
+    throw new Error(saveErrorMessage(e, t));
   };
 
   // Bir tarifin kayıtlı olduğu TÜM yerlere aynı değişikliği uygular (favori,
@@ -1167,15 +1262,17 @@ export default function TarifKutusu() {
     async (id, updater) => {
       const recipe = recipes.find((r) => r.id === id);
       if (!recipe) return;
+      // updater yalnızca o tarife uygulanır; tarif bu arada başka yerde
+      // silindiyse liste değişmez (yeniden eklenmez).
       await Promise.all(
-        recipe._scopes.map((scopeKey) => {
-          const original = (recipeBuckets[scopeKey] || []).find((r) => r.id === id);
-          const list = (recipeBuckets[scopeKey] || []).map((r) => (r.id === id ? updater(r) : r));
-          return persistScope(scopeKey, list, (current) => current.map((r) => (r.id === id && original ? original : r)));
-        })
+        recipe._scopes.map((scopeKey) =>
+          mutateRecipes(scopeKey, (list) =>
+            list.some((r) => r.id === id) ? list.map((r) => (r.id === id ? updater(r) : r)) : list
+          )
+        )
       );
     },
-    [recipes, recipeBuckets, persistScope]
+    [recipes, mutateRecipes]
   );
 
   const handleExtract = async () => {
@@ -1231,10 +1328,18 @@ export default function TarifKutusu() {
       const index = list.findIndex((r) => r.id === id);
       return { scopeKey, index, item: list[index] };
     });
-    await Promise.all(
-      removalInfo.map(({ scopeKey }) => persistScope(scopeKey, (recipeBuckets[scopeKey] || []).filter((r) => r.id !== id)))
-    );
     setView("list");
+    try {
+      await Promise.all(
+        removalInfo.map(({ scopeKey }) =>
+          mutateRecipes(scopeKey, (list) => (list.some((r) => r.id === id) ? list.filter((r) => r.id !== id) : list))
+        )
+      );
+    } catch (e) {
+      // Silinemedi: tarif görünüme geri döner (yalnızca bu değişiklik).
+      showSaveError(e);
+      return;
+    }
 
     if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
     setUndoState({ title: recipe.title, removalInfo });
@@ -1244,23 +1349,30 @@ export default function TarifKutusu() {
   const handleUndoDelete = async () => {
     if (!undoState) return;
     if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
-    await Promise.all(
-      undoState.removalInfo.map(({ scopeKey, index, item }) => {
-        if (!item) return null;
-        const list = [...(recipeBuckets[scopeKey] || [])];
-        list.splice(index, 0, item);
-        return persistScope(scopeKey, list);
-      })
-    );
+    const { removalInfo } = undoState;
     setUndoState(null);
+    try {
+      await Promise.all(
+        removalInfo.map(({ scopeKey, index, item }) => {
+          if (!item) return null;
+          return mutateRecipes(scopeKey, (list) => {
+            if (list.some((r) => r.id === item.id)) return list;
+            const at = Math.max(0, Math.min(index, list.length));
+            return [...list.slice(0, at), item, ...list.slice(at)];
+          });
+        })
+      );
+    } catch (e) {
+      showSaveError(e);
+    }
   };
 
   // Tarif detayındaki küçük değişikliklerde (isim, favori, kategori) kayıt
   // başarısızsa değişiklik geri alınır ve kısa bir hata gösterilir.
   const [saveErrorToast, setSaveErrorToast] = useState("");
   const saveErrorTimerRef = useRef(null);
-  const showSaveError = () => {
-    setSaveErrorToast(t("errors.saveFailed"));
+  const showSaveError = (e) => {
+    setSaveErrorToast(saveErrorMessage(e, t));
     if (saveErrorTimerRef.current) clearTimeout(saveErrorTimerRef.current);
     saveErrorTimerRef.current = setTimeout(() => setSaveErrorToast(""), 4000);
   };
@@ -1271,8 +1383,13 @@ export default function TarifKutusu() {
     await applyToAllScopes(id, (r) => ({ ...r, title: trimmed })).catch(showSaveError);
   };
 
+  // Niyet, kullanıcının gördüğü duruma göre sabitlenir ("favori yap" /
+  // "favoriden çıkar"); çakışmada yeniden uygulanırken ters çevrilmez.
   const handleToggleFavorite = async (id) => {
-    await applyToAllScopes(id, (r) => ({ ...r, isFavorite: !r.isFavorite })).catch(showSaveError);
+    const recipe = recipes.find((r) => r.id === id);
+    if (!recipe) return;
+    const nextFavorite = !recipe.isFavorite;
+    await applyToAllScopes(id, (r) => ({ ...r, isFavorite: nextFavorite })).catch(showSaveError);
   };
 
   const handleChangeCategory = async (id, newCategory) => {
@@ -1296,7 +1413,7 @@ export default function TarifKutusu() {
     try {
       await applyToAllScopes(id, (r) => ({ ...r, ...data }));
     } catch (e) {
-      throw new Error(t("errors.saveFailed"));
+      throw new Error(saveErrorMessage(e, t));
     }
     setView("detail");
   };
@@ -1346,22 +1463,18 @@ export default function TarifKutusu() {
     await Promise.all(
       scopes.map(async (scopeKey) => {
         try {
-          const res = await bucketGet("shopping-list", scopeKey);
-          const data = res && res.value ? JSON.parse(res.value) : {};
-          const selected = data.selected || [];
-          const servingsMap = { ...(data.servings || {}) };
-          const alreadyIn = selected.includes(recipe.id);
-          if (alreadyIn) delete servingsMap[recipe.id];
-          const servingsChanged = servingsMap[recipe.id] !== (data.servings || {})[recipe.id];
-          if (!alreadyIn || servingsChanged) {
-            await bucketSet(
-              "shopping-list",
-              scopeKey,
-              JSON.stringify({ ...data, selected: alreadyIn ? selected : [...selected, recipe.id], servings: servingsMap })
-            );
-          }
+          await dataStore.mutate("shopping-list", scopeKey, (data) => {
+            const selected = data.selected || [];
+            const servingsMap = { ...(data.servings || {}) };
+            const alreadyIn = selected.includes(recipe.id);
+            if (alreadyIn) delete servingsMap[recipe.id];
+            const servingsChanged = servingsMap[recipe.id] !== (data.servings || {})[recipe.id];
+            if (alreadyIn && !servingsChanged) return undefined;
+            return { ...data, selected: alreadyIn ? selected : [...selected, recipe.id], servings: servingsMap };
+          });
         } catch (e) {
-          // eklenemezse sessizce geç, kullanıcı Alışveriş Listesi'nden elle seçebilir
+          // eklenemezse (liste yüklenemedi vb.) Alışveriş Listesi ekranı durumu
+          // ve "tekrar dene"yi gösterir; kullanıcı oradan elle seçebilir
         }
       })
     );
@@ -1489,7 +1602,8 @@ export default function TarifKutusu() {
         fontFamily: BODY,
       }}
     >
-      {updateAvailable && <UpdateBanner onUpdate={() => window.location.reload()} />}
+      {updateAvailable && !updateRequired && <UpdateBanner onUpdate={reloadApp} />}
+      {updateRequired && <UpdateRequiredModal onReload={reloadApp} />}
       <Header view={view} onBack={closeActiveScreen} authUser={authUser} onSignOut={handleSignOut} onOpenMenu={() => setMenuOpen(true)} />
 
       <SideMenu
@@ -1556,6 +1670,8 @@ export default function TarifKutusu() {
           <Sidebar
             recipes={displayRecipes}
             loaded={loaded}
+            loadProblems={recipeLoadProblems}
+            onRetryLoad={retryRecipeLoads}
             activeId={activeId}
             isPlus={isPlus}
             familyNameById={familyNameById}
@@ -2476,8 +2592,11 @@ function scopeLabels(recipe, familyNameById, t) {
   return scopes.map((s) => (s === PERSONAL ? t("common.personal") : familyNameById?.[s] || t("families.fallbackName")));
 }
 
-function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, isRecipeLocked, onSelect, onOpenPlus, onAdd, onManual, onPantry, onShopping, onToggleFavorite, onDelete, onSendNotification }) {
+function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus, familyNameById, isRecipeLocked, onSelect, onOpenPlus, onAdd, onManual, onPantry, onShopping, onToggleFavorite, onDelete, onSendNotification }) {
   const { t, language, categoryLabel } = useLanguage();
+  const personalLoadFailed = !!loadProblems && loadProblems.failed.includes(PERSONAL);
+  const failedFamilyNames = (loadProblems?.failed || []).filter((s) => s !== PERSONAL).map((s) => familyNameById[s] || s);
+  const staleCount = loadProblems ? loadProblems.stale.length : 0;
   const [listOpen, setListOpen] = useState(true);
   const [openCats, setOpenCats] = useState({});
   const [favOpen, setFavOpen] = useState(false);
@@ -2768,7 +2887,15 @@ function Sidebar({ recipes, loaded, activeId, isPlus, familyNameById, isRecipeLo
           <div style={{ overflow: "hidden" }}>
             {!loaded && <div style={{ fontSize: "14px", color: COLORS.inkSoft, padding: "0 4px 8px" }}>{t("common.loading")}</div>}
 
-            {loaded && recipes.length === 0 && (
+            {loaded && personalLoadFailed && <LoadFailedNotice message={t("load.recipesFailed")} onRetry={onRetryLoad} />}
+            {loaded && failedFamilyNames.length > 0 && (
+              <LoadFailedNotice compact message={t("load.familyRecipesFailed", { names: failedFamilyNames.join(", ") })} onRetry={onRetryLoad} />
+            )}
+            {loaded && staleCount > 0 && !personalLoadFailed && failedFamilyNames.length === 0 && (
+              <LoadFailedNotice compact message={t("load.stale")} onRetry={onRetryLoad} />
+            )}
+
+            {loaded && !personalLoadFailed && recipes.length === 0 && (
               <div
                 style={{
                   fontSize: "14px",
@@ -3478,6 +3605,47 @@ function ServingsStepper({ base, value, onChange, estimated, unit }) {
   );
 }
 
+// Veri yüklenemedi: boş liste yerine açık bir hata + "Tekrar dene". Bu durumda
+// o listeyi değiştiren işlemler yapılmaz (bkz. src/syncedBuckets.js).
+function LoadFailedNotice({ message, onRetry, compact }) {
+  const { t } = useLanguage();
+  return (
+    <div
+      role="alert"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "8px",
+        fontSize: "13px",
+        padding: compact ? "8px 12px" : "12px",
+        borderRadius: "8px",
+        background: "#F6E3DC",
+        color: COLORS.ink,
+        marginBottom: "8px",
+      }}
+    >
+      <AlertCircle size={16} style={{ flexShrink: 0, color: "#A2462A" }} />
+      <span style={{ flex: 1 }}>{message}</span>
+      {onRetry && (
+        <button
+          onClick={onRetry}
+          style={{ background: "transparent", border: "none", color: COLORS.forest, fontWeight: 700, fontSize: "13px", cursor: "pointer", padding: 0, flexShrink: 0 }}
+        >
+          {t("load.retry")}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function InlineError({ message }) {
+  return (
+    <div role="alert" style={{ fontSize: "13px", color: "#A2462A", margin: "0 0 10px" }}>
+      {message}
+    </div>
+  );
+}
+
 // Çeviri durum şeridi: yüklenirken küçük bir not (tarif asıl haliyle görünmeye devam eder),
 // hata olursa asıl tarif + "Tekrar dene". Ekranı kilitlemez.
 function TranslationStatus({ status, onRetry }) {
@@ -3996,64 +4164,52 @@ function ContextTabs({ context, setContext, isPlus, families }) {
 function ShoppingList({ recipes, onNeedTranslation, isPlus, families, initialContext }) {
   const { t, language } = useLanguage();
   const [context, setContext] = useState(initialContext || PERSONAL);
-  const [selected, setSelected] = useState([]);
-  const [checked, setChecked] = useState({});
-  const [servingsMap, setServingsMap] = useState({}); // { recipeId: seçilen porsiyon } — sadece liste kaydında
-  const [loaded, setLoaded] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoaded(false);
-    (async () => {
-      try {
-        const res = await bucketGet("shopping-list", context);
-        if (!cancelled) {
-          const data = res && res.value ? JSON.parse(res.value) : {};
-          setSelected(data.selected || []);
-          setChecked(data.checked || {});
-          setServingsMap(data.servings || {});
-        }
-      } catch (e) {
-        // henüz alışveriş listesi yok
-      } finally {
-        if (!cancelled) setLoaded(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [context]);
+  // Liste sunucudaki sürümlü kovadan okunur: yüklenemezse boş liste
+  // gösterilmez/yazılmaz, "tekrar dene" çıkar. Değişiklikler niyet olarak
+  // gönderilir (aynı listeyi düzenleyen aile üyesinin seçimi ezilmez).
+  const listSnap = useBucket("shopping-list", context);
+  const loaded = isSettled(listSnap);
+  const loadFailed = listSnap?.status === BUCKET_STATUS.ERROR;
+  const listData = listSnap?.data || {};
+  const selected = listData.selected || [];
+  const checked = listData.checked || {};
+  const servingsMap = listData.servings || {}; // { recipeId: seçilen porsiyon } — sadece liste kaydında
+  const [listError, setListError] = useState("");
 
   const persist = useCallback(
-    async (nextSelected, nextChecked, nextServings = servingsMap) => {
-      setSelected(nextSelected);
-      setChecked(nextChecked);
-      setServingsMap(nextServings);
-      try {
-        await bucketSet("shopping-list", context, JSON.stringify({ selected: nextSelected, checked: nextChecked, servings: nextServings }));
-      } catch (e) {
-        // yazma başarısız olsa da yerel görünüm güncel kalsın
-      }
+    (updater) => {
+      setListError("");
+      dataStore.mutate("shopping-list", context, updater).catch((e) => setListError(saveErrorMessage(e, t)));
     },
-    [context, servingsMap]
+    [context, t]
   );
 
   // Bir tarif birden fazla yere (kişisel + aile) kaydedilmiş olabilir — hangi
   // context'te olursak olalım, o context'e ait olan tariflerin hepsi seçilebilir.
   const contextRecipes = recipes.filter((r) => (r._scopes || [r._scope]).includes(context));
 
+  // Yön (ekle/çıkar, işaretle/kaldır) kullanıcının gördüğü duruma göre
+  // sabitlenir; güncel listeye yeniden uygulanırken ters çevrilmez.
   const toggleSelect = (id) => {
     const isRemoving = selected.includes(id);
-    const next = isRemoving ? selected.filter((x) => x !== id) : [...selected, id];
-    const { [id]: _dropped, ...restServings } = servingsMap;
-    persist(next, checked, isRemoving ? restServings : servingsMap);
+    persist((data) => {
+      const current = data.selected || [];
+      if (isRemoving) {
+        if (!current.includes(id)) return undefined;
+        const { [id]: _dropped, ...restServings } = data.servings || {};
+        return { ...data, selected: current.filter((x) => x !== id), servings: restServings };
+      }
+      if (current.includes(id)) return undefined;
+      return { ...data, selected: [...current, id] };
+    });
   };
 
   const toggleChecked = (key) => {
-    persist(selected, { ...checked, [key]: !checked[key] });
+    const nextValue = !checked[key];
+    persist((data) => ({ ...data, checked: { ...(data.checked || {}), [key]: nextValue } }));
   };
 
-  const clearChecked = () => persist(selected, {});
+  const clearChecked = () => persist((data) => (Object.keys(data.checked || {}).length ? { ...data, checked: {} } : undefined));
 
   const chosenRecipes = contextRecipes.filter((r) => selected.includes(r.id));
   const mergedIngredients = mergeIngredients(chosenRecipes, servingsMap, language);
@@ -4078,8 +4234,11 @@ function ShoppingList({ recipes, onNeedTranslation, isPlus, families, initialCon
 
         <ContextTabs context={context} setContext={setContext} isPlus={isPlus} families={families} />
 
+        {listError && <InlineError message={listError} />}
         {!loaded ? (
           <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: 0 }}>{t("common.loading")}</p>
+        ) : loadFailed ? (
+          <LoadFailedNotice message={t("load.shoppingFailed")} onRetry={() => dataStore.refresh("shopping-list", context)} />
         ) : contextRecipes.length === 0 ? (
           <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: 0 }}>{t("shopping.emptyContext")}</p>
         ) : (
@@ -5157,9 +5316,13 @@ function ingredientIsAvailable(ingredientName, pantryItems) {
 function PantryFinder({ recipes, isPlus, families, isRecipeLocked, onSelectRecipe, onOpenPlus, onSaveSuggestion, pantryModalOpenRef, pantryModalCloseRef }) {
   const { t } = useLanguage();
   const [context, setContext] = useState(PERSONAL);
-  const [items, setItems] = useState([]);
+  // Kiler sunucudaki sürümlü kovadan okunur; yüklenemezse boş sayılmaz.
+  const pantrySnap = useBucket("pantry-items", context);
+  const loaded = isSettled(pantrySnap);
+  const loadFailed = pantrySnap?.status === BUCKET_STATUS.ERROR;
+  const items = pantrySnap?.data || [];
+  const [pantryError, setPantryError] = useState("");
   const [draft, setDraft] = useState("");
-  const [loaded, setLoaded] = useState(false);
   const [suggestions, setSuggestions] = useState(null);
   const [suggesting, setSuggesting] = useState(false);
   const [suggestError, setSuggestError] = useState("");
@@ -5178,34 +5341,12 @@ function PantryFinder({ recipes, isPlus, families, isRecipeLocked, onSelectRecip
     pantryModalCloseRef.current = () => setCategoryPromptIndex(null);
   }, [categoryPromptIndex, pantryModalOpenRef, pantryModalCloseRef]);
 
-  useEffect(() => {
-    let cancelled = false;
-    setLoaded(false);
-    (async () => {
-      try {
-        const res = await bucketGet("pantry-items", context);
-        if (!cancelled) setItems(res && res.value ? JSON.parse(res.value) : []);
-      } catch (e) {
-        // henüz kayıtlı malzeme yok
-      } finally {
-        if (!cancelled) setLoaded(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [context]);
-
   const persistItems = useCallback(
-    async (next) => {
-      setItems(next);
-      try {
-        await bucketSet("pantry-items", context, JSON.stringify(next));
-      } catch (e) {
-        // yazma başarısız olsa da yerel görünüm güncel kalsın
-      }
+    (updater) => {
+      setPantryError("");
+      dataStore.mutate("pantry-items", context, updater).catch((e) => setPantryError(saveErrorMessage(e, t)));
     },
-    [context]
+    [context, t]
   );
 
   const handleSuggest = async () => {
@@ -5245,15 +5386,16 @@ function PantryFinder({ recipes, isPlus, families, isRecipeLocked, onSelectRecip
 
   const addItem = () => {
     const val = draft.trim();
-    if (!val) return;
+    // Kiler yüklenmeden (ya da yüklenemediyse) ekleme yapılmaz; yazılan metin korunur.
+    if (!val || !loaded || loadFailed) return;
     if (!items.some((i) => normalizeText(i) === normalizeText(val))) {
-      persistItems([...items, val]);
+      persistItems((list) => (list.some((i) => normalizeText(i) === normalizeText(val)) ? undefined : [...list, val]));
     }
     setDraft("");
   };
 
   const removeItem = (val) => {
-    persistItems(items.filter((i) => i !== val));
+    persistItems((list) => (list.includes(val) ? list.filter((i) => i !== val) : undefined));
   };
 
   const handleKeyDown = (e) => {
@@ -5332,8 +5474,11 @@ function PantryFinder({ recipes, isPlus, families, isRecipeLocked, onSelectRecip
           </button>
         </div>
 
+        {pantryError && <InlineError message={pantryError} />}
         {!loaded ? (
           <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: 0 }}>{t("common.loading")}</p>
+        ) : loadFailed ? (
+          <LoadFailedNotice message={t("load.pantryFailed")} onRetry={() => dataStore.refresh("pantry-items", context)} />
         ) : items.length === 0 ? (
           <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: 0 }}>{t("pantry.noItems")}</p>
         ) : (

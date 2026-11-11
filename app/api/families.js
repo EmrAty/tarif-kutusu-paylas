@@ -2,6 +2,7 @@ import { requireUser } from "./_lib/auth.js";
 import { redisGetJSON, redisSetJSON, redisDel } from "./_lib/redis.js";
 import { getProfile, setProfile, MAX_FAMILIES } from "./_lib/profile.js";
 import { membersKey, removeMemberFromFamily } from "./_lib/families.js";
+import { bucketAuxKeys } from "./_lib/versionedBucket.js";
 
 function familyId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -186,12 +187,16 @@ export default async function handler(req, res) {
         }
       })
     );
+    // Ortak listeler, sürüm sayaçları ve yedekleri birlikte siliniyor.
+    // pendingJobRecipes: eski sürümden kalmış olabilecek işaretçi (artık yazılmıyor).
+    const dataKeys = ["recipes", "shopping-list", "pantry-items"].flatMap((b) => {
+      const key = `family:${id}:${b}`;
+      return [key, ...bucketAuxKeys(key)];
+    });
     await Promise.all([
       redisDel(metaKey(id)),
       redisDel(membersKey(id)),
-      redisDel(`family:${id}:recipes`),
-      redisDel(`family:${id}:shopping-list`),
-      redisDel(`family:${id}:pantry-items`),
+      ...dataKeys.map((key) => redisDel(key)),
       redisDel(`family:${id}:pendingJobRecipes`),
       redisDel(inviteKey(meta.inviteCode)),
     ]);

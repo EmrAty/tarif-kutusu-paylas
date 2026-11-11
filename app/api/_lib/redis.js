@@ -20,7 +20,17 @@ export async function redisGet(key) {
     throw err;
   }
   const data = await res.json();
+  if (data && data.error) throw redisError(data.error);
   return data.result ?? null;
+}
+
+// Upstash bazı komut hatalarını gövdedeki "error" alanıyla bildiriyor; bunlar
+// hiçbir koşulda "kayıt yok" (null) sonucu gibi ele alınmamalı.
+function redisError(detail) {
+  const err = new Error("Veritabanına erişilemedi.");
+  err.status = 502;
+  err.detail = String(detail).slice(0, 200);
+  return err;
 }
 
 export async function redisDel(key) {
@@ -97,5 +107,13 @@ export async function redisCommand(command) {
     throw err;
   }
   const data = await res.json();
+  if (data && data.error) throw redisError(data.error);
   return data.result ?? null;
+}
+
+// Lua betiği (EVAL). Upstash betiği tek ve atomik bir işlem olarak çalıştırır;
+// betik çalışırken başka hiçbir komut araya giremez. Betiğin dokunduğu her
+// anahtar `keys` içinde bildirilmeli.
+export async function redisEval(script, keys, args) {
+  return redisCommand(["EVAL", script, String(keys.length), ...keys, ...args.map(String)]);
 }
