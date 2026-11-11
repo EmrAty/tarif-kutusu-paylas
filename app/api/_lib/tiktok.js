@@ -1,4 +1,5 @@
 import { transcribeMedia, TRANSCRIBE_MODEL, OPENAI_MAX_FILE_BYTES, hasTranscriptionKey } from "./transcribe.js";
+import { isTikTokUrl, safeFetch, readTextLimited } from "./socialUrl.js";
 
 // TikTok'un kendi HTML/JSON yapısına bağlı TEK dosya burası. TikTok yapısını
 // değiştirdiğinde sadece bu fallback çalışmaz; caption'ı yeterli olan normal
@@ -27,31 +28,20 @@ const SUBTITLE_TIMEOUT_MS = 15_000;
 const DOWNLOAD_TIMEOUT_MS = 60_000;
 const MIN_TRANSCRIPT_CHARS = 200;
 
+// Gerçek URL ayrıştırması (bkz. socialUrl.js): "tiktok.com.evil.com" ya da
+// "evil.com/?tiktok.com" TikTok sayılmaz.
 export function isTikTokLink(url) {
-  return /(^|\.)tiktok\.com/i.test((() => {
-    try {
-      return new URL(url).hostname;
-    } catch (e) {
-      return "";
-    }
-  })());
+  return isTikTokUrl(url);
 }
 
-// Zaman aşımı gövdenin okunmasını da kapsıyor: read(res) bitene kadar sayaç
-// açık. Eskiden sayaç başlıklar gelince kapanıyordu; gövdesi takılan bir yanıt
-// (ör. video indirmesi) fonksiyonu Vercel'in 300 sn sınırına kadar bekletip
-// job'ı "processing"te ve bildirimsiz bırakabilirdi.
-async function fetchWithTimeout(url, { timeoutMs, ...init }, read = (res) => res) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, { ...init, signal: controller.signal });
-    return await read(res);
-  } finally {
-    clearTimeout(timer);
-  }
-}
+const MAX_PAGE_BYTES = 5 * 1024 * 1024;
+const MAX_SUBTITLE_BYTES = 2 * 1024 * 1024;
 
+// Zaman aşımı gövdenin okunmasını da kapsıyor (safeFetch, read bitene kadar
+// sayacı açık tutuyor): gövdesi takılan bir yanıt (ör. video indirmesi)
+// fonksiyonu Vercel'in 300 sn sınırına kadar bekletip job'ı "processing"te ve
+// bildirimsiz bırakamaz. Redirect'ler otomatik izlenmiyor; her adres
+// socialUrl.js'te yeniden doğrulanıyor (SSRF koruması).
 function readSetCookies(headers) {
   const list = typeof headers.getSetCookie === "function" ? headers.getSetCookie() : null;
   if (list && list.length) return list.map((c) => c.split(";")[0]).join("; ");
@@ -85,21 +75,21 @@ function findItemStruct(html) {
 }
 
 async function loadVideoPage(url) {
-  const fetchPage = (accept, timeoutMs) => fetchWithTimeout(
+  const fetchPage = (accept, timeoutMs) => safeFetch(
     url,
     {
+      policy: "social",
       timeoutMs,
-      redirect: "follow",
       headers: { "User-Agent": IPHONE_UA, "Accept-Language": "tr-TR,tr;q=0.9,en;q=0.8", Accept: accept },
     },
-    async (res) => ({ res, html: res.ok ? await res.text() : "" })
+    async (res, finalUrl) => ({ res, finalUrl, html: res.ok ? await readTextLimited(res, MAX_PAGE_BYTES) : "" })
   );
-  let { res, html } = await fetchPage("text/html", PAGE_TIMEOUT_MS);
+  let { res, finalUrl, html } = await fetchPage("text/html", PAGE_TIMEOUT_MS);
   if (!res.ok) return null;
   let item = findItemStruct(html);
   // TikTok bazen aynı video için HTTP 200 ile video verisi olmayan bir sayfa döndürüyor.
   if (!item) {
-    ({ res, html } = await fetchPage("*/*", PAGE_RETRY_TIMEOUT_MS));
+    ({ res, finalUrl, html } = await fetchPage("*/*", PAGE_RETRY_TIMEOUT_MS));
     if (!res.ok) return null;
     item = findItemStruct(html);
   }
@@ -109,9 +99,9 @@ async function loadVideoPage(url) {
   const author = item.author || {};
   return {
     cookie: readSetCookies(res.headers),
-    // Kısa linkler (vt.tiktok.com/...) redirect: "follow" ile buraya kadar
-    // çözülüyor; res.url son (tam) video adresi.
-    resolvedUrl: res.url || url,
+    // Kısa linkler (vt.tiktok.com/...) doğrulanan redirect zinciriyle buraya
+    // kadar çözülüyor; finalUrl son (tam) video adresi.
+    resolvedUrl: finalUrl || url,
     desc: typeof item.desc === "string" ? item.desc : "",
     authorName:
       (typeof author.uniqueId === "string" && author.uniqueId) ||
@@ -166,13 +156,14 @@ function pickSubtitle(subtitles) {
 }
 
 async function fetchSubtitle(subtitle, cookie) {
-  return fetchWithTimeout(
+  return safeFetch(
     subtitle.Url,
     {
+      policy: "public",
       timeoutMs: SUBTITLE_TIMEOUT_MS,
       headers: { "User-Agent": IPHONE_UA, Referer: REFERER, ...(cookie ? { Cookie: cookie } : {}) },
     },
-    async (res) => (res.ok ? vttToPlainText(await res.text()) : "")
+    async (res) => (res.ok ? vttToPlainText(await readTextLimited(res, MAX_SUBTITLE_BYTES)) : "")
   );
 }
 
@@ -181,9 +172,12 @@ async function fetchSubtitle(subtitle, cookie) {
 async function downloadVideo(mediaUrls, cookie) {
   let lastStatus = 0;
   for (const url of mediaUrls) {
-    const result = await fetchWithTimeout(
+    let result;
+    try {
+      result = await safeFetch(
       url,
       {
+        policy: "public",
         timeoutMs: DOWNLOAD_TIMEOUT_MS,
         headers: { "User-Agent": IPHONE_UA, Referer: REFERER, Accept: "*/*", ...(cookie ? { Cookie: cookie } : {}) },
       },
@@ -206,6 +200,12 @@ async function downloadVideo(mediaUrls, cookie) {
         return { bytes: Buffer.concat(chunks), contentType: res.headers.get("content-type") || "video/mp4" };
       }
     );
+    } catch (e) {
+      // Güvensiz (iç ağ/IP) adres: bu adres atlanır, sıradaki denenir.
+      if (!e.unsafeUrl) throw e;
+      lastStatus = "güvensiz adres";
+      continue;
+    }
     if (result.status !== undefined) {
       lastStatus = result.status;
       continue;

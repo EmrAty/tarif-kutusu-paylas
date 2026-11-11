@@ -13,6 +13,8 @@ import crypto from "node:crypto";
 import { requireUser } from "./_lib/auth.js";
 import { redisGetJSON, redisSet, redisCommand } from "./_lib/redis.js";
 import { getProfile } from "./_lib/profile.js";
+import { checkRateLimit, reserveAiBudget, assertKillSwitchOff, clientIp, sendGuardError } from "./_lib/aiGuard.js";
+import { checkInputBudget, textChars, INPUT_TOO_LARGE_CODE } from "./_lib/aiInputBudget.js";
 import { CONTENT_LANGUAGES, contentLangOf, isContentLanguage, sameNumbers, translationPayload } from "../shared/recipeLocales.js";
 
 export const config = { maxDuration: 60 };
@@ -20,8 +22,26 @@ export const config = { maxDuration: 60 };
 const MODEL = "claude-sonnet-5";
 const CACHE_TTL = 180 * 24 * 3600;
 const CLAUDE_TIMEOUT_MS = 45_000;
+const MAX_OUTPUT_TOKENS = 8000;
 const MAX_TITLES_PER_CALL = 60;
 const PROMPT_VERSION = "v1";
+
+// Girdi bütçesi (sunucu tarafı, Claude'a gitmeden önce). Tarif istemciden alınmıyor
+// ama /api/data üzerinden kullanıcının kendi listesine her boyutta tarif yazılabiliyor;
+// bu yüzden Redis'ten okunan tarif de sınırlanıyor.
+// Ölçek: Claude'un çıkardığı gerçekçi büyük bir tarif (40 malzeme × ~40 karakter,
+// 20 adım × ~200 karakter, notlar) ~6–7 bin karakter. 16 bin karakter bunun 2+ katı;
+// aynı zamanda çevirinin tamamının MAX_OUTPUT_TOKENS (8000) içine sığmasını sağlıyor.
+export const TRANSLATE_INPUT_LIMITS = {
+  maxTotalChars: 16_000,
+  fields: { title: 300, assumptions: 4_000, servings_note: 2_000 },
+  arrays: { ingredients: 150, instructions: 120 },
+};
+// Liste başlıkları modu: tek başlık en çok 300 karakter (daha uzunu Claude'a
+// gönderilmez, asıl hâliyle kalır), tek çağrıdaki başlıkların toplamı en çok 8 bin.
+export const TITLE_MAX_CHARS = 300;
+export const TITLES_BATCH_MAX_CHARS = 8_000;
+const TOO_LARGE_MESSAGE = "Bu tarif otomatik çeviri için çok uzun; orijinal hali gösteriliyor.";
 
 const sha = (algo, text) => crypto.createHash(algo).update(text).digest("hex");
 const recipeCacheKey = (target, payload) => `rt:${PROMPT_VERSION}:${target}:${sha("sha256", JSON.stringify(payload))}`;
@@ -82,7 +102,7 @@ async function callClaude({ system, userText, schema }) {
       headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
         model: MODEL,
-        max_tokens: 8000,
+        max_tokens: MAX_OUTPUT_TOKENS,
         // Çeviri akıl yürütme gerektirmiyor; düşünme kapalı (daha az token, daha hızlı).
         thinking: { type: "disabled" },
         system,
@@ -141,7 +161,16 @@ async function readRecipes(key) {
   return Array.isArray(list) ? list : [];
 }
 
-async function translateOne(uid, { recipeId, scope, target }) {
+// Yalnızca önbellek ıskalarında ve girdi bütçesi kontrolünden SONRA (gerçekten
+// Claude'a gidilecekken) çağrılır: önbellekten dönen ya da boyut yüzünden
+// reddedilen çeviriler hiçbir sayaca girmez.
+async function guardTranslation(guard) {
+  assertKillSwitchOff();
+  await checkRateLimit({ action: "translate", ...guard });
+  await reserveAiBudget(guard);
+}
+
+async function translateOne(uid, { recipeId, scope, target }, guard) {
   if (typeof recipeId !== "string" || !recipeId) throw Object.assign(new Error("Geçersiz istek."), { status: 400 });
   let key;
   if (scope === "personal") {
@@ -160,6 +189,13 @@ async function translateOne(uid, { recipeId, scope, target }) {
   const hit = await redisGetJSON(cacheKey, null);
   if (hit) return { translation: hit, cached: true };
 
+  const overBudget = checkInputBudget(payload, TRANSLATE_INPUT_LIMITS);
+  if (overBudget) {
+    console.log(JSON.stringify({ tag: "translate-recipe", rejected: overBudget.reason, field: overBudget.field, chars: overBudget.chars ?? overBudget.count, limit: overBudget.limit }));
+    throw Object.assign(new Error(TOO_LARGE_MESSAGE), { status: 413, code: INPUT_TOO_LARGE_CODE });
+  }
+
+  await guardTranslation(guard);
   const { json, usage } = await callClaude({
     system: systemPrompt(target),
     userText: `<recipe>\n${JSON.stringify(payload)}\n</recipe>`,
@@ -177,27 +213,43 @@ async function translateOne(uid, { recipeId, scope, target }) {
 }
 
 // Liste ekranı için: kullanıcının erişebildiği tüm tariflerin başlıkları tek istekte.
-async function translateTitles(uid, target) {
+async function translateTitles(uid, target, guard) {
   const profile = await getProfile(uid);
   const buckets = await Promise.all([`user:${uid}:recipes`, ...profile.families.map((f) => `family:${f}:recipes`)].map(readRecipes));
   const wanted = new Map(); // alan -> { title, lang }
+  let skipped = 0;
   for (const r of buckets.flat()) {
     if (!r || typeof r.title !== "string" || !r.title.trim()) continue;
     const lang = contentLangOf(r);
     if (lang === target) continue;
+    // Aşırı uzun "başlık" Claude'a hiç gönderilmez; listede asıl hâliyle kalır.
+    if (r.title.length > TITLE_MAX_CHARS) {
+      skipped++;
+      continue;
+    }
     wanted.set(titleField(lang, r.title), { title: r.title, lang });
   }
   const fields = [...wanted.keys()];
   const result = {};
-  if (!fields.length) return { titles: result, translated: 0 };
+  if (!fields.length) return { titles: result, translated: 0, skipped };
   const cached = (await redisCommand(["HMGET", titlesKey(target), ...fields])) || [];
   const missing = [];
   fields.forEach((f, i) => {
     if (cached[i]) result[wanted.get(f).title] = cached[i];
     else missing.push(f);
   });
-  const batch = missing.slice(0, MAX_TITLES_PER_CALL);
+  // Tek çağrı hem başlık sayısı hem toplam karakterle sınırlı; kalanlar sonraki istekte.
+  const batch = [];
+  let batchChars = 0;
+  for (const f of missing) {
+    if (batch.length >= MAX_TITLES_PER_CALL) break;
+    const chars = textChars(wanted.get(f).title);
+    if (batchChars + chars > TITLES_BATCH_MAX_CHARS) break;
+    batch.push(f);
+    batchChars += chars;
+  }
   if (batch.length) {
+    await guardTranslation(guard);
     const titles = batch.map((f) => wanted.get(f).title);
     const { json } = await callClaude({
       system: `${systemPrompt(target)}\n- The input is a list of recipe titles; return the same number of titles in the same order.`,
@@ -216,7 +268,7 @@ async function translateTitles(uid, target) {
       if (hset.length) await redisCommand(["HSET", titlesKey(target), ...hset]).catch(() => {});
     }
   }
-  return { titles: result, translated: batch.length };
+  return { titles: result, translated: batch.length, skipped };
 }
 
 export default async function handler(req, res) {
@@ -236,10 +288,13 @@ export default async function handler(req, res) {
     res.status(400).json({ error: "Desteklenmeyen dil." });
     return;
   }
+  const guard = { uid: user.uid, isAnonymous: user.isAnonymous, ip: clientIp(req) };
   try {
-    const result = mode === "titles" ? await translateTitles(user.uid, target) : await translateOne(user.uid, { recipeId, scope, target });
+    const result =
+      mode === "titles" ? await translateTitles(user.uid, target, guard) : await translateOne(user.uid, { recipeId, scope, target }, guard);
     res.status(200).json(result);
   } catch (e) {
-    res.status(e.status || 502).json({ error: e.message || "Çeviri yapılamadı." });
+    if (sendGuardError(res, e)) return;
+    res.status(e.status || 502).json({ error: e.message || "Çeviri yapılamadı.", ...(e.code ? { code: e.code } : {}) });
   }
 }

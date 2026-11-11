@@ -9,6 +9,8 @@ import { mutateBucket, parseListOrThrow, bucketAuxKeys } from "./_lib/versionedB
 import { assertFamilyMember, familyRecipesKey } from "./_lib/families.js";
 import { isAccountDeleted, accountDeletedError } from "./_lib/accountDeletion.js";
 import { isTikTokLink, tiktokTranscript } from "./_lib/tiktok.js";
+import { parseSocialUrl, SUPPORTED_LINK_MESSAGE } from "./_lib/socialUrl.js";
+import { guardAiRequest, reserveAiBudget, sendGuardError } from "./_lib/aiGuard.js";
 import { CATEGORIES } from "../shared/recipeExtraction.js";
 import { DEFAULT_CONTENT_LANG, isContentLanguage } from "../shared/recipeLocales.js";
 
@@ -42,7 +44,6 @@ const MAX_TRANSCRIPT_CHARS = 12000;
 // "Tarif oluşturulamadı" bildirimi hiç görünmüyordu. Bildirim, job başladıktan
 // en az bu kadar sonra gönderiliyor. (Testler ortam değişkeniyle kısaltıyor.)
 const NOTIFY_MIN_DELAY_MS = 5000;
-const SUPPORTED_LINK = /tiktok\.com|youtu\.be|youtube\.com|instagram\.com/i;
 const LIMIT_MESSAGE = FREE_LIMIT_MESSAGE;
 const INSUFFICIENT_MESSAGE = "Bu videodan yeterli tarif bilgisi çıkaramadık.";
 
@@ -183,7 +184,16 @@ async function removeRecipeOfDeletedAccount(uid, recipeId, target) {
   }
 }
 
-async function processRecipeJob({ uid, jobId, sourceUrl, caption, category, addedBy, language, lockKey, target }) {
+// release: eşzamanlılık kirası (aiGuard). Job hangi yoldan biterse bitsin bırakılıyor.
+async function processRecipeJob({ release, ...job }) {
+  try {
+    await runRecipeJob(job);
+  } finally {
+    await release().catch(() => {});
+  }
+}
+
+async function runRecipeJob({ uid, jobId, sourceUrl, caption, category, addedBy, language, lockKey, target }) {
   const startedAt = Date.now();
   const timings = {};
   let recipe = null;
@@ -345,7 +355,8 @@ async function respondWithJob(res, uid, job, duplicate) {
   });
 }
 
-async function handlePost(req, res, uid) {
+async function handlePost(req, res, user) {
+  const uid = user.uid;
   const { requestId, sourceUrl, caption, category, addedBy, language } = req.body || {};
   const target = parseTarget(req.body);
   if (!target) {
@@ -353,11 +364,14 @@ async function handlePost(req, res, uid) {
     return;
   }
 
-  const url = typeof sourceUrl === "string" ? sourceUrl.trim() : "";
-  if (!/^https?:\/\//i.test(url) || !SUPPORTED_LINK.test(url) || url.length > 2000) {
-    res.status(400).json({ error: "Desteklenmeyen link. Sadece TikTok, YouTube ve Instagram linkleri destekleniyor." });
+  // Gerçek URL ayrıştırması: "evil.com/?tiktok.com", "tiktok.com.evil.com",
+  // "instagram.com@evil.com" ya da IP adresi kabul edilmiyor (bkz. socialUrl.js).
+  const parsedUrl = parseSocialUrl(sourceUrl);
+  if (!parsedUrl) {
+    res.status(400).json({ error: SUPPORTED_LINK_MESSAGE });
     return;
   }
+  const url = parsedUrl.url;
   const captionText = typeof caption === "string" ? caption.trim() : "";
   // TikTok'ta açıklama boş olabilir: processRecipeJob yetersiz açıklamada zaten
   // altyazı/konuşma metnine düşüyor, ikisi de yoksa job "failed" oluyor (tarif
@@ -411,53 +425,84 @@ async function handlePost(req, res, uid) {
     }
   }
 
-  const jobId = genId();
-  const lockKey = urlLockKey(uid, url, target);
-  // Aynı video iki kez paylaşılırsa (ör. share intent iki kez tetiklenirse)
-  // ikinci bir tarif oluşmasın.
-  if (!(await redisSetNX(lockKey, jobId, URL_LOCK_TTL))) {
-    const lockedJobId = await redisGet(lockKey);
-    const job = lockedJobId ? effectiveJob(await redisGetJSON(jobKey(uid, lockedJobId), null)) : null;
-    if (blocksNewJob(job)) {
-      await redisSet(reqKey, job.id, REQUEST_TTL);
-      await respondWithJob(res, uid, job, true);
-      return;
-    }
-    await redisSet(lockKey, jobId, URL_LOCK_TTL);
+  // Kötüye kullanım koruması (hız + eşzamanlı job). Normal kullanımda hiç devreye
+  // girmez; tekrar gönderimler (yukarıdaki requestId dalı) buraya gelmeden
+  // döndüğü için sayılmaz. Maliyet sayacı (UID toplamı + global) burada DEĞİL,
+  // aşağıda yeni bir job açılacağı kesinleşince ayrılıyor.
+  let release;
+  try {
+    release = await guardAiRequest({ action: "recipeJob", user, req, reserveBudget: false });
+  } catch (e) {
+    if (sendGuardError(res, e)) return;
+    throw e;
   }
 
-  const now = Date.now();
-  const job = {
-    id: jobId,
-    status: "queued",
-    sourceUrl: url,
-    category,
-    scope: target.scope,
-    familyId: target.scope === "family" ? target.familyId : null,
-    createdAt: now,
-    updatedAt: now,
-    recipeId: null,
-    error: null,
-  };
-  await redisSetJSON(jobKey(uid, jobId), job, JOB_TTL);
-  await redisSet(reqKey, jobId, REQUEST_TTL);
+  // Kira sahipliği: kira ya arka plan job'una devredilir (o, bittiğinde bırakır)
+  // ya da bu fonksiyon hangi yoldan çıkarsa çıksın (erken dönüş, Redis hatası,
+  // throw) finally'de bırakılır. release() iki kez çağrılsa da güvenli.
+  let handedOff = false;
+  try {
+    const jobId = genId();
+    const lockKey = urlLockKey(uid, url, target);
+    // Aynı video iki kez paylaşılırsa (ör. share intent iki kez tetiklenirse)
+    // ikinci bir tarif oluşmasın.
+    if (!(await redisSetNX(lockKey, jobId, URL_LOCK_TTL))) {
+      const lockedJobId = await redisGet(lockKey);
+      const job = lockedJobId ? effectiveJob(await redisGetJSON(jobKey(uid, lockedJobId), null)) : null;
+      if (blocksNewJob(job)) {
+        await redisSet(reqKey, job.id, REQUEST_TTL);
+        await respondWithJob(res, uid, job, true);
+        return;
+      }
+      await redisSet(lockKey, jobId, URL_LOCK_TTL);
+    }
 
-  waitUntil(
-    processRecipeJob({
-      uid,
-      jobId,
+    // Yeni bir job açılacak ve sağlayıcıya gidilecek: maliyet sayacı şimdi.
+    try {
+      await reserveAiBudget({ uid, isAnonymous: !!user.isAnonymous });
+    } catch (e) {
+      await redisDel(lockKey).catch(() => {});
+      if (sendGuardError(res, e)) return;
+      throw e;
+    }
+
+    const now = Date.now();
+    const job = {
+      id: jobId,
+      status: "queued",
       sourceUrl: url,
-      caption: captionText,
       category,
-      addedBy: typeof addedBy === "string" ? addedBy.slice(0, 60) : "",
-      // Yalnızca çıktı dili; bilinmeyen değer varsayılan dile (tr) düşer.
-      language: isContentLanguage(language) ? language : DEFAULT_CONTENT_LANG,
-      lockKey,
-      target,
-    })
-  );
+      scope: target.scope,
+      familyId: target.scope === "family" ? target.familyId : null,
+      createdAt: now,
+      updatedAt: now,
+      recipeId: null,
+      error: null,
+    };
+    await redisSetJSON(jobKey(uid, jobId), job, JOB_TTL);
+    await redisSet(reqKey, jobId, REQUEST_TTL);
 
-  await respondWithJob(res, uid, job, false);
+    waitUntil(
+      processRecipeJob({
+        uid,
+        jobId,
+        sourceUrl: url,
+        caption: captionText,
+        category,
+        addedBy: typeof addedBy === "string" ? addedBy.slice(0, 60) : "",
+        // Yalnızca çıktı dili; bilinmeyen değer varsayılan dile (tr) düşer.
+        language: isContentLanguage(language) ? language : DEFAULT_CONTENT_LANG,
+        lockKey,
+        target,
+        release,
+      })
+    );
+    handedOff = true;
+
+    await respondWithJob(res, uid, job, false);
+  } finally {
+    if (!handedOff) await release().catch(() => {});
+  }
 }
 
 export default async function handler(req, res) {
@@ -471,7 +516,7 @@ export default async function handler(req, res) {
 
   try {
     if (req.method === "POST") {
-      await handlePost(req, res, user.uid);
+      await handlePost(req, res, user);
       return;
     }
     if (req.method === "GET") {
