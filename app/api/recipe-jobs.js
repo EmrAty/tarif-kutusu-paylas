@@ -5,7 +5,7 @@ import { redisDel, redisGet, redisGetJSON, redisSet, redisSetJSON, redisSetNX } 
 import { getProfile, FREE_RECIPE_LIMIT, FREE_LIMIT_ERROR_CODE, FREE_LIMIT_MESSAGE } from "./_lib/profile.js";
 import { extractRecipeFromCaption } from "./_lib/extractRecipe.js";
 import { fcmTokensKey, notifyUserDevices } from "./_lib/fcm.js";
-import { addPendingJobRecipe, userOwner, familyOwner } from "./_lib/jobRecipes.js";
+import { mutateBucket, parseListOrThrow, bucketAuxKeys } from "./_lib/versionedBucket.js";
 import { assertFamilyMember, familyRecipesKey } from "./_lib/families.js";
 import { isAccountDeleted, accountDeletedError } from "./_lib/accountDeletion.js";
 import { isTikTokLink, tiktokTranscript } from "./_lib/tiktok.js";
@@ -137,19 +137,27 @@ async function patchJob(uid, jobId, patch) {
   return next;
 }
 
-// Liste bozuksa ([] fallback'i yerine) hata veriyoruz - aksi hâlde tek bir
-// ayrıştırma hatası kullanıcının tüm tariflerinin üzerine yazardı.
-async function readRecipeList(key) {
-  const raw = await redisGet(key);
-  if (raw == null) return [];
-  let list;
-  try {
-    list = JSON.parse(raw);
-  } catch (e) {
-    throw new Error("Tarif listesi okunamadı.");
-  }
-  if (!Array.isArray(list)) throw new Error("Tarif listesi okunamadı.");
-  return list;
+// Tarifi listeye ekler: güncel liste okunur, tarif başına eklenir ve
+// karşılaştır-ve-yaz ile yazılır (bkz. _lib/versionedBucket.js). Arada bir
+// istemci ya da başka bir job yazdıysa güncel listeye yeniden uygulanır —
+// kimsenin değişikliği ezilmez. Liste bozuksa ([] varsayılmaz) hata verir;
+// aksi hâlde tek bir ayrıştırma hatası kullanıcının tüm tariflerinin üzerine
+// yazardı. `check(list)` yazımdan hemen önce (ör. Free limiti) hata atabilir.
+async function addRecipeToList(key, recipe, check) {
+  await mutateBucket(key, {
+    parse: (raw) => {
+      try {
+        return parseListOrThrow(raw);
+      } catch (e) {
+        throw new Error("Tarif listesi okunamadı.");
+      }
+    },
+    mutate: (list) => {
+      if (list.some((r) => r && r.id === recipe.id)) return undefined;
+      if (check) check(list);
+      return [recipe, ...list];
+    },
+  });
 }
 
 async function discardJobOfDeletedAccount(uid, jobId, lockKey) {
@@ -164,13 +172,15 @@ async function discardJobOfDeletedAccount(uid, jobId, lockKey) {
 async function removeRecipeOfDeletedAccount(uid, recipeId, target) {
   if (target.scope === "family") {
     if ((await redisGet(`family:${target.familyId}:meta`)) == null) {
-      await redisDel(familyRecipesKey(target.familyId));
-      await redisDel(`family:${target.familyId}:pendingJobRecipes`);
+      for (const key of [familyRecipesKey(target.familyId), ...bucketAuxKeys(familyRecipesKey(target.familyId))]) {
+        await redisDel(key);
+      }
     }
     return;
   }
-  await redisDel(recipesKey(uid));
-  await redisDel(`user:${uid}:pendingJobRecipes`);
+  for (const key of [recipesKey(uid), ...bucketAuxKeys(recipesKey(uid))]) {
+    await redisDel(key);
+  }
 }
 
 async function processRecipeJob({ uid, jobId, sourceUrl, caption, category, addedBy, language, lockKey, target }) {
@@ -243,18 +253,12 @@ async function processRecipeJob({ uid, jobId, sourceUrl, caption, category, adde
       // Job kuyruktayken Plus kapanmış ya da aileden çıkılmış olabilir: tekrar
       // doğrulanıyor. Başarısızsa job başarısız olur, kişisel listeye yazılmaz.
       await assertFamilyMember(uid, target.familyId);
-      const key = familyRecipesKey(target.familyId);
-      const list = await readRecipeList(key);
-      await addPendingJobRecipe(familyOwner(target.familyId), recipeId);
-      await redisSet(key, JSON.stringify([recipe, ...list]));
+      await addRecipeToList(familyRecipesKey(target.familyId), recipe);
     } else {
       const profile = await getProfile(uid);
-      const list = await readRecipeList(recipesKey(uid));
-      if (!profile.isPlus && list.length >= FREE_RECIPE_LIMIT) throw new Error(LIMIT_MESSAGE);
-      // İşaretçi kayıttan ÖNCE yazılıyor: istemci bu tarifi görmeden listeyi geri
-      // yazarsa api/data.js onu koruyabilsin (bkz. _lib/jobRecipes.js).
-      await addPendingJobRecipe(userOwner(uid), recipeId);
-      await redisSet(recipesKey(uid), JSON.stringify([recipe, ...list]));
+      await addRecipeToList(recipesKey(uid), recipe, (list) => {
+        if (!profile.isPlus && list.length >= FREE_RECIPE_LIMIT) throw new Error(LIMIT_MESSAGE);
+      });
     }
     timings.save = Date.now() - t;
     logStep(jobId, "save", timings.save);

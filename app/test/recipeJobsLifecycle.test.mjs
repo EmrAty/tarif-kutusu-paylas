@@ -6,6 +6,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import { createMemoryRedis } from "./helpers/memoryRedis.mjs";
 
 const KV = "https://kv.test";
 const NOTIFY_DELAY = 300;
@@ -25,6 +26,7 @@ process.env.FIREBASE_SERVICE_ACCOUNT_KEY = JSON.stringify({
 
 // ---------- bellek içi Redis ----------
 const db = new Map();
+const memoryRedis = createMemoryRedis(db);
 let failRedisWriteFor = null;
 function runRedis([op, ...args]) {
   switch (op.toUpperCase()) {
@@ -37,7 +39,8 @@ function runRedis([op, ...args]) {
     case "DEL":
       return args.reduce((n, key) => n + (db.delete(key) ? 1 : 0), 0);
     default:
-      throw new Error(`Test Redis'i bu komutu desteklemiyor: ${op}`);
+      // Sürümlü kovaların komutları (MGET, EVAL…) ortak bellek içi Redis'te.
+      return memoryRedis.run([op, ...args]);
   }
 }
 
@@ -61,7 +64,9 @@ globalThis.fetch = async (input, init = {}) => {
   }
   if (url === KV) {
     const command = JSON.parse(init.body);
-    if (command[0] === "SET" && command[1] === failRedisWriteFor) return json(500, { error: "down" });
+    // Tarif listesi artık karşılaştır-ve-yaz (EVAL; ilk anahtar command[3]) ile yazılıyor.
+    const writtenKey = command[0] === "EVAL" ? command[3] : command[1];
+    if ((command[0] === "SET" || command[0] === "EVAL") && writtenKey === failRedisWriteFor) return json(500, { error: "down" });
     return json(200, { result: runRedis(command) });
   }
   if (url.includes("securetoken@system.gserviceaccount.com")) return json(200, { keys: [jwk] });
@@ -186,7 +191,10 @@ test(
     assert.equal(recipes.length, 1);
     assert.equal(recipes[0].id, job.recipeId);
     assert.equal(recipes[0].title, "Tenekede Tavuk");
-    assert.ok(read("user:A:pendingJobRecipes"), "bekleyen job tarifi işareti yazıldı");
+    // Tarif atomik karşılaştır-ve-yaz ile yazıldı (sürümsüz eski liste örtük sürüm 1 -> 2);
+    // pendingJobRecipes işaretçisine artık gerek yok.
+    assert.equal(db.get("user:A:recipes:version"), "2", "tarif sürümlü yazımla kaydedildi (sürümsüz liste = 1)");
+    assert.equal(db.has("user:A:pendingJobRecipes"), false);
     assert.equal(fcmMessages.length, 1);
     assert.equal(fcmMessages[0].data.type, "recipe_ready");
     assert.equal(job.notify.sent, 1);

@@ -1,8 +1,8 @@
 import { redisGet, redisSet, redisDel, redisGetJSON, redisSetJSON, redisCommand } from "./redis.js";
 import { getProfile, profileKey } from "./profile.js";
-import { membersKey, familyRecipesKey } from "./families.js";
+import { membersKey } from "./families.js";
 import { fcmTokensKey } from "./fcm.js";
-import { pendingKey, userOwner, familyOwner } from "./jobRecipes.js";
+import { bucketAuxKeys } from "./versionedBucket.js";
 import { getServiceAccountToken } from "./googleAuth.js";
 
 // Hesap silme (DELETE /api/account). Sıra bilerek böyle:
@@ -39,13 +39,21 @@ const inviteKey = (code) => `invite:${code}:family`;
 // Sabit kişisel anahtarlar. Bunlara ek olarak user:<uid>:* altında kalan her
 // şey de taranıp siliniyor (ileride eklenecek yeni bir kişisel anahtar
 // unutulmasın diye).
+// Veri kovaları ve sürüm/yedek anahtarları (bkz. versionedBucket.js).
+const BUCKETS = ["recipes", "shopping-list", "pantry-items"];
+const bucketKeysWithAux = (prefix) =>
+  BUCKETS.flatMap((b) => {
+    const key = `${prefix}:${b}`;
+    return [key, ...bucketAuxKeys(key)];
+  });
+
+// pendingJobRecipes: eski sürümün job işaretçisi; artık yazılmıyor ama
+// production'da 7 günlük TTL'i dolmamış kayıtlar kalmış olabilir.
 function personalKeys(uid) {
   return [
-    `user:${uid}:recipes`,
-    `user:${uid}:shopping-list`,
-    `user:${uid}:pantry-items`,
+    ...bucketKeysWithAux(`user:${uid}`),
     fcmTokensKey(uid),
-    pendingKey(userOwner(uid)),
+    `user:${uid}:pendingJobRecipes`,
     `user:${uid}:recentlyRemovedRecipes`,
   ];
 }
@@ -77,10 +85,8 @@ async function deleteKeys(keys) {
 
 async function deleteWholeFamily(id, meta) {
   await deleteKeys([
-    familyRecipesKey(id),
-    `family:${id}:shopping-list`,
-    `family:${id}:pantry-items`,
-    pendingKey(familyOwner(id)),
+    ...bucketKeysWithAux(`family:${id}`),
+    `family:${id}:pendingJobRecipes`,
     ...(meta.inviteCode ? [inviteKey(meta.inviteCode)] : []),
   ]);
   await redisDel(membersKey(id));

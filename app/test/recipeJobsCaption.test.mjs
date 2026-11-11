@@ -5,6 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import { createMemoryRedis } from "./helpers/memoryRedis.mjs";
 
 const KV = "https://kv.test";
 process.env.KV_REST_API_URL = KV;
@@ -23,6 +24,7 @@ process.env.FIREBASE_SERVICE_ACCOUNT_KEY = JSON.stringify({
 
 // ---------- bellek içi Redis ----------
 const db = new Map();
+const memoryRedis = createMemoryRedis(db);
 function runRedis([op, ...args]) {
   switch (op.toUpperCase()) {
     case "SET": {
@@ -34,7 +36,8 @@ function runRedis([op, ...args]) {
     case "DEL":
       return args.reduce((n, key) => n + (db.delete(key) ? 1 : 0), 0);
     default:
-      throw new Error(`Test Redis'i bu komutu desteklemiyor: ${op}`);
+      // Sürümlü kovaların komutları (MGET, EVAL…) ortak bellek içi Redis'te.
+      return memoryRedis.run([op, ...args]);
   }
 }
 

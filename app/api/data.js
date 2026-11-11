@@ -1,7 +1,7 @@
 import { requireUser } from "./_lib/auth.js";
-import { redisGet, redisSet, redisGetJSON, redisSetJSON } from "./_lib/redis.js";
+import { redisGetJSON, redisSetJSON } from "./_lib/redis.js";
 import { getProfile, FREE_RECIPE_LIMIT, FREE_LIMIT_ERROR_CODE, FREE_LIMIT_MESSAGE } from "./_lib/profile.js";
-import { acknowledgePendingJobRecipes, mergePendingJobRecipes, userOwner, familyOwner } from "./_lib/jobRecipes.js";
+import { readBucket, compareAndSet, isValidBaseVersion } from "./_lib/versionedBucket.js";
 
 const ALLOWED_BUCKETS = new Set(["recipes", "shopping-list", "pantry-items"]);
 
@@ -12,10 +12,49 @@ const RECENTLY_REMOVED_TTL = 120;
 const MAX_RECENTLY_REMOVED = 30;
 const recentlyRemovedKey = (uid) => `user:${uid}:recentlyRemovedRecipes`;
 
+export const VERSION_CONFLICT_CODE = "version_conflict";
+export const CLIENT_OUTDATED_CODE = "client_outdated";
+
 const idsOf = (list) => new Set((Array.isArray(list) ? list : []).map((r) => r && r.id).filter(Boolean));
 
 function bucketKey(scope, uid, familyId, bucket) {
   return scope === "family" ? `family:${familyId}:${bucket}` : `user:${uid}:${bucket}`;
+}
+
+const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+
+// Gelen değerin biçimi: tarif/kiler listesi dizi, alışveriş listesi nesne.
+// Bozuk bir istemci yazımı hiçbir zaman kovanın yerine geçmesin.
+function parseIncoming(bucket, value) {
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch (e) {
+    return null;
+  }
+  if (bucket === "shopping-list") return isPlainObject(parsed) ? parsed : null;
+  if (!Array.isArray(parsed)) return null;
+  if (bucket === "recipes" && !parsed.every(isPlainObject)) return null;
+  return parsed;
+}
+
+function parseStoredList(raw) {
+  if (raw == null) return [];
+  try {
+    const value = JSON.parse(raw);
+    return Array.isArray(value) ? value : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function conflict(res, current) {
+  res.status(409).json({
+    error: "Veri başka bir cihazda değişti.",
+    code: VERSION_CONFLICT_CODE,
+    value: current.raw,
+    version: current.version,
+  });
 }
 
 export default async function handler(req, res) {
@@ -39,92 +78,95 @@ export default async function handler(req, res) {
     res.status(400).json({ error: "Geçersiz kapsam." });
     return;
   }
-  if (scope === "family") {
-    if (!familyId) {
-      res.status(400).json({ error: "Aile kimliği gerekli." });
-      return;
-    }
-    const profile = await getProfile(user.uid);
-    if (!profile.families.includes(familyId)) {
-      res.status(403).json({ error: "Bu ailenin üyesi değilsin." });
-      return;
-    }
-  }
 
-  const key = bucketKey(scope, user.uid, familyId, bucket);
-  const isPersonalRecipes = bucket === "recipes" && scope === "personal";
-  // Paylaşım paneli job'u hem kişisel hem aile tarif listesine yazabiliyor
-  // (bkz. recipe-jobs.js); henüz okunmamış job tarifleri ikisinde de korunuyor.
-  const isRecipes = bucket === "recipes";
-  const pendingOwner = scope === "family" ? familyOwner(familyId) : userOwner(user.uid);
-
-  if (req.method === "GET") {
-    try {
-      const value = await redisGet(key);
-      if (isRecipes && value) {
-        await acknowledgePendingJobRecipes(pendingOwner, value).catch(() => {});
+  try {
+    if (scope === "family") {
+      if (!familyId) {
+        res.status(400).json({ error: "Aile kimliği gerekli." });
+        return;
       }
-      res.status(200).json({ value: value ?? null });
-    } catch (e) {
-      res.status(e.status || 502).json({ error: e.message });
+      const profile = await getProfile(user.uid);
+      if (!profile.families.includes(familyId)) {
+        res.status(403).json({ error: "Bu ailenin üyesi değilsin." });
+        return;
+      }
     }
-    return;
-  }
 
-  if (req.method === "POST") {
-    let { value } = req.body || {};
+    const key = bucketKey(scope, user.uid, familyId, bucket);
+
+    // Okuma: değer + sürüm. "Kayıt yok" { value: null } demektir; her türlü
+    // okuma hatası 5xx döner ve istemci bunu ASLA boş liste saymaz.
+    if (req.method === "GET") {
+      const current = await readBucket(key);
+      res.status(200).json({ value: current.raw, version: current.version });
+      return;
+    }
+
+    if (req.method !== "POST") {
+      res.status(405).json({ error: "Method not allowed" });
+      return;
+    }
+
+    const { value, baseVersion } = req.body || {};
+    // Sürüm göndermeyen (eski) istemci kovanın tamamını körlemesine
+    // ezebilirdi: yeni sunucu bu yazımı kabul etmez, istemci yenilenmeli.
+    if (!isValidBaseVersion(baseVersion)) {
+      res.status(426).json({
+        error: "Uygulamanın yeni bir sürümü var. Değişikliklerin kaydedilebilmesi için lütfen uygulamayı yenile.",
+        code: CLIENT_OUTDATED_CODE,
+      });
+      return;
+    }
     if (typeof value !== "string") {
       res.status(400).json({ error: "Geçersiz istek." });
       return;
     }
-
-    let merged = [];
-    let previous = null;
-    const loadPrevious = async () => {
-      if (previous === null) previous = (await redisGetJSON(key, [])) || [];
-      return previous;
-    };
-    if (isRecipes) {
-      try {
-        const result = await mergePendingJobRecipes(pendingOwner, loadPrevious, JSON.parse(value));
-        if (result.merged.length) {
-          value = JSON.stringify(result.list);
-          merged = result.merged;
-        }
-      } catch (e) {
-        // ayrıştırılamazsa gelen değer olduğu gibi yazılır (önceki davranış)
-      }
+    const next = parseIncoming(bucket, value);
+    if (next === null) {
+      res.status(400).json({ error: "Geçersiz veri." });
+      return;
     }
+
+    const current = await readBucket(key);
+    if (current.version !== baseVersion) {
+      conflict(res, current);
+      return;
+    }
+
+    const isPersonalRecipes = bucket === "recipes" && scope === "personal";
+    const previous = isPersonalRecipes ? parseStoredList(current.raw) : null;
 
     if (isPersonalRecipes) {
       const profile = await getProfile(user.uid);
-      if (!profile.isPlus) {
-        try {
-          const previous = await loadPrevious();
-          const next = JSON.parse(value);
-          if (Array.isArray(next) && next.length > FREE_RECIPE_LIMIT && next.length > previous.length) {
-            // Yalnızca gerçekten yeni tarif engelleniyor; az önce silinip geri
-            // alınan tarif yeni sayılmıyor. Düzenleme/silme uzunluğu artırmıyor.
-            const previousIds = idsOf(previous);
-            const recentlyRemoved = new Set(await redisGetJSON(recentlyRemovedKey(user.uid), []));
-            const hasNew = next.some((r) => r && !previousIds.has(r.id) && !recentlyRemoved.has(r.id));
-            if (hasNew) {
-              res.status(403).json({ error: FREE_LIMIT_MESSAGE, code: FREE_LIMIT_ERROR_CODE });
-              return;
-            }
-          }
-        } catch (e) {
-          // ayrıştırma başarısızsa limit kontrolü atlanır, normal yazım denemesi devam eder
+      if (!profile.isPlus && next.length > FREE_RECIPE_LIMIT && next.length > previous.length) {
+        // Yalnızca gerçekten yeni tarif engelleniyor; az önce silinip geri
+        // alınan tarif yeni sayılmıyor. Düzenleme/silme uzunluğu artırmıyor.
+        // `previous`, karşılaştır-ve-yaz'ın beklediği sürümle aynı anın verisi:
+        // kontrol ile yazım arasında liste değişirse yazım çakışmayla reddedilir.
+        const previousIds = idsOf(previous);
+        const recentlyRemoved = new Set(await redisGetJSON(recentlyRemovedKey(user.uid), []));
+        const hasNew = next.some((r) => !previousIds.has(r.id) && !recentlyRemoved.has(r.id));
+        if (hasNew) {
+          res.status(403).json({ error: FREE_LIMIT_MESSAGE, code: FREE_LIMIT_ERROR_CODE });
+          return;
         }
       }
+    }
 
+    const result = await compareAndSet(key, baseVersion, value);
+    if (!result.ok) {
+      // Okuma ile yazım arasında başka biri yazdı: hiçbir şey yazılmadı.
+      conflict(res, await readBucket(key));
+      return;
+    }
+
+    if (isPersonalRecipes) {
       try {
-        const previous = await loadPrevious();
-        const nextIds = idsOf(JSON.parse(value));
+        const nextIds = idsOf(next);
         const removed = [...idsOf(previous)].filter((id) => !nextIds.has(id));
         if (removed.length) {
-          const current = await redisGetJSON(recentlyRemovedKey(user.uid), []);
-          const merged = [...(Array.isArray(current) ? current : []), ...removed].slice(-MAX_RECENTLY_REMOVED);
+          const recent = await redisGetJSON(recentlyRemovedKey(user.uid), []);
+          const merged = [...(Array.isArray(recent) ? recent : []), ...removed].slice(-MAX_RECENTLY_REMOVED);
           await redisSetJSON(recentlyRemovedKey(user.uid), merged, RECENTLY_REMOVED_TTL);
         }
       } catch (e) {
@@ -132,14 +174,8 @@ export default async function handler(req, res) {
       }
     }
 
-    try {
-      await redisSet(key, value);
-      res.status(200).json(merged.length ? { ok: true, merged } : { ok: true });
-    } catch (e) {
-      res.status(e.status || 502).json({ error: e.message });
-    }
-    return;
+    res.status(200).json({ ok: true, version: result.version });
+  } catch (e) {
+    res.status(e.status || 502).json({ error: e.status ? e.message : "Veritabanına erişilemedi." });
   }
-
-  res.status(405).json({ error: "Method not allowed" });
 }

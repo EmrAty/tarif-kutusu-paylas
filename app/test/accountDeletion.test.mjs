@@ -6,6 +6,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import { createMemoryRedis } from "./helpers/memoryRedis.mjs";
 
 const KV = "https://kv.test";
 process.env.KV_REST_API_URL = KV;
@@ -24,6 +25,7 @@ process.env.FIREBASE_SERVICE_ACCOUNT_KEY = JSON.stringify({
 
 // ---------- bellek içi Redis (Upstash REST) ----------
 const db = new Map();
+const memoryRedis = createMemoryRedis(db);
 const ttl = new Map();
 
 function globToRegExp(pattern) {
@@ -48,7 +50,8 @@ function runRedis([op, ...args]) {
       return ["0", [...db.keys()].filter((k) => re.test(k))];
     }
     default:
-      throw new Error(`Test Redis'i bu komutu desteklemiyor: ${op}`);
+      // Sürümlü kovaların komutları (MGET, EVAL…) ortak bellek içi Redis'te.
+      return memoryRedis.run([op, ...args]);
   }
 }
 
