@@ -10,9 +10,13 @@
 // Mevcut "güncelleme var" bandı da aynı yenileme fonksiyonunu kullanır.
 
 export const CLIENT_OUTDATED = "client_outdated";
+// /api/extract eski istemci biçimini (system/model/max_tokens gönderen proxy
+// çağrısı) 400 + bu kodla reddeder. Anlamı aynı: bu istemci sunucuyla uyumsuz.
+export const CLIENT_UPDATE_REQUIRED = "client_update_required";
+const OUTDATED_CODES = new Set([CLIENT_OUTDATED, CLIENT_UPDATE_REQUIRED]);
 
 export function isClientOutdatedResponse(status, body) {
-  return status === 426 || (!!body && body.code === CLIENT_OUTDATED);
+  return status === 426 || (!!body && OUTDATED_CODES.has(body.code));
 }
 
 export function clientOutdatedError(message = "Uygulamanın yeni bir sürümü var. Lütfen uygulamayı yenile.") {

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { ChefHat, Link2, Loader2, AlertCircle, Check, Plus } from "lucide-react";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "./firebase.js";
-import { COLORS, SERIF, BODY, uid, storageGet, authedFetch } from "./App.jsx";
+import { COLORS, SERIF, BODY, uid, storageGet, authedFetch, fetchCaption } from "./App.jsx";
 import { CATEGORIES } from "../shared/recipeExtraction.js";
 import { useLanguage } from "./i18n.jsx";
 
@@ -116,17 +116,15 @@ export default function SharePanel() {
 
   useEffect(() => {
     // Açıklama "Yeni Tarif Çıkar" ekranındaki (AddForm) ile aynı uçtan, aynı
-    // şekilde geliyor. Panel Claude'u beklemiyor, hemen açılıyor.
-    if (!link) return;
+    // şekilde geliyor. Panel Claude'u beklemiyor, hemen açılıyor. Uç giriş
+    // istediği için oturum (misafir dahil) hazır olunca isteniyor.
+    if (!link || !authUser) return;
     let cancelled = false;
     setFetchingCaption(true);
     setCaptionError("");
-    fetch("/api/fetch-caption?url=" + encodeURIComponent(link))
-      .then(async (res) => {
-        const data = await res.json().catch(() => ({}));
-        if (cancelled) return;
-        if (res.ok && data.caption) setCaption(data.caption);
-        else setCaptionError(t("errors.captionFetchFailed"));
+    fetchCaption(link)
+      .then((data) => {
+        if (!cancelled) setCaption((prev) => (prev && prev.trim() ? prev : data.caption));
       })
       .catch(() => {
         if (!cancelled) setCaptionError(t("errors.captionFetchFailed"));
@@ -137,7 +135,7 @@ export default function SharePanel() {
     return () => {
       cancelled = true;
     };
-  }, [link]);
+  }, [link, authUser]);
 
   const handleSubmit = async () => {
     setError("");

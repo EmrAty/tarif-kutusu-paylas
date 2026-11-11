@@ -93,6 +93,25 @@ export async function redisSetJSON(key, value, ttlSeconds) {
   await redisSet(key, JSON.stringify(value), ttlSeconds);
 }
 
+// Birden çok komut tek HTTP isteğinde (Upstash /pipeline). Sonuçlar sırayla
+// döner; bir komut hata verirse o elemanın yerinde Error olur.
+export async function redisPipeline(commands) {
+  assertConfigured();
+  const res = await fetch(`${BASE_URL}/pipeline`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
+    body: JSON.stringify(commands),
+  });
+  if (!res.ok) {
+    const err = new Error("Veritabanına erişilemedi.");
+    err.status = 502;
+    throw err;
+  }
+  const data = await res.json();
+  if (!Array.isArray(data)) throw Object.assign(new Error("Veritabanı yanıtı okunamadı."), { status: 502 });
+  return data.map((item) => (item && item.error ? new Error(item.error) : item?.result ?? null));
+}
+
 // Tek bir Redis komutu (ör. ["HMGET", key, ...fields]); Upstash REST sonucunu döndürür.
 export async function redisCommand(command) {
   assertConfigured();

@@ -11,10 +11,16 @@ import {
   SERVINGS_UNITS,
 } from "../../shared/portionEstimate.js";
 
-// /api/extract ile aynı model ve prompt. Farklar: çıktı şemaya bağlı (her zaman
-// geçerli JSON), max_tokens daha yüksek (claude-sonnet-5 varsayılan olarak önce
-// düşünüyor ve düşünme token'ları da bu bütçeden harcanıyor), zaman aşımı var.
+// Tarif çıkarmanın TEK sunucu yolu: hem "Yeni Tarif Çıkar" (/api/extract,
+// görsel + not olabilir) hem paylaşım paneli job'u (/api/recipe-jobs) bunu
+// kullanıyor. Model, system prompt, JSON şeması ve token sınırı yalnızca burada
+// belirleniyor; istemci bunların hiçbirini seçemez (Kasım 2026'ya kadar
+// /api/extract istemcinin gönderdiği system/messages/max_tokens'ı olduğu gibi
+// iletiyordu). Çıktı şemaya bağlı (her zaman geçerli JSON); max_tokens yüksek
+// çünkü claude-sonnet-5 önce düşünüyor ve düşünme token'ları da bu bütçeden
+// harcanıyor; zaman aşımı var.
 const MODEL = "claude-sonnet-5";
+const MAX_TOKENS = 16000;
 
 const RECIPE_SCHEMA = {
   type: "object",
@@ -78,11 +84,30 @@ const RECIPE_SCHEMA = {
   additionalProperties: false,
 };
 
-// language: tarifin kullanıcıya görünen metinlerinin dili (uygulama dili); sayılar/şema değişmez.
+export class ExtractError extends Error {
+  constructor(message, kind) {
+    super(message);
+    this.kind = kind; // "config" | "timeout" | "network" | "provider" | "too_long" | "refused" | "parse"
+    this.providerStatus = undefined;
+  }
+}
+
+// Paylaşım paneli job'u: yalnızca link + açıklama/transkript.
 export async function extractRecipeFromCaption({ link, caption, timeoutMs, language = DEFAULT_CONTENT_LANG }) {
+  return extractRecipe({ link, caption, notes: "", images: [], timeoutMs, language });
+}
+
+// language: tarifin kullanıcıya görünen metinlerinin dili (uygulama dili); sayılar/şema değişmez.
+// images: [{ mediaType, data }] — çağıran taraf shared/imageLimits.js ile doğrulamış olmalı.
+export async function extractRecipe({ link, caption = "", notes = "", images = [], timeoutMs, language = DEFAULT_CONTENT_LANG }) {
   const lang = isContentLanguage(language) ? language : DEFAULT_CONTENT_LANG;
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("Sunucu yapılandırması eksik: ANTHROPIC_API_KEY tanımlı değil.");
+  if (!apiKey) throw new ExtractError("Sunucu yapılandırması eksik: ANTHROPIC_API_KEY tanımlı değil.", "config");
+
+  const content = [
+    ...images.map((img) => ({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } })),
+    { type: "text", text: buildRecipeUserText({ link, caption, notes, imageCount: images.length }) },
+  ];
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -99,30 +124,27 @@ export async function extractRecipeFromCaption({ link, caption, timeoutMs, langu
       },
       body: JSON.stringify({
         model: MODEL,
-        max_tokens: 16000,
+        max_tokens: MAX_TOKENS,
         system: recipeSystemPrompt(lang),
-        messages: [
-          {
-            role: "user",
-            content: [{ type: "text", text: buildRecipeUserText({ link, caption, notes: "", imageCount: 0 }) }],
-          },
-        ],
+        messages: [{ role: "user", content }],
         output_config: { format: { type: "json_schema", schema: RECIPE_SCHEMA } },
       }),
     });
     data = await response.json().catch(() => null);
   } catch (e) {
-    if (e.name === "AbortError") throw new Error(`Tarif oluşturma ${Math.round(timeoutMs / 1000)} sn içinde bitmedi.`);
-    throw new Error("Claude API'ye ulaşılamadı.");
+    if (e.name === "AbortError") throw new ExtractError(`Tarif oluşturma ${Math.round(timeoutMs / 1000)} sn içinde bitmedi.`, "timeout");
+    throw new ExtractError("Claude API'ye ulaşılamadı.", "network");
   } finally {
     clearTimeout(timer);
   }
 
   if (!response.ok || !data) {
-    throw new Error(`Claude API hatası (${response.status}): ${data?.error?.message || "bilinmeyen"}`);
+    const err = new ExtractError(`Claude API hatası (${response.status}): ${data?.error?.message || "bilinmeyen"}`, "provider");
+    err.providerStatus = response.status;
+    throw err;
   }
-  if (data.stop_reason === "max_tokens") throw new Error("Tarif çok uzun olduğu için tamamlanamadı.");
-  if (data.stop_reason === "refusal") throw new Error("Bu içerikten tarif oluşturulamadı.");
+  if (data.stop_reason === "max_tokens") throw new ExtractError("Tarif çok uzun olduğu için tamamlanamadı.", "too_long");
+  if (data.stop_reason === "refusal") throw new ExtractError("Bu içerikten tarif oluşturulamadı.", "refused");
 
   const text = (data.content || [])
     .map((b) => (b.type === "text" ? b.text : ""))
@@ -132,10 +154,10 @@ export async function extractRecipeFromCaption({ link, caption, timeoutMs, langu
   try {
     recipe = JSON.parse(text);
   } catch (e) {
-    throw new Error("Tarif ayrıştırılamadı.");
+    throw new ExtractError("Tarif ayrıştırılamadı.", "parse");
   }
   if (!recipe || typeof recipe.title !== "string" || !Array.isArray(recipe.ingredients)) {
-    throw new Error("Tarif ayrıştırılamadı.");
+    throw new ExtractError("Tarif ayrıştırılamadı.", "parse");
   }
   return { recipe: { ...applyPortionEstimate(recipe), content_lang: lang }, usage: data.usage, stopReason: data.stop_reason };
 }

@@ -9,11 +9,13 @@ const { lua, lauxlib, lualib, to_luastring, to_jsstring } = fengari;
 
 export function createMemoryRedis(db = new Map()) {
   // db: anahtar -> string | { type: "list", items: [] } | { type: "hash", map: Map }
+  //               | { type: "zset", map: Map<üye, skor> }
   const isStr = (v) => typeof v === "string";
   const getList = (key, create) => {
     const v = db.get(key);
     if (v && v.type === "list") return v.items;
-    if (v !== undefined && !create) throw new Error("WRONGTYPE");
+    // Gerçek Redis gibi: yanlış türdeki anahtar asla ezilmez.
+    if (v !== undefined) throw new Error("WRONGTYPE");
     if (!create) return null;
     const items = [];
     db.set(key, { type: "list", items });
@@ -22,11 +24,30 @@ export function createMemoryRedis(db = new Map()) {
   const getHash = (key, create) => {
     const v = db.get(key);
     if (v && v.type === "hash") return v.map;
-    if (v !== undefined && !create) throw new Error("WRONGTYPE");
+    // Gerçek Redis gibi: yanlış türdeki anahtar asla ezilmez.
+    if (v !== undefined) throw new Error("WRONGTYPE");
     if (!create) return null;
     const map = new Map();
     db.set(key, { type: "hash", map });
     return map;
+  };
+
+  const getZset = (key, create) => {
+    const v = db.get(key);
+    if (v && v.type === "zset") return v.map;
+    // Gerçek Redis gibi: yanlış türdeki anahtar asla ezilmez.
+    if (v !== undefined) throw new Error("WRONGTYPE");
+    if (!create) return null;
+    const map = new Map();
+    db.set(key, { type: "zset", map });
+    return map;
+  };
+  const scoreBound = (raw) => {
+    const s = String(raw);
+    if (s === "+inf") return { value: Infinity, open: false };
+    if (s === "-inf") return { value: -Infinity, open: false };
+    if (s.startsWith("(")) return { value: Number(s.slice(1)), open: true };
+    return { value: Number(s), open: false };
   };
 
   function run(command) {
@@ -50,14 +71,54 @@ export function createMemoryRedis(db = new Map()) {
       }
       case "DEL":
         return args.reduce((n, key) => n + (db.delete(key) ? 1 : 0), 0);
-      case "INCR": {
-        const cur = db.has(args[0]) ? Number(db.get(args[0])) : 0;
+      case "INCR":
+      case "DECR": {
+        const v = db.get(args[0]);
+        if (v !== undefined && !isStr(v)) throw new Error("WRONGTYPE");
+        const cur = v === undefined ? 0 : Number(v);
         if (!Number.isInteger(cur)) throw new Error("ERR value is not an integer");
-        db.set(args[0], String(cur + 1));
-        return cur + 1;
+        const next = cur + (op === "INCR" ? 1 : -1);
+        db.set(args[0], String(next));
+        return next;
       }
       case "EXPIRE":
+      case "PEXPIRE":
         return db.has(args[0]) ? 1 : 0;
+      // Sıralı küme (AI eşzamanlılık kirası).
+      case "ZADD": {
+        const map = getZset(args[0], true);
+        let added = 0;
+        for (let i = 1; i + 1 < args.length; i += 2) {
+          const score = Number(args[i]);
+          if (!Number.isFinite(score)) throw new Error("ERR value is not a valid float");
+          if (!map.has(String(args[i + 1]))) added++;
+          map.set(String(args[i + 1]), score);
+        }
+        return added;
+      }
+      case "ZREM": {
+        const map = getZset(args[0], false);
+        if (!map) return 0;
+        const n = args.slice(1).reduce((c, m) => c + (map.delete(String(m)) ? 1 : 0), 0);
+        if (map.size === 0) db.delete(args[0]);
+        return n;
+      }
+      case "ZCARD":
+        return (getZset(args[0], false) || new Map()).size;
+      case "ZREMRANGEBYSCORE": {
+        const map = getZset(args[0], false);
+        if (!map) return 0;
+        const min = scoreBound(args[1]);
+        const max = scoreBound(args[2]);
+        let n = 0;
+        for (const [member, score] of [...map]) {
+          const aboveMin = min.open ? score > min.value : score >= min.value;
+          const belowMax = max.open ? score < max.value : score <= max.value;
+          if (aboveMin && belowMax && map.delete(member)) n++;
+        }
+        if (map.size === 0) db.delete(args[0]);
+        return n;
+      }
       case "LPUSH": {
         const items = getList(args[0], true);
         for (const v of args.slice(1)) items.unshift(String(v));
@@ -206,5 +267,17 @@ export function createMemoryRedis(db = new Map()) {
     return readLua(L, -1);
   }
 
-  return { db, run };
+  // Upstash /pipeline biçimi: her komut kendi sonucunu ya da hatasını taşır,
+  // bir komutun hatası diğerlerini durdurmaz (Upstash'te pipeline atomik değil).
+  function pipeline(commands) {
+    return commands.map((command) => {
+      try {
+        return { result: run(command) };
+      } catch (e) {
+        return { error: e.message };
+      }
+    });
+  }
+
+  return { db, run, pipeline };
 }
