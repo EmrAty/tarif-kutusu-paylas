@@ -27,12 +27,14 @@ import { FirebaseAuthentication } from "@capacitor-firebase/authentication";
 import ShareReceiver from "./capacitorShare.js";
 import NativeSplash from "./capacitorSplash.js";
 import { scaleIngredient, FRACTION_GLYPHS, scaleNutrition, perServingNutrition, baseServingsOf, maxServingsFor, MIN_SERVINGS } from "./servings.js";
-import { CATEGORIES, recipeSystemPrompt, buildRecipeUserText } from "../shared/recipeExtraction.js";
+import { CATEGORIES } from "../shared/recipeExtraction.js";
+import { MAX_IMAGES, validateImageBatch } from "../shared/imageLimits.js";
+import { compressImageFile } from "./imageCompress.js";
 import { FREE_RECIPE_LIMIT, FREE_LIMIT_ERROR_CODE } from "../shared/limits.js";
 import { lockedRecipeIds } from "./recipeLocks.js";
 import { contentLangOf, translationPayload } from "../shared/recipeLocales.js";
 import { localizeRecipe, displayIngredient, contentFingerprint, localizeAmount } from "./recipeLocale.js";
-import { applyPortionEstimate, servingsUnitOf } from "../shared/portionEstimate.js";
+import { servingsUnitOf } from "../shared/portionEstimate.js";
 import { useLanguage, LANGUAGES, translate } from "./i18n.jsx";
 
 // ShareReceiver/NativeSplash sadece Android tarafında yazılmış özel native plugin'ler
@@ -230,6 +232,42 @@ function notifyResultMessage(result, t) {
 // Kişisel veriler ("personal") sadece o hesaba, aile verileri ("family:<id>")
 // o ailenin tüm üyelerine ait — hangisi olduğu her istekte scope/familyId ile
 // belirtiliyor. Kimlik doğrulaması Firebase ID token'ıyla yapılıyor.
+// Sunucunun makine-okunur hata kodları → kullanıcının dilinde, ne yapması
+// gerektiğini söyleyen mesaj (bkz. api/_lib/aiGuard.js, api/extract.js).
+const SERVER_ERROR_KEYS = {
+  rate_limited: "errors.rateLimited",
+  too_many_in_flight: "errors.tooManyInFlight",
+  ai_capacity: "errors.aiCapacity",
+  client_update_required: "errors.clientUpdateRequired",
+  extract_failed: "errors.extractFailed",
+  input_too_long: "errors.inputTooLong",
+  input_too_large: "errors.inputTooLong",
+  missing_input: "errors.needDescriptionOrImage",
+  too_many_images: "errors.tooManyImages",
+  image_too_large: "errors.imageTooLarge",
+  images_total_too_large: "errors.imagesTotalTooLarge",
+  image_unsupported: "errors.imageUnsupported",
+  image_invalid: "errors.imageProcessFailed",
+};
+
+export function serverErrorMessage(code) {
+  const key = code && SERVER_ERROR_KEYS[code];
+  return key ? translate(key, { max: MAX_IMAGES }) : null;
+}
+
+// /api/fetch-caption artık giriş istiyor (misafir hesap da giriş sayılır).
+export async function fetchCaption(url) {
+  const user = auth.currentUser;
+  if (!user) throw new Error(translate("errors.sessionNotFound"));
+  const token = await user.getIdToken();
+  const res = await fetch("/api/fetch-caption?url=" + encodeURIComponent(url), {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.caption) throw new Error(serverErrorMessage(data.code) || translate("errors.captionFetchFailed"));
+  return data;
+}
+
 export async function authedFetch(path, { method = "GET", body } = {}) {
   const user = auth.currentUser;
   if (!user) throw new Error(translate("errors.sessionNotFound"));
@@ -250,7 +288,9 @@ export async function authedFetch(path, { method = "GET", body } = {}) {
       err.code = data.code;
       throw err;
     }
-    throw new Error(data.error || translate("errors.requestFailed"));
+    const err = new Error(serverErrorMessage(data.code) || data.error || translate("errors.requestFailed"));
+    if (data.code) err.code = data.code;
+    throw err;
   }
   return data;
 }
@@ -342,51 +382,35 @@ async function importLegacyInto(scopeKey) {
 }
 
 
+// Tarif çıkarma tamamen sunucuda (api/extract.js → api/_lib/extractRecipe.js):
+// model, system prompt, JSON şeması ve token sınırı orada. İstemci yalnızca
+// tarif girdilerini gönderiyor; görseller seçilirken zaten küçültülmüş JPEG.
 async function extractRecipe({ link, caption, notes, images, language }) {
-  // Tarif metinleri uygulamanın dilinde üretilir (kaynak videonun dili değil); sayılar değişmez.
-  const system = recipeSystemPrompt(language);
-  const textSection = buildRecipeUserText({ link, caption, notes, imageCount: images ? images.length : 0 });
+  const imagePayload = (images || []).map((img) => ({ mediaType: img.mediaType, data: img.base64 }));
+  const imageError = validateImageBatch(imagePayload);
+  if (imageError) throw new Error(serverErrorMessage(imageError.code));
 
-  const contentBlocks = [];
-  (images || []).forEach((img) => {
-    contentBlocks.push({
-      type: "image",
-      source: { type: "base64", media_type: img.mediaType, data: img.base64 },
-    });
-  });
-  contentBlocks.push({ type: "text", text: textSection });
-
-  // Tarayıcıdan doğrudan api.anthropic.com'a anahtarsız istek atılamaz (401 döner
-  // ve bir API anahtarını istemci koduna gömmek güvensizdir). Bu yüzden istek kendi
-  // barındırdığımız /api/extract proxy'sine gidiyor; o, anahtarı sunucu tarafında
-  // tutup Anthropic API'yi bizim adımıza çağırıyor.
   const endpoint = import.meta.env.VITE_EXTRACT_API_URL || "/api/extract";
   const idToken = await auth.currentUser.getIdToken();
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: 8000,
-      system,
-      messages: [{ role: "user", content: contentBlocks }],
-    }),
-  });
-
-  if (!response.ok) throw new Error(translate("errors.apiRequestFailed"));
-  const data = await response.json();
-  const text = (data.content || [])
-    .map((b) => (b.type === "text" ? b.text : ""))
-    .join("")
-    .trim();
-  const clean = text.replace(/^```json\s*|^```\s*|```$/g, "").trim();
-  let parsed;
+  let response;
   try {
-    parsed = JSON.parse(clean);
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+      body: JSON.stringify({ link, caption, notes, images: imagePayload, language }),
+    });
   } catch (e) {
-    throw new Error(translate("errors.parseFailed"));
+    throw new Error(translate("errors.apiRequestFailed"));
   }
-  return { ...applyPortionEstimate(parsed), content_lang: language };
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    // Vercel gövde sınırını aşan istek fonksiyona hiç ulaşmadan 413 döner.
+    if (response.status === 413 && !data.code) throw new Error(serverErrorMessage("images_total_too_large"));
+    throw new Error(serverErrorMessage(data.code) || translate("errors.apiRequestFailed"));
+  }
+  if (!data.recipe || typeof data.recipe !== "object") throw new Error(translate("errors.parseFailed"));
+  // Porsiyon hesabı ve content_lang sunucuda uygulandı.
+  return data.recipe;
 }
 
 function mapAuthError(code, t) {
@@ -1413,7 +1437,9 @@ export default function TarifKutusu() {
         });
         setTranslations((prev) => ({ ...prev, [key]: { status: "done", translation: data.translation || null } }));
       } catch (e) {
-        setTranslations((prev) => ({ ...prev, [key]: { status: "error", error: e.message } }));
+        // Sunucu tarifi çeviri için fazla uzun bulduysa tekrar denemek anlamsız: ayrı durum.
+        const status = e.code === "input_too_large" ? "too_large" : "error";
+        setTranslations((prev) => ({ ...prev, [key]: { status, error: e.message } }));
       }
     },
     [language]
@@ -3163,15 +3189,10 @@ function AddForm({ link, caption, notes, images, category, busy, error, setLink,
     setFetchingCaption(true);
     setCaptionFetchError("");
     try {
-      const res = await fetch("/api/fetch-caption?url=" + encodeURIComponent(trimmed));
-      const data = await res.json();
-      if (res.ok && data.caption) {
-        setCaption((prev) => (prev && prev.trim() ? prev : data.caption));
-      } else if (!res.ok) {
-        setCaptionFetchError(t("errors.captionFetchFailed"));
-      }
+      const data = await fetchCaption(trimmed);
+      setCaption((prev) => (prev && prev.trim() ? prev : data.caption));
     } catch (e) {
-      setCaptionFetchError(t("errors.captionFetchFailed"));
+      setCaptionFetchError(e.message || t("errors.captionFetchFailed"));
     } finally {
       setFetchingCaption(false);
     }
@@ -3203,23 +3224,45 @@ function AddForm({ link, caption, notes, images, category, busy, error, setLink,
     boxSizing: "border-box",
   };
 
-  const handleImageSelect = (e) => {
+  // Seçilen görseller hemen küçültülüp JPEG'e çevriliyor (src/imageCompress.js):
+  // hem önizleme hem gönderilen veri bu küçük kopya. Sınırın üstündekiler
+  // eklenmiyor; kullanıcı neyin neden eklenmediğini görüyor.
+  const [imageError, setImageError] = useState("");
+  const [processingImages, setProcessingImages] = useState(0);
+  const handleImageSelect = async (e) => {
     const files = Array.from(e.target.files || []);
-    files.forEach((file) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const result = reader.result;
-        const match = /^data:(.+);base64,(.*)$/.exec(result || "");
-        if (match) {
-          setImages((prev) => [...prev, { id: uid(), mediaType: match[1], base64: match[2], previewUrl: result }]);
-        }
-      };
-      reader.readAsDataURL(file);
-    });
     e.target.value = "";
+    if (!files.length) return;
+    setImageError("");
+    const room = MAX_IMAGES - images.length - processingImages;
+    const accepted = files.slice(0, Math.max(0, room));
+    let message = files.length > accepted.length ? t("errors.tooManyImages", { max: MAX_IMAGES }) : "";
+    setProcessingImages((n) => n + accepted.length);
+    const added = [];
+    const asPayload = (list) => list.map((img) => ({ mediaType: img.mediaType, data: img.base64 }));
+    for (const file of accepted) {
+      try {
+        const out = await compressImageFile(file);
+        const candidate = { id: uid(), mediaType: out.mediaType, base64: out.base64, previewUrl: out.previewUrl };
+        // Toplam boyut (shared/imageLimits.js) aşılacaksa bu görsel eklenmiyor.
+        if (validateImageBatch(asPayload([...images, ...added, candidate]))) {
+          if (!message) message = t("errors.imagesTotalTooLarge");
+        } else {
+          added.push(candidate);
+        }
+      } catch (err) {
+        if (!message) message = serverErrorMessage(err.code) || t("errors.imageProcessFailed");
+      }
+    }
+    if (added.length) setImages((prev) => [...prev, ...added]);
+    setProcessingImages((n) => n - accepted.length);
+    if (message) setImageError(message);
   };
 
-  const removeImage = (id) => setImages((prev) => prev.filter((img) => img.id !== id));
+  const removeImage = (id) => {
+    setImageError("");
+    setImages((prev) => prev.filter((img) => img.id !== id));
+  };
 
   return (
     <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>
@@ -3304,7 +3347,17 @@ function AddForm({ link, caption, notes, images, category, busy, error, setLink,
           <span style={{ fontSize: "10px", fontWeight: 600 }}>{t("addForm.addImage")}</span>
           <input type="file" accept="image/*" multiple onChange={handleImageSelect} style={{ display: "none" }} />
         </label>
+        {processingImages > 0 && (
+          <div style={{ width: "72px", height: "72px", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Loader2 size={18} className="spin" color={COLORS.forest} />
+          </div>
+        )}
       </div>
+      {imageError && (
+        <div role="alert" style={{ fontSize: "12px", color: COLORS.danger, margin: "-8px 0 16px" }}>
+          {imageError}
+        </div>
+      )}
 
       <label style={labelStyle}>
         {t("addForm.captionLabel")}
@@ -3385,7 +3438,7 @@ function AddForm({ link, caption, notes, images, category, busy, error, setLink,
       <div style={{ display: "flex", alignItems: "center", gap: "12px", marginTop: "16px" }}>
         <button
           onClick={onSubmit}
-          disabled={busy}
+          disabled={busy || processingImages > 0}
           style={{
             display: "flex",
             alignItems: "center",
@@ -3482,14 +3535,15 @@ function ServingsStepper({ base, value, onChange, estimated, unit }) {
 // hata olursa asıl tarif + "Tekrar dene". Ekranı kilitlemez.
 function TranslationStatus({ status, onRetry }) {
   const { t } = useLanguage();
-  if (status !== "loading" && status !== "error") return null;
+  if (status !== "loading" && status !== "error" && status !== "too_large") return null;
+  const messageKey = status === "loading" ? "translation.loading" : status === "too_large" ? "translation.tooLarge" : "translation.failed";
   return (
     <div
       role="status"
       style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", padding: "8px 12px", borderRadius: "8px", background: "#EFE9D8", color: COLORS.inkSoft }}
     >
       {status === "loading" ? <Loader2 size={14} className="spin" /> : <AlertCircle size={14} />}
-      <span style={{ flex: 1 }}>{t(status === "loading" ? "translation.loading" : "translation.failed")}</span>
+      <span style={{ flex: 1 }}>{t(messageKey)}</span>
       {status === "error" && onRetry && (
         <button onClick={onRetry} style={{ background: "transparent", border: "none", color: COLORS.forest, fontWeight: 700, fontSize: "13px", cursor: "pointer", padding: 0 }}>
           {t("translation.retry")}

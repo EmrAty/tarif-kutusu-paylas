@@ -2,8 +2,13 @@
 // title/author_name alanlarını bıraktı; açıklama artık video sayfasındaki
 // itemStruct.desc'ten okunuyor. Bu testler dış ağa çıkmaz: fetch taklit ediliyor,
 // beklenmeyen her istek testi düşürür.
+//
+// Kasım 2026 (Grup 2): uç artık giriş istiyor ve redirect'leri kendisi doğrulayarak
+// izliyor (redirect: "manual"); testler sahte Firebase token'ı ve bellek içi Redis
+// (hız sınırı) ile çalışıyor. SSRF senaryoları: test/socialUrl.test.mjs.
 import test from "node:test";
 import assert from "node:assert/strict";
+import { setRoutes, calls as allCalls, invoke, resetDb } from "./helpers/fakeServices.mjs";
 
 const IPHONE_UA_RE = /iPhone/;
 const FULL_URL = "https://www.tiktok.com/@lezzetormanda/video/7247533449148402949";
@@ -30,17 +35,7 @@ const OEMBED_WITHOUT_TITLE = {
   embed_product_id: "7247533449148402949",
 };
 
-let calls = [];
-let routes = {};
-
-globalThis.fetch = async (input, init = {}) => {
-  const url = String(input);
-  calls.push({ url, init });
-  for (const [prefix, respond] of Object.entries(routes)) {
-    if (url.startsWith(prefix)) return respond(url, init);
-  }
-  throw new Error(`Testte beklenmeyen dış istek: ${url}`);
-};
+const calls = allCalls;
 
 const html = (body, finalUrl) => {
   const res = new Response(body, { status: 200, headers: { "Content-Type": "text/html" } });
@@ -51,25 +46,13 @@ const json = (status, body) => new Response(JSON.stringify(body), { status, head
 
 const { default: handler } = await import("../api/fetch-caption.js");
 
-async function get(url) {
-  const out = { status: 200, body: undefined };
-  const res = {
-    status(code) {
-      out.status = code;
-      return this;
-    },
-    json(payload) {
-      out.body = payload;
-      return this;
-    },
-  };
-  await handler({ method: "GET", query: { url } }, res);
-  return out;
+async function get(url, opts = {}) {
+  return invoke(handler, { method: "GET", query: { url }, ...opts });
 }
 
 function reset(newRoutes) {
-  calls = [];
-  routes = newRoutes;
+  resetDb();
+  setRoutes(Object.entries(newRoutes));
 }
 
 test("TikTok tam link: açıklama sayfadan gelir, oEmbed hiç çağrılmaz", async () => {
@@ -82,23 +65,28 @@ test("TikTok tam link: açıklama sayfadan gelir, oEmbed hiç çağrılmaz", asy
   assert.equal(r.body.caption, CAPTION);
   assert.equal(r.body.authorName, "lezzetormanda");
   assert.equal(r.body.resolvedUrl, FULL_URL);
+  assert.equal(calls.find((c) => c.url === FULL_URL).init.redirect, "manual");
   assert.ok(!calls.some((c) => c.url.includes("/oembed")), "oEmbed çağrılmamalı");
   const page = calls.find((c) => c.url === FULL_URL);
   assert.match(page.init.headers["User-Agent"], IPHONE_UA_RE);
 });
 
-test("vt.tiktok.com kısa link: redirect takip edilir, açıklama son sayfadan okunur", async () => {
+test("vt.tiktok.com kısa link: redirect doğrulanarak elle izlenir, açıklama son sayfadan okunur", async () => {
+  const target = FULL_URL + "?_r=1&utm_source=short_fallback";
   reset({
-    // Gerçek fetch redirect'i kendisi izler; taklitte kısa link doğrudan son sayfayı döndürür.
-    "https://vt.tiktok.com/": () => html(tiktokPage(), FULL_URL + "?_r=1&utm_source=short_fallback"),
+    // Kısa link gerçek TikTok gibi 301 + Location döndürür; sunucu Location'ı
+    // doğrulayıp kendisi devam eder.
+    "https://vt.tiktok.com/": () => new Response(null, { status: 301, headers: { Location: target } }),
+    "https://www.tiktok.com/@": () => html(tiktokPage()),
   });
   const r = await get(SHORT_URL);
   assert.equal(r.status, 200);
   assert.equal(r.body.caption, CAPTION);
   assert.equal(r.body.authorName, "lezzetormanda");
-  assert.ok(r.body.resolvedUrl.startsWith(FULL_URL));
+  assert.equal(r.body.resolvedUrl, target);
   const short = calls.find((c) => c.url === SHORT_URL);
-  assert.equal(short.init.redirect, "follow");
+  assert.equal(short.init.redirect, "manual");
+  assert.ok(calls.some((c) => c.url === target));
 });
 
 test("regresyon: sayfa alınamaz ve oEmbed title taşımazsa 200+boş caption DEĞİL, hata döner", async () => {
@@ -187,4 +175,21 @@ test("desteklenmeyen link 400, GET dışı 405, url yoksa 400", async () => {
   await handler({ method: "POST", query: {} }, { status: (c) => ((out.status = c), { json() {} }) });
   assert.equal(out.status, 405);
   assert.equal(calls.length, 0);
+});
+
+test("giriş yoksa 401 ve dışarıya hiç istek gitmez; misafir (anonim) hesap kabul edilir", async () => {
+  reset({ "https://www.tiktok.com/@": () => html(tiktokPage(), FULL_URL) });
+  const noAuth = await get(FULL_URL, { token: null });
+  assert.equal(noAuth.status, 401);
+  assert.equal(calls.length, 0);
+  const guest = await get(FULL_URL, { anonymous: true, uid: "GUEST1" });
+  assert.equal(guest.status, 200);
+  assert.equal(guest.body.caption, CAPTION);
+});
+
+test("http:// ile yapıştırılan desteklenen link https'e yükseltilir (sunucu http'ye gitmez)", async () => {
+  reset({ "https://www.tiktok.com/@": () => html(tiktokPage()) });
+  const r = await get("http://www.tiktok.com/@lezzetormanda/video/7247533449148402949");
+  assert.equal(r.status, 200);
+  assert.ok(calls.every((c) => c.url.startsWith("https://")));
 });
