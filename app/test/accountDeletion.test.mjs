@@ -70,6 +70,8 @@ globalThis.fetch = async (input, init = {}) => {
     const key = decodeURIComponent(url.slice(`${KV}/get/`.length));
     return json(200, { result: db.has(key) ? db.get(key) : null });
   }
+  // AI koruması (Grup 2) sayaç/kira komutlarını Upstash /pipeline ile gönderir.
+  if (url === `${KV}/pipeline`) return json(200, memoryRedis.pipeline(JSON.parse(init.body)));
   if (url === KV) return json(200, { result: runRedis(JSON.parse(init.body)) });
   if (url.includes("securetoken@system.gserviceaccount.com")) return json(200, { keys: [jwk] });
   if (url === "https://oauth2.googleapis.com/token") return json(200, { access_token: "test-access", expires_in: 3600 });

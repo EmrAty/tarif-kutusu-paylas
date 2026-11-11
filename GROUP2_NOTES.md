@@ -21,9 +21,18 @@ Durum (11 Kasım 2026): kod tamam, **commit/push YOK**. Değişiklikler bu workt
 - socialUrl: IPv6 kanonik ayrıştırma (`parseIPv6`).
 - Fail-open bilerek değişmedi. Testler: `test/aiHardening.test.mjs` (24), toplam 170/170.
 
+## Grup 1 ile entegrasyon (11 Kasım 2026, branch `integrate/group1-group2`, push YOK)
+- `5d9862b` (production main) üzerinden branch; Grup 2 (`50b18a7`) normal merge ile alındı (`83103af`), rebase yok.
+- Tek git çakışması: `app/package.json` test script'i (iki tarafın test dosyaları birlikte; `fengari` korundu).
+- `recipe-jobs.js`: Grup 1 `mutateBucket` (karşılaştır-ve-yaz + çakışmada yeniden deneme) ile Grup 2 kira `try/finally` + `handedOff` + `reserveAiBudget` birlikte; `jobRecipes.js` geri gelmedi.
+- `redis.js`: Grup 1 `redisEval` + sıkı `redisCommand`/`redisGet` hata işleme + Grup 2 `redisPipeline` birlikte.
+- `client_update_required` artık merkezi güncelleme kapısını da tetikliyor (`src/updateRequired.js`); `extractRecipe` hata yanıtı `src/apiErrors.js` → `classifyErrorResponse` üzerinden kapıya gidiyor, `err.code` korunuyor.
+- Test Redis'i tek motor: `test/helpers/memoryRedis.mjs` (gerçek Lua EVAL, MGET, DECR, sıralı küme, `/pipeline`, yanlış türde WRONGTYPE); `fakeServices.mjs` bunu kullanıyor; Grup 1 job testlerine `/pipeline` eklendi (koruma artık orada fail-open'a düşmüyor).
+- Yeni `test/integration.test.mjs` (11 test). `npm test` 205/205, `vite build` temiz.
+
 ## Kalan işler
 1. Kullanıcı: Anthropic Console + OpenAI'da aylık harcama limiti.
 2. Telefonda doğrulama: TikTok paylaş → caption → job → bildirim; Yeni Tarif Çıkar + ekran görüntüsü.
-3. Grup 1 main'e alındıktan sonra entegrasyon. Beklenen çakışmalar: `app/package.json` (test script, kesin), `app/api/recipe-jobs.js` (Grup 1 `jobRecipes.js`'i sildi), `app/src/App.jsx`, `app/src/i18n.jsx`, olası `app/api/_lib/redis.js`. Grup 1'in Redis test taklidi `/pipeline` desteklemiyorsa koruma testlerde fail-open olur.
+3. ~~Grup 1 ile entegrasyon~~ → `integrate/group1-group2` (yukarı). Sırada: Fable son denetimi, sonra kullanıcı onayıyla main'e merge + deploy.
 4. Entegrasyondan sonra `CLAUDE.md` güncellenecek (çakışma olmasın diye şimdi yazılmadı).
 5. İleride değerlendirilebilir: Firebase App Check / Play Integrity (native + yeni APK gerekir).

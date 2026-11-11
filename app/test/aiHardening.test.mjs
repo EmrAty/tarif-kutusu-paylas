@@ -4,7 +4,7 @@
 // Anthropic hep taklit; gerçek çağrı/para yok.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { setRoutes, calls, invoke, resetDb, json, db, setRedisFault } from "./helpers/fakeServices.mjs";
+import { setRoutes, calls, invoke, resetDb, json, db, setRedisFault, zsetSize } from "./helpers/fakeServices.mjs";
 
 process.env.RECIPE_JOB_NOTIFY_MIN_DELAY_MS = "0";
 
@@ -66,10 +66,7 @@ function counter(prefix) {
 }
 const globalHour = () => counter("rl:global:ai:3600:");
 const anyCostCounter = () => [...db.keys()].some((k) => k.startsWith("rl:global:") || k.startsWith("rl:user-ai:"));
-const inflight = (uid) => {
-  const z = db.get(`ai:inflight:heavy:${uid}`);
-  return z instanceof Map ? z.size : 0;
-};
+const inflight = (uid) => zsetSize(`ai:inflight:heavy:${uid}`);
 const settle = (ms = 150) => new Promise((r) => setTimeout(r, ms));
 
 const normalBody = { link: "https://www.tiktok.com/@sef/video/1", caption: "1 su bardağı mercimek, 1 soğan", notes: "", language: "tr" };

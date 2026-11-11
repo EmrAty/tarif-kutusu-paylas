@@ -34,7 +34,14 @@ export function idToken(uid, { anonymous = false } = {}) {
 }
 
 // ---------- bellek içi Redis ----------
-export const db = new Map(); // key -> string | Map (zset)
+// Grup 1'in ortak motoru (test/helpers/memoryRedis.mjs): GET/SET/MGET, gerçek Lua
+// ile EVAL (sürümlü kovalar), INCR/DECR, sıralı küme (kira), HASH ve /pipeline.
+// Tek motor kullanılıyor ki AI koruması ile sürümlü yazım aynı ortamda
+// birlikte sınansın.
+import { createMemoryRedis } from "./memoryRedis.mjs";
+
+export const db = new Map(); // key -> string | { type: "zset"|"hash"|"list", ... }
+const memory = createMemoryRedis(db);
 export const redisLog = [];
 export let redisDown = false;
 export function setRedisDown(value) {
@@ -47,64 +54,22 @@ export function setRedisFault(fn) {
   redisFault = fn || null;
 }
 
-function zset(key) {
-  let z = db.get(key);
-  if (!(z instanceof Map)) {
-    z = new Map();
-    db.set(key, z);
-  }
-  return z;
+// Komut çalışmadan hemen önce araya girmek için (ör. job'un EVAL'inden önce
+// başka bir istemcinin yazması). fn(command) async olabilir.
+let redisHook = null;
+export function setRedisHook(fn) {
+  redisHook = fn || null;
 }
 
-export function runRedis([op, ...args]) {
-  redisLog.push([op, ...args]);
-  switch (op.toUpperCase()) {
-    case "GET":
-      return db.has(args[0]) ? db.get(args[0]) : null;
-    case "SET": {
-      const [key, value, ...opts] = args;
-      if (opts.includes("NX") && db.has(key)) return null;
-      db.set(key, value);
-      return "OK";
-    }
-    case "DEL":
-      return args.reduce((n, key) => n + (db.delete(key) ? 1 : 0), 0);
-    case "INCR":
-    case "DECR": {
-      const next = Number(db.get(args[0]) || 0) + (op.toUpperCase() === "INCR" ? 1 : -1);
-      db.set(args[0], String(next));
-      return next;
-    }
-    case "HSET": {
-      const h = db.get(args[0]) instanceof Map ? db.get(args[0]) : new Map();
-      db.set(args[0], h);
-      for (let i = 1; i < args.length; i += 2) h.set(args[i], args[i + 1]);
-      return (args.length - 1) / 2;
-    }
-    case "HMGET": {
-      const h = db.get(args[0]);
-      return args.slice(1).map((f) => (h instanceof Map && h.has(f) ? h.get(f) : null));
-    }
-    case "EXPIRE":
-    case "PEXPIRE":
-      return db.has(args[0]) ? 1 : 0;
-    case "ZADD":
-      zset(args[0]).set(args[2], Number(args[1]));
-      return 1;
-    case "ZREM":
-      return zset(args[0]).delete(args[1]) ? 1 : 0;
-    case "ZCARD":
-      return zset(args[0]).size;
-    case "ZREMRANGEBYSCORE": {
-      const z = zset(args[0]);
-      const max = args[2] === "+inf" ? Infinity : Number(args[2]);
-      let n = 0;
-      for (const [member, score] of z) if (score <= max) n += z.delete(member) ? 1 : 0;
-      return n;
-    }
-    default:
-      throw new Error(`Test Redis'i bu komutu desteklemiyor: ${op}`);
-  }
+export function runRedis(command) {
+  redisLog.push(command);
+  return memory.run(command);
+}
+
+// Kiradaki üye sayısı (ai:inflight:<havuz>:<uid>).
+export function zsetSize(key) {
+  const v = db.get(key);
+  return v && v.type === "zset" ? v.map.size : 0;
 }
 
 // ---------- sahte fetch ----------
@@ -131,9 +96,26 @@ globalThis.fetch = async (input, init = {}) => {
             : [JSON.parse(init.body)];
       if (commands.some((c) => redisFault(c))) return json(500, { error: "fault" });
     }
-    if (url.startsWith(`${KV}/get/`)) return json(200, { result: runRedis(["GET", decodeURIComponent(url.slice(`${KV}/get/`.length))]) });
-    if (url === `${KV}/pipeline`) return json(200, JSON.parse(init.body).map((c) => ({ result: runRedis(c) })));
-    if (url === KV) return json(200, { result: runRedis(JSON.parse(init.body)) });
+    // Upstash gibi: komut hatası 400 + {error}; pipeline'da her eleman kendi
+    // sonucunu ya da hatasını taşır.
+    const single = (command) => {
+      try {
+        return json(200, { result: runRedis(command) });
+      } catch (e) {
+        return json(400, { error: e.message });
+      }
+    };
+    if (redisHook && url === KV) {
+      const hook = redisHook;
+      await hook(JSON.parse(init.body));
+    }
+    if (url.startsWith(`${KV}/get/`)) return single(["GET", decodeURIComponent(url.slice(`${KV}/get/`.length))]);
+    if (url === `${KV}/pipeline`) {
+      const commands = JSON.parse(init.body);
+      commands.forEach((c) => redisLog.push(c));
+      return json(200, memory.pipeline(commands));
+    }
+    if (url === KV) return single(JSON.parse(init.body));
   }
   if (url.includes("securetoken@system.gserviceaccount.com")) return json(200, { keys: [jwk] });
   calls.push({ url, init });
@@ -170,4 +152,5 @@ export function resetDb() {
   redisLog.length = 0;
   redisDown = false;
   redisFault = null;
+  redisHook = null;
 }

@@ -41,6 +41,8 @@ globalThis.fetch = async (input, init = {}) => {
     if (failReads && failReads(key)) return json(500, { error: "down" });
     return json(200, { result: redis.run(["GET", key]) });
   }
+  // AI koruması (Grup 2) sayaç/kira komutlarını Upstash /pipeline ile gönderir.
+  if (url === `${KV}/pipeline`) return json(200, redis.pipeline(JSON.parse(init.body)));
   if (url === KV) {
     const command = JSON.parse(init.body);
     const op = command[0];

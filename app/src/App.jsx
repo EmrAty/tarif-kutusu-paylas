@@ -33,7 +33,8 @@ import { compressImageFile } from "./imageCompress.js";
 import { FREE_RECIPE_LIMIT, FREE_LIMIT_ERROR_CODE } from "../shared/limits.js";
 import { lockedRecipeIds } from "./recipeLocks.js";
 import { createBucketStore, createDataTransport, parseBucketValue, BUCKET_STATUS, NOT_LOADED, CONFLICT_EXHAUSTED } from "./syncedBuckets.js";
-import { appUpdateGate, clientOutdatedError, isClientOutdatedResponse, reloadForUpdate, reloadDidNotHelp, CLIENT_OUTDATED } from "./updateRequired.js";
+import { appUpdateGate, clientOutdatedError, reloadForUpdate, reloadDidNotHelp, CLIENT_OUTDATED } from "./updateRequired.js";
+import { serverErrorKey, readErrorBody, classifyErrorResponse } from "./apiErrors.js";
 import { contentLangOf, translationPayload } from "../shared/recipeLocales.js";
 import { localizeRecipe, displayIngredient, contentFingerprint, localizeAmount } from "./recipeLocale.js";
 import { servingsUnitOf } from "../shared/portionEstimate.js";
@@ -236,24 +237,8 @@ function notifyResultMessage(result, t) {
 // belirtiliyor. Kimlik doğrulaması Firebase ID token'ıyla yapılıyor.
 // Sunucunun makine-okunur hata kodları → kullanıcının dilinde, ne yapması
 // gerektiğini söyleyen mesaj (bkz. api/_lib/aiGuard.js, api/extract.js).
-const SERVER_ERROR_KEYS = {
-  rate_limited: "errors.rateLimited",
-  too_many_in_flight: "errors.tooManyInFlight",
-  ai_capacity: "errors.aiCapacity",
-  client_update_required: "errors.clientUpdateRequired",
-  extract_failed: "errors.extractFailed",
-  input_too_long: "errors.inputTooLong",
-  input_too_large: "errors.inputTooLong",
-  missing_input: "errors.needDescriptionOrImage",
-  too_many_images: "errors.tooManyImages",
-  image_too_large: "errors.imageTooLarge",
-  images_total_too_large: "errors.imagesTotalTooLarge",
-  image_unsupported: "errors.imageUnsupported",
-  image_invalid: "errors.imageProcessFailed",
-};
-
 export function serverErrorMessage(code) {
-  const key = code && SERVER_ERROR_KEYS[code];
+  const key = serverErrorKey(code);
   return key ? translate(key, { max: MAX_IMAGES }) : null;
 }
 
@@ -286,8 +271,8 @@ export async function authedFetch(path, { method = "GET", body } = {}) {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    if (isClientOutdatedResponse(res.status, data)) {
-      appUpdateGate.markRequired();
+    // Önce merkezi güncelleme kapısı (426 / client_outdated / client_update_required).
+    if (classifyErrorResponse(res.status, data).outdated) {
       throw clientOutdatedError(translate("errors.clientOutdated"));
     }
     // Sunucunun Free tarif sınırı hatası istemcinin dilinde gösteriliyor.
@@ -450,11 +435,18 @@ async function extractRecipe({ link, caption, notes, images, language }) {
   } catch (e) {
     throw new Error(translate("errors.apiRequestFailed"));
   }
-  const data = await response.json().catch(() => ({}));
+  const data = await readErrorBody(response);
   if (!response.ok) {
+    // extract doğrudan fetch kullandığı için merkezi kapı burada ayrıca
+    // çağrılıyor: eski/uyumsuz istemci (client_update_required) Yenile
+    // penceresine düşer; ardından normal hata akışı sürer.
+    const { code } = classifyErrorResponse(response.status, data);
     // Vercel gövde sınırını aşan istek fonksiyona hiç ulaşmadan 413 döner.
-    if (response.status === 413 && !data.code) throw new Error(serverErrorMessage("images_total_too_large"));
-    throw new Error(serverErrorMessage(data.code) || translate("errors.apiRequestFailed"));
+    const effectiveCode = response.status === 413 && !code ? "images_total_too_large" : code;
+    const err = new Error(serverErrorMessage(effectiveCode) || translate("errors.apiRequestFailed"));
+    err.status = response.status;
+    if (effectiveCode) err.code = effectiveCode;
+    throw err;
   }
   if (!data.recipe || typeof data.recipe !== "object") throw new Error(translate("errors.parseFailed"));
   // Porsiyon hesabı ve content_lang sunucuda uygulandı.
