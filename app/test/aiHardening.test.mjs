@@ -213,7 +213,7 @@ test("maliyet sayacı: gerçek sağlayıcı isteği sayılır; aynı videonun te
   assert.equal((await invoke(extract, { uid: "ONE", body: normalBody })).status, 200);
   assert.equal(globalHour(), 1);
 
-  db.set("profile:SHARE", JSON.stringify({ isPlus: true, families: [] }));
+  db.set("user:SHARE:profile", JSON.stringify({ isPlus: true, families: [] }));
   const body = (requestId) => ({
     requestId,
     sourceUrl: "https://www.instagram.com/p/SAME/",
@@ -322,7 +322,7 @@ const jobBody = (i) => ({
 
 test("kira: kira alındıktan sonra Redis hatası (URL kilidi) → kira bırakılır", async () => {
   reset();
-  db.set("profile:LK", JSON.stringify({ isPlus: true, families: [] }));
+  db.set("user:LK:profile", JSON.stringify({ isPlus: true, families: [] }));
   setRedisFault((c) => c[0] === "SET" && c.includes("NX"));
   const r = await invoke(recipeJobs, { uid: "LK", body: jobBody(1) });
   assert.equal(r.status, 502);
@@ -333,7 +333,7 @@ test("kira: kira alındıktan sonra Redis hatası (URL kilidi) → kira bırakı
 
 test("kira: job kaydı yazılırken Redis hatası → kira bırakılır", async () => {
   reset();
-  db.set("profile:LK2", JSON.stringify({ isPlus: true, families: [] }));
+  db.set("user:LK2:profile", JSON.stringify({ isPlus: true, families: [] }));
   setRedisFault((c) => c[0] === "SET" && String(c[1]).startsWith("job:"));
   const r = await invoke(recipeJobs, { uid: "LK2", body: jobBody(2) });
   assert.ok(r.status >= 500);
@@ -343,7 +343,7 @@ test("kira: job kaydı yazılırken Redis hatası → kira bırakılır", async 
 
 test("kira: sağlayıcı hatası → job failed, kira bırakılır", async () => {
   reset(() => json(500, { error: { message: "boom" } }));
-  db.set("profile:LK3", JSON.stringify({ isPlus: true, families: [] }));
+  db.set("user:LK3:profile", JSON.stringify({ isPlus: true, families: [] }));
   const r = await invoke(recipeJobs, { uid: "LK3", body: jobBody(3) });
   assert.equal(r.status, 200);
   await settle();
@@ -353,7 +353,7 @@ test("kira: sağlayıcı hatası → job failed, kira bırakılır", async () =>
 
 test("kira: başarılı job → kira bırakılır", async () => {
   reset();
-  db.set("profile:LK4", JSON.stringify({ isPlus: true, families: [] }));
+  db.set("user:LK4:profile", JSON.stringify({ isPlus: true, families: [] }));
   const r = await invoke(recipeJobs, { uid: "LK4", body: jobBody(4) });
   await settle();
   assert.equal(JSON.parse(db.get(`job:LK4:${r.body.jobId}`)).status, "completed");
@@ -373,7 +373,7 @@ test("kira: alınamayan kira başka kiraları bırakmaz; iki kez release güvenl
   // recipe-jobs yolunda da: 6. job reddedilir, çalışan 5 kira yerinde kalır.
   const pending = [];
   reset(() => new Promise((resolve) => pending.push(() => resolve(okClaude()))));
-  db.set("profile:LK6", JSON.stringify({ isPlus: true, families: [] }));
+  db.set("user:LK6:profile", JSON.stringify({ isPlus: true, families: [] }));
   for (let i = 0; i < 5; i++) assert.equal((await invoke(recipeJobs, { uid: "LK6", body: jobBody(10 + i) })).status, 200);
   await settle(50);
   const sixth = await invoke(recipeJobs, { uid: "LK6", body: jobBody(20) });

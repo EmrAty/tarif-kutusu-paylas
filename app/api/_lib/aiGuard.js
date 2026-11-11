@@ -219,6 +219,41 @@ export async function guardAiRequest({ action, user, req, reserveBudget = true }
   return release;
 }
 
+// Vercel'de yanıt gönderildikten sonra çalışan kod (waitUntil dışında) garanti
+// değil: fonksiyon donabilir. Gerçek Preview'da /api/extract'ın `finally`'deki
+// release()'i yanıttan sonra çalışmadı ve kira TTL dolana kadar (330 sn) kaldı.
+// Bu yüzden kira YANITTAN ÖNCE bırakılmalı: deferResponse yanıtı bellekte tutar,
+// çağıran kirayı bıraktıktan sonra flush() ile gönderir.
+export function deferResponse(res) {
+  let status = 200;
+  let body;
+  let written = false;
+  const headers = [];
+  const proxy = {
+    status(code) {
+      status = code;
+      return proxy;
+    },
+    json(payload) {
+      body = payload;
+      written = true;
+      return proxy;
+    },
+    setHeader(name, value) {
+      headers.push([name, value]);
+    },
+  };
+  return {
+    res: proxy,
+    flush() {
+      if (!written) return;
+      written = false;
+      if (typeof res.setHeader === "function") headers.forEach(([n, v]) => res.setHeader(n, v));
+      res.status(status).json(body);
+    },
+  };
+}
+
 // GuardError'ı istemcinin anlayacağı biçimde yazar; değilse false döner.
 export function sendGuardError(res, e) {
   if (!(e instanceof GuardError)) return false;

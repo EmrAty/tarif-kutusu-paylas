@@ -1,6 +1,6 @@
 import { requireUser } from "./_lib/auth.js";
 import { extractRecipe, ExtractError } from "./_lib/extractRecipe.js";
-import { guardAiRequest, sendGuardError } from "./_lib/aiGuard.js";
+import { guardAiRequest, sendGuardError, deferResponse } from "./_lib/aiGuard.js";
 import { validateImageBatch, IMAGE_ERROR_CODES } from "../shared/imageLimits.js";
 import { DEFAULT_CONTENT_LANG, isContentLanguage } from "../shared/recipeLocales.js";
 
@@ -105,6 +105,8 @@ export default async function handler(req, res) {
     return bad(res, 500, "internal", "İstek tamamlanamadı.");
   }
 
+  // Kira yanıttan önce bırakılır (bkz. deferResponse).
+  const out = deferResponse(res);
   const startedAt = Date.now();
   try {
     const { recipe, usage, stopReason } = await extractRecipe({
@@ -118,19 +120,20 @@ export default async function handler(req, res) {
     console.log(
       JSON.stringify({ tag: "extract", ms: Date.now() - startedAt, images: images.length, outputTokens: usage?.output_tokens, stopReason })
     );
-    res.status(200).json({ recipe });
+    out.res.status(200).json({ recipe });
   } catch (e) {
     const kind = e instanceof ExtractError ? e.kind : "unknown";
     console.log(JSON.stringify({ tag: "extract", ms: Date.now() - startedAt, failed: kind, providerStatus: e.providerStatus }));
-    if (kind === "config") return bad(res, 500, "server_config", "Sunucu yapılandırması eksik.");
+    if (kind === "config") return bad(out.res, 500, "server_config", "Sunucu yapılandırması eksik.");
     if (kind === "refused" || kind === "parse" || kind === "too_long") {
-      return bad(res, 422, "extract_failed", "Bu içerikten tarif çıkarılamadı.");
+      return bad(out.res, 422, "extract_failed", "Bu içerikten tarif çıkarılamadı.");
     }
     if (kind === "provider" && (e.providerStatus === 429 || e.providerStatus === 529)) {
-      return bad(res, 503, "ai_capacity", "Tarif servisi şu anda çok yoğun. Lütfen biraz sonra tekrar dene.");
+      return bad(out.res, 503, "ai_capacity", "Tarif servisi şu anda çok yoğun. Lütfen biraz sonra tekrar dene.");
     }
-    return bad(res, 502, "extract_failed", "Tarif çıkarılamadı. Lütfen tekrar dene.");
+    return bad(out.res, 502, "extract_failed", "Tarif çıkarılamadı. Lütfen tekrar dene.");
   } finally {
     await release();
+    out.flush();
   }
 }

@@ -10,7 +10,7 @@ import { assertFamilyMember, familyRecipesKey } from "./_lib/families.js";
 import { isAccountDeleted, accountDeletedError } from "./_lib/accountDeletion.js";
 import { isTikTokLink, tiktokTranscript } from "./_lib/tiktok.js";
 import { parseSocialUrl, SUPPORTED_LINK_MESSAGE } from "./_lib/socialUrl.js";
-import { guardAiRequest, reserveAiBudget, sendGuardError } from "./_lib/aiGuard.js";
+import { guardAiRequest, reserveAiBudget, sendGuardError, deferResponse } from "./_lib/aiGuard.js";
 import { CATEGORIES } from "../shared/recipeExtraction.js";
 import { DEFAULT_CONTENT_LANG, isContentLanguage } from "../shared/recipeLocales.js";
 
@@ -440,6 +440,10 @@ async function handlePost(req, res, user) {
   // Kira sahipliği: kira ya arka plan job'una devredilir (o, bittiğinde bırakır)
   // ya da bu fonksiyon hangi yoldan çıkarsa çıksın (erken dönüş, Redis hatası,
   // throw) finally'de bırakılır. release() iki kez çağrılsa da güvenli.
+  // Yanıt, kira bırakıldıktan (ya da job'a devredildikten) sonra gönderilir:
+  // Vercel'de yanıttan sonraki kod garanti değil (bkz. deferResponse).
+  const deferred = deferResponse(res);
+  const out = deferred.res;
   let handedOff = false;
   try {
     const jobId = genId();
@@ -451,7 +455,7 @@ async function handlePost(req, res, user) {
       const job = lockedJobId ? effectiveJob(await redisGetJSON(jobKey(uid, lockedJobId), null)) : null;
       if (blocksNewJob(job)) {
         await redisSet(reqKey, job.id, REQUEST_TTL);
-        await respondWithJob(res, uid, job, true);
+        await respondWithJob(out, uid, job, true);
         return;
       }
       await redisSet(lockKey, jobId, URL_LOCK_TTL);
@@ -462,7 +466,7 @@ async function handlePost(req, res, user) {
       await reserveAiBudget({ uid, isAnonymous: !!user.isAnonymous });
     } catch (e) {
       await redisDel(lockKey).catch(() => {});
-      if (sendGuardError(res, e)) return;
+      if (sendGuardError(out, e)) return;
       throw e;
     }
 
@@ -499,9 +503,10 @@ async function handlePost(req, res, user) {
     );
     handedOff = true;
 
-    await respondWithJob(res, uid, job, false);
+    await respondWithJob(out, uid, job, false);
   } finally {
     if (!handedOff) await release().catch(() => {});
+    deferred.flush();
   }
 }
 

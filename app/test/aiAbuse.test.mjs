@@ -227,7 +227,7 @@ test("eşzamanlılık: aynı UID aynı anda sınırdan fazla AI işi açamaz; bi
 test("eşzamanlılık: paylaşım job'larında kira arka plan işi bitene kadar tutulur, sonra bırakılır", async () => {
   const pending = [];
   reset([[ANTHROPIC, () => new Promise((resolve) => pending.push(() => resolve(okClaude())))]]);
-  db.set("profile:JOB", JSON.stringify({ isPlus: true, families: [] }));
+  db.set("user:JOB:profile", JSON.stringify({ isPlus: true, families: [] }));
   const post = (i) =>
     invoke(recipeJobs, {
       uid: "JOB",

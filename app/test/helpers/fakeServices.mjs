@@ -126,7 +126,9 @@ globalThis.fetch = async (input, init = {}) => {
 };
 
 // ---------- handler çağırıcı ----------
-export async function invoke(handler, { method = "POST", uid = "U1", anonymous = false, token, body, query = {}, ip = "203.0.113.7" } = {}) {
+// onRespond(out): yanıt yazıldığı AN çağrılır. Vercel'de yanıttan sonraki kod
+// garanti olmadığı için "yanıt anında kira bırakılmış mı" testleri bunu kullanır.
+export async function invoke(handler, { method = "POST", uid = "U1", anonymous = false, token, body, query = {}, ip = "203.0.113.7", onRespond } = {}) {
   const headers = { "x-real-ip": ip };
   if (token !== null) headers.authorization = `Bearer ${token || idToken(uid, { anonymous })}`;
   const out = { status: 200, body: undefined, headers: {} };
@@ -137,6 +139,7 @@ export async function invoke(handler, { method = "POST", uid = "U1", anonymous =
     },
     json(payload) {
       out.body = payload;
+      if (onRespond) onRespond(out);
       return this;
     },
     setHeader(name, value) {

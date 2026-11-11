@@ -12,6 +12,7 @@ process.env.RECIPE_JOB_NOTIFY_MIN_DELAY_MS = "0";
 const { default: recipeJobs } = await import("../api/recipe-jobs.js");
 const { default: dataHandler } = await import("../api/data.js");
 const { default: extract } = await import("../api/extract.js");
+const { default: suggest } = await import("../api/suggest-recipes.js");
 const { default: translate, TRANSLATE_INPUT_LIMITS } = await import("../api/translate-recipe.js");
 const { reserveAiBudget, acquireSlot, __setClockForTests } = await import("../api/_lib/aiGuard.js");
 const { readBucket, compareAndSet, versionKey, listBackups } = await import("../api/_lib/versionedBucket.js");
@@ -77,7 +78,7 @@ test("entegrasyon 1: job tarifi sürümlü yazımla kaydedilir; aynı anda istem
   reset();
   const uid = "I1";
   const key = `user:${uid}:recipes`;
-  db.set(`profile:${uid}`, JSON.stringify({ isPlus: true, families: [] }));
+  db.set(`user:${uid}:profile`, JSON.stringify({ isPlus: true, families: [] }));
   db.set(key, JSON.stringify(recipesOf(5)));
   const store = clientStore(uid);
   await store.load("recipes", "personal");
@@ -117,7 +118,7 @@ test("entegrasyon 2: yazım iki kez sürüm çakışmasına uğrar, yeniden dene
   reset();
   const uid = "I2";
   const key = `user:${uid}:recipes`;
-  db.set(`profile:${uid}`, JSON.stringify({ isPlus: true, families: [] }));
+  db.set(`user:${uid}:profile`, JSON.stringify({ isPlus: true, families: [] }));
   db.set(key, JSON.stringify(recipesOf(3)));
   let bumps = 0;
   setRedisHook(async (command) => {
@@ -146,7 +147,7 @@ test("entegrasyon 3: sağlayıcı hatası → kova (değer + sürüm + yedek) de
   reset(() => json(500, { error: { message: "boom" } }));
   const uid = "I3";
   const key = `user:${uid}:recipes`;
-  db.set(`profile:${uid}`, JSON.stringify({ isPlus: true, families: [] }));
+  db.set(`user:${uid}:profile`, JSON.stringify({ isPlus: true, families: [] }));
   db.set(key, JSON.stringify(recipesOf(4)));
   db.set(versionKey(key), "9");
   const before = db.get(key);
@@ -164,7 +165,7 @@ test("entegrasyon 3b: yazım sırasında Redis hatası (EVAL 500) → veri deği
   reset();
   const uid = "I3B";
   const key = `user:${uid}:recipes`;
-  db.set(`profile:${uid}`, JSON.stringify({ isPlus: true, families: [] }));
+  db.set(`user:${uid}:profile`, JSON.stringify({ isPlus: true, families: [] }));
   db.set(key, JSON.stringify(recipesOf(2)));
   const before = db.get(key);
   setRedisFault(isEvalOn(key));
@@ -180,7 +181,7 @@ test("entegrasyon 3c: Free limit — kabulde dolu kova 403 (kira/sayaç yok); i�
   reset();
   const uid = "I3C";
   const key = `user:${uid}:recipes`;
-  db.set(`profile:${uid}`, JSON.stringify({ isPlus: false, families: [] }));
+  db.set(`user:${uid}:profile`, JSON.stringify({ isPlus: false, families: [] }));
 
   db.set(key, JSON.stringify(recipesOf(15)));
   const full = await invoke(recipeJobs, { uid, body: jobBody(40) });
@@ -214,7 +215,7 @@ test("entegrasyon 3c: Free limit — kabulde dolu kova 403 (kira/sayaç yok); i�
 test("entegrasyon 3d: doğrulama/aynı video çıkışları kira bırakır; ikinci paylaşım maliyet sayılmaz", async () => {
   reset();
   const uid = "I3D";
-  db.set(`profile:${uid}`, JSON.stringify({ isPlus: true, families: [] }));
+  db.set(`user:${uid}:profile`, JSON.stringify({ isPlus: true, families: [] }));
   const bad = await invoke(recipeJobs, { uid, body: jobBody(50, { category: "Yok" }) });
   assert.equal(bad.status, 400);
   assert.equal(inflight(uid), 0);
@@ -356,7 +357,7 @@ test("entegrasyon 6: AI koruması (/pipeline), sürümlü kova (MGET/EVAL) ve s�
 test("entegrasyon 7: tek UID extract + recipe-jobs karıştırarak saatlik toplam tavanı aşamaz; başka UID etkilenmez", async () => {
   reset();
   const uid = "I7";
-  db.set(`profile:${uid}`, JSON.stringify({ isPlus: true, families: [] }));
+  db.set(`user:${uid}:profile`, JSON.stringify({ isPlus: true, families: [] }));
   // Kalıcı hesap tavanı 120/saat: önceden 118 sağlayıcı işi sayılmış olsun.
   const bucket = Math.floor(FIXED_NOW / 1000 / 3600);
   db.set(`rl:user-ai:${uid}:3600:${bucket}`, "118");
@@ -379,4 +380,49 @@ test("entegrasyon 7: tek UID extract + recipe-jobs karıştırarak saatlik topla
   const other = await invoke(extract, { uid: "I7-OTHER", body });
   assert.equal(other.status, 200);
   assert.equal(anthropicCalls().length, 3);
+});
+
+// ============ Preview bulgusu — kira yanıttan ÖNCE bırakılmalı ============
+// Gerçek Preview'da (Vercel) /api/extract'ın yanıttan sonra çalışan release()'i
+// çalışmadı; kira 330 sn TTL ile kaldı. Burada yanıtın yazıldığı anda kiranın
+// sıfır olduğu doğrulanıyor.
+
+test("entegrasyon 8: extract/suggest/recipe-jobs yanıtı yazıldığı anda kira zaten bırakılmış (başarı ve hata yolları)", async () => {
+  const leaseAtResponse = async (handler, opts, pool = "heavy") => {
+    let atResponse = null;
+    const r = await invoke(handler, { ...opts, onRespond: () => (atResponse = zsetSize(`ai:inflight:${pool}:${opts.uid}`)) });
+    return { r, atResponse };
+  };
+  const body = { link: "https://www.tiktok.com/@sef/video/1", caption: "1 su bardağı mercimek, 1 soğan", notes: "", language: "tr" };
+
+  reset();
+  let x = await leaseAtResponse(extract, { uid: "I8A", body });
+  assert.equal(x.r.status, 200);
+  assert.equal(x.atResponse, 0, "extract başarı: yanıt anında kira bırakılmış");
+
+  reset(() => json(500, { error: { message: "boom" } }));
+  x = await leaseAtResponse(extract, { uid: "I8B", body });
+  assert.equal(x.r.status, 502);
+  assert.equal(x.atResponse, 0, "extract sağlayıcı hatası: yanıt anında kira bırakılmış");
+
+  reset(() => json(200, { content: [{ type: "text", text: '{"suggestions":[]}' }] }));
+  x = await leaseAtResponse(suggest, { uid: "I8C", body: { items: ["yumurta", "domates"] } }, "suggest");
+  assert.equal(x.r.status, 200, JSON.stringify(x.r.body));
+  assert.equal(x.atResponse, 0, "suggest: yanıt anında kira bırakılmış");
+
+  // recipe-jobs devretmeyen yol: aynı videonun ikinci paylaşımı.
+  reset();
+  db.set("user:I8D:profile", JSON.stringify({ isPlus: true, families: [] }));
+  const first = await invoke(recipeJobs, { uid: "I8D", body: jobBody(80) });
+  await waitForJob("I8D", first.body.jobId);
+  x = await leaseAtResponse(recipeJobs, { uid: "I8D", body: jobBody(80, { requestId: "int-80-second" }) });
+  assert.equal(x.r.body.duplicate, true);
+  assert.equal(x.atResponse, 0, "recipe-jobs tekrar paylaşım: yanıt anında kira bırakılmış");
+
+  // Guard reddi de (too_many_in_flight) yanıt anında yalnızca mevcut 5 kirayı gösterir.
+  reset();
+  for (let i = 0; i < 5; i++) await acquireSlot({ pool: "heavy", uid: "I8E", isAnonymous: false });
+  x = await leaseAtResponse(extract, { uid: "I8E", body });
+  assert.equal(x.r.body.code, "too_many_in_flight");
+  assert.equal(x.atResponse, 5);
 });
