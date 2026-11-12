@@ -155,6 +155,8 @@ export function createMemoryRedis(db = new Map()) {
         }
         return added;
       }
+      case "HLEN":
+        return (getHash(args[0], false) || new Map()).size;
       case "HKEYS":
         return [...(getHash(args[0], false) || new Map()).keys()];
       case "HDEL": {

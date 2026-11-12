@@ -1,6 +1,6 @@
 import { redisGet, redisSet, redisDel, redisGetJSON, redisSetJSON, redisCommand } from "./redis.js";
 import { getProfile, profileKey } from "./profile.js";
-import { membersKey } from "./families.js";
+import { membersKeysWithAux, removeMemberFromFamily } from "./families.js";
 import { fcmTokensKey, pushTargetsKey, releasePushOwnership } from "./fcm.js";
 import { bucketAuxKeys } from "./versionedBucket.js";
 import { getServiceAccountToken } from "./googleAuth.js";
@@ -61,7 +61,9 @@ function personalKeys(uid) {
 
 // Paylaşım paneli job kayıtları (TTL'li ama kaynak linki içeriyor).
 function jobKeyPatterns(uid) {
-  return [`job:${uid}:*`, `job-req:${uid}:*`, `job-url:${uid}:*`, `user:${uid}:*`];
+  // push-sent: job başına bildirim tekrar işareti (içerik yok, 7 gün TTL) —
+  // yine de hesapla birlikte silinir.
+  return [`job:${uid}:*`, `job-req:${uid}:*`, `job-url:${uid}:*`, `push-sent:${uid}:*`, `user:${uid}:*`];
 }
 
 async function scanKeys(pattern) {
@@ -90,7 +92,7 @@ async function deleteWholeFamily(id, meta) {
     `family:${id}:pendingJobRecipes`,
     ...(meta.inviteCode ? [inviteKey(meta.inviteCode)] : []),
   ]);
-  await redisDel(membersKey(id));
+  await deleteKeys(membersKeysWithAux(id));
   // meta en son: yarıda kalırsa tekrar çağrıda aile hâlâ bulunup temizleniyor.
   await redisDel(familyMetaKey(id));
 }
@@ -106,11 +108,8 @@ function nextOwner(members) {
 async function leaveFamilyForDeletion(uid, id) {
   const meta = await redisGetJSON(familyMetaKey(id), null);
   if (!meta) return { id, result: "missing" };
-  const members = await redisGetJSON(membersKey(id), {});
-  if (members[uid]) {
-    delete members[uid];
-    if (Object.keys(members).length > 0) await redisSetJSON(membersKey(id), members);
-  }
+  // Atomik: aynı anda katılan başka bir üye listeden düşmez.
+  const { value: members } = await removeMemberFromFamily(uid, id);
   if (Object.keys(members).length === 0) {
     await deleteWholeFamily(id, meta);
     return { id, result: "deleted" };
