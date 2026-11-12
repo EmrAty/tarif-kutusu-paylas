@@ -15,6 +15,14 @@ Branch `group-3-legacy-fcm`, production main `52e04fd` üzerinden. Main'e merge 
 - onarım: geçerli davet koduyla tekrar katılma (`repaired: true`, eski katılma tarihi korunur) ya da ayrılma.
 Ters durum (üye listesinde var, profilde yok) da aynı kodla onarılır. Katılmada profil yazılamazsa üye listesine eklenen geri alınır.
 
+**Silme ↔ katılma yarışı (ikinci denetim):** ortak `deleteFamilyCompletely` (kurucu silmesi ve hesap silmede son üye): 1) meta'ya `deleting` işareti, 2) davet kodu silinir, 3) üye listesi işaretten SONRA okunup her üyenin profilinden aile çıkarılır (kurucu en son), 4) veri + üye listesi, 5) meta en son. Katılma, üye listesi + profil yazımından SONRA meta'yı yeniden okur; yoksa ya da `deleting` ise kendini geri alır (404) ve yeniden yarattığı boş üye listesini siler. Biri mutlaka yarışı görür. `deleting` aileye veri erişimi/katılma/job yok (404). Yarıda kalan silme: özet `membership: "deleting"`; kurucu "Silmeyi Tamamla", üyeler "Aileden Ayrıl".
+
+**Hayalet kayıtlar:** profilde olup aile kaydı (meta) BAŞARILI bir okumada (`MGET`, `null`) gerçekten bulunmayan kimlikler, aile listesi açılınca ve katılma/oluşturma öncesi kullanıcının kendi profilinden (atomik) çıkarılır. Okuma hatası fırlar, hiçbir şey silinmez.
+
+**Eski web paketi uyumu:** erişilemeyen özetler `members: []`, `inviteCode: null`, `ownerUid: null` taşır (production paketi `f.members.map(...)` çağırıyor). Kurucu kimliği yalnızca `deleting` durumunda ve yalnızca üyeye/kurucuya.
+
+**React hook düzeltmesi:** `FamiliesView`'de `repairCodes` hook'u erken dönüşten önceye alındı; Plus'sız ama yalnızca erişilemeyen ailesi olan kullanıcı da kartı görür (ayrılabilir).
+
 ## Push (Fable D2, D3, D4)
 
 **Şema:** `user:<uid>:pushTargets` (HASH: token → {platform, installationId, updatedAt}), `push-owner:<sha256(token)>` = uid. Eski `user:<uid>:fcmTokens` okunur, silinmez; token platformla kaydolunca oradan çıkar.
@@ -42,4 +50,4 @@ Erişim: yalnızca `LEGACY_DATA_OWNER_UIDS` (anonim olmayan). Biçim: repo geçm
 `app/scripts/audit-group3-readonly.mjs` — yalnızca SCAN/GET/MGET/HLEN (diğer komutları reddeder), içerik yazdırmaz. Raporlar: tutarsız aile kayıtları, legacy biçim sınıfı, eski/yeni push kayıt sayıları.
 
 ## Test
-`group3Fcm` (24), `group3Family` (15), `group3Legacy` (12). `npm test` 257/257, `vite build` temiz.
+`group3Fcm` (24), `group3Family` (28), `group3Legacy` (12). `npm test` 270/270, `vite build` temiz. Hook sırası testi paket dışında: eslint `react-hooks/rules-of-hooks` + jsdom ile gerçek `FamiliesView` render geçişi (repoya bağımlılık eklenmedi).

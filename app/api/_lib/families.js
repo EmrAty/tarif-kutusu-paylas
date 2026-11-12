@@ -1,6 +1,19 @@
-import { redisGetJSON } from "./redis.js";
-import { getProfile } from "./profile.js";
+import { redisGet, redisGetJSON, redisSetJSON, redisDel, redisCommand } from "./redis.js";
+import { getProfile, updateProfile } from "./profile.js";
 import { mutateBucket, bucketAuxKeys } from "./versionedBucket.js";
+
+export function familyMetaKey(id) {
+  return `family:${id}:meta`;
+}
+export function inviteKey(code) {
+  return `invite:${code}:family`;
+}
+const FAMILY_BUCKETS = ["recipes", "shopping-list", "pantry-items"];
+
+// Silme sürüyor (ya da yarıda kalmış): erişim, katılma ve yeni veri yok.
+export function isFamilyDeleting(meta) {
+  return !!(meta && meta.deleting);
+}
 
 export function membersKey(id) {
   return `family:${id}:members`;
@@ -78,7 +91,7 @@ export async function assertFamilyAccess(uid, familyId, profile) {
     redisGetJSON(`family:${familyId}:meta`, null),
     redisGetJSON(membersKey(familyId), {}),
   ]);
-  if (!meta) throw accessError(404, "Aile bulunamadı.");
+  if (!meta || isFamilyDeleting(meta)) throw accessError(404, "Aile bulunamadı.");
   if (!members || typeof members !== "object" || !members[uid]) {
     throw accessError(403, "Bu ailenin üyesi değilsin.");
   }
@@ -122,7 +135,97 @@ export async function assertFamilyMember(uid, familyId) {
     redisGetJSON(`family:${familyId}:meta`, null),
     redisGetJSON(membersKey(familyId), {}),
   ]);
-  if (!meta) throw accessError(404, "Aile bulunamadı.");
+  if (!meta || isFamilyDeleting(meta)) throw accessError(404, "Aile bulunamadı.");
   if (!members || !members[uid]) throw accessError(403, "Bu ailenin üyesi değilsin.");
   return { profile, meta };
+}
+
+// ---------------------------------------------------------------------------
+// Aile silme ve hayalet kayıtlar (Grup 3)
+//
+// Yarış: kurucu silerken başka biri katılırsa, eski kodda katılma 200 dönüp
+// aile silinebiliyor, katılanın profilinde silinmiş aile kalıyordu ("hayalet":
+// arayüzde görünmüyor ama 2'lik aile sınırından yer yiyor).
+//
+// Kural (iki taraflı kontrol):
+//   silme : 1) meta'ya `deleting` işareti  2) davet kodu silinir
+//           3) üye listesi İŞARETTEN SONRA okunur, her üyenin profilinden aile
+//              çıkarılır  4) veri + üye listesi silinir  5) meta en son
+//   katılma: üye listesi + profil yazıldıktan SONRA meta yeniden okunur; yoksa
+//           ya da `deleting` ise katılma kendini geri alır (404).
+// Katılmanın üye yazımı ya silmenin 3. adımından önce olur (silme onu görür
+// ve profilini temizler) ya da sonra olur (o zaman katılmanın son kontrolü
+// işareti görür). İkisi birden kaçıramaz. Yarıda kalan silme işaretli kalır;
+// kurucu tekrar deneyebilir, üyeler ayrılabilir.
+// ---------------------------------------------------------------------------
+
+export function familyDataKeys(id) {
+  return [
+    ...FAMILY_BUCKETS.flatMap((b) => {
+      const key = `family:${id}:${b}`;
+      return [key, ...bucketAuxKeys(key)];
+    }),
+    `family:${id}:pendingJobRecipes`, // eski sürümden kalmış olabilecek işaretçi
+    ...membersKeysWithAux(id),
+  ];
+}
+
+const dropFamilyFromProfile = (uid, id) =>
+  updateProfile(uid, (p) => (p.families.includes(id) ? { ...p, families: p.families.filter((f) => f !== id) } : undefined));
+
+// lastUid: profili EN SON güncellenecek üye (kurucu — yarıda kalırsa tekrar
+// deneyebilsin). skipUid: profiline hiç dokunulmayacak üye (hesabı silinen).
+export async function deleteFamilyCompletely(id, { lastUid = null, skipUid = null } = {}) {
+  const meta = await redisGetJSON(familyMetaKey(id), null);
+  if (!meta) return { result: "missing" };
+  if (!meta.deleting) await redisSetJSON(familyMetaKey(id), { ...meta, deleting: true, deletingAt: Date.now() });
+  if (meta.inviteCode) await redisDel(inviteKey(meta.inviteCode));
+  // İşaretten SONRA okunur (bozuksa silme durur; tekrar denenebilir).
+  const members = parseMembers(await redisGet(membersKey(id)));
+  const uids = Object.keys(members).filter((u) => u !== skipUid && u !== lastUid);
+  await Promise.all(uids.map((u) => dropFamilyFromProfile(u, id)));
+  if (lastUid && lastUid !== skipUid) await dropFamilyFromProfile(lastUid, id);
+  const keys = familyDataKeys(id);
+  for (let i = 0; i < keys.length; i += 50) await redisCommand(["DEL", ...keys.slice(i, i + 50)]);
+  // meta en son: yarıda kalırsa aile işaretli hâlde bulunup tekrar silinebilir.
+  await redisDel(familyMetaKey(id));
+  return { result: "deleted" };
+}
+
+// Katılmanın son kontrolü (bkz. yukarıdaki kural). Aile yoksa ya da
+// siliniyorsa bu kullanıcının az önce yazdığı üyelik ve profil kaydı geri
+// alınır; true döner. Okuma hatası fırlar (üyelik silinmez).
+export async function undoJoinIfFamilyGone(uid, id) {
+  const meta = await redisGetJSON(familyMetaKey(id), null);
+  if (meta && !isFamilyDeleting(meta)) return false;
+  await removeMemberFromFamily(uid, id).catch(() => {});
+  await dropFamilyFromProfile(uid, id).catch(() => {});
+  if (!meta) {
+    // Silme üye listesini çoktan sildiyse katılma onu boş olarak yeniden
+    // yaratmış olabilir: sahipsiz boş liste kalmasın.
+    const rest = await redisGetJSON(membersKey(id), null).catch(() => null);
+    if (rest && typeof rest === "object" && Object.keys(rest).length === 0) {
+      for (const key of membersKeysWithAux(id)) await redisDel(key).catch(() => {});
+    }
+  }
+  return true;
+}
+
+// Hayalet temizliği: profildeki aile kimliklerinden, aile kaydı (meta) BAŞARILI
+// bir okumada gerçekten bulunmayanları kullanıcının KENDİ profilinden çıkarır.
+// Okuma hatası fırlar — "okunamadı" asla "silinmiş" sayılmaz. Yalnızca erişim
+// azaltır, hiçbir üyelik vermez. Kalan aile kimliklerini döndürür.
+export async function pruneDeletedFamilies(uid, familyIds) {
+  if (!familyIds.length) return familyIds;
+  const metas = await redisCommand(["MGET", ...familyIds.map(familyMetaKey)]);
+  if (!Array.isArray(metas) || metas.length !== familyIds.length) {
+    throw Object.assign(new Error("Aile bilgisi okunamadı."), { status: 502 });
+  }
+  const gone = familyIds.filter((id, i) => metas[i] === null);
+  if (!gone.length) return familyIds;
+  const updated = await updateProfile(uid, (p) => {
+    const next = p.families.filter((f) => !gone.includes(f));
+    return next.length === p.families.length ? undefined : { ...p, families: next };
+  });
+  return updated.value.families;
 }

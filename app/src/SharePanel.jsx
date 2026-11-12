@@ -95,7 +95,7 @@ export default function SharePanel() {
     authedFetch("/api/families")
       .then((data) => {
         if (cancelled) return;
-        const families = data.isPlus && Array.isArray(data.families) ? data.families.filter((f) => f.membership !== "unverified") : [];
+        const families = data.isPlus && Array.isArray(data.families) ? data.families.filter((f) => !f.membership || f.membership === "verified") : [];
         writeFamiliesHint(families.length > 0);
         setFamilyInfo({ status: "ready", families: families.map((f) => ({ id: f.id, name: f.name })) });
       })

@@ -129,7 +129,8 @@ test("Aile 5: mevcut tutarsız kayıt (profilde var, üye listesinde yok) → er
   // Aile listesi: yalnızca ad + durum; davet kodu ve üyeler yok.
   const g = await invoke(families, { method: "GET", uid: "GHOST", query: { name: "Hayalet" } });
   assert.equal(g.status, 200);
-  assert.deepEqual(g.body.families, [{ id: fam.id, name: "Ev", membership: "unverified" }]);
+  // Eski web paketi uyumluluğu: members/inviteCode/ownerUid alanları var ama boş.
+  assert.deepEqual(g.body.families, [{ id: fam.id, name: "Ev", membership: "unverified", inviteCode: null, ownerUid: null, members: [] }]);
   // Ad senkronizasyonu üye EKLEMEZ.
   assert.deepEqual(members(fam.id), ["OWNER"]);
   assert.equal((await readFamily("GHOST", fam.id)).status, 403);
@@ -284,4 +285,162 @@ test("Aile 15: salt okunur production denetim betiği tutarsız kayıtları bulu
   assert.equal(JSON.stringify([...db.entries()].map(([k, v]) => [k, typeof v === "string" ? v : "x"])), before, "hiçbir şey yazılmadı");
   await assert.rejects(run(["SET", "x", "1"]), /izin verilmeyen/);
   await assert.rejects(run(["DEL", "x"]), /izin verilmeyen/);
+});
+
+// ------------------------- silme ↔ katılma yarışı -------------------------
+
+const familyKeysLeft = (id) => [...db.keys()].filter((k) => k.startsWith(`family:${id}:`));
+const deleteFam = (owner, id) => invoke(families, { uid: owner, body: { action: "delete", familyId: id } });
+
+// Silmenin her adımının tam öncesinde katılmayı araya sokar.
+const DELETE_STEPS = [
+  ["silme işareti (meta SET)", (id) => (c) => c[0] === "SET" && c[1] === `family:${id}:meta`],
+  ["davet kodu silme", () => (c) => c[0] === "DEL" && String(c[1]).startsWith("invite:")],
+  ["üye profillerinin güncellenmesi", () => (c) => c[0] === "EVAL" && c[3] === "user:OWNER:profile"],
+  ["veri/üye anahtarlarının silinmesi", (id) => (c) => c[0] === "DEL" && c.slice(1).includes(`family:${id}:members`)],
+  ["meta silme", (id) => (c) => c[0] === "DEL" && c[1] === `family:${id}:meta` && c.length === 2],
+];
+
+for (const [label, predicateFor] of DELETE_STEPS) {
+  test(`Aile 16: kurucu silerken katılma (${label} öncesi) → hayalet kayıt ve sahipsiz anahtar kalmaz`, async () => {
+    reset();
+    const fam = await createFamily();
+    plus("JOINER");
+    let joinStatus = null;
+    const fired = interleaveOnce(predicateFor(fam.id), async () => {
+      joinStatus = (await join("JOINER", fam.inviteCode)).status;
+    });
+    assert.equal((await deleteFam("OWNER", fam.id)).status, 200);
+    setRedisHook(null);
+    assert.ok(fired(), "yarış gerçekten oluştu");
+    assert.ok(joinStatus === 200 || joinStatus === 404, String(joinStatus));
+    assert.deepEqual(profileFamilies("JOINER"), [], "katılanın profilinde silinmiş aile kalmadı");
+    assert.deepEqual(profileFamilies("OWNER"), []);
+    assert.deepEqual(familyKeysLeft(fam.id), []);
+  });
+}
+
+// Katılmanın her adımının tam öncesinde silmenin TAMAMINI araya sokar.
+const JOIN_STEPS = [
+  ["üye listesi yazımı", (id) => (c) => c[0] === "EVAL" && c[3] === `family:${id}:members`],
+  ["profil yazımı", () => (c) => c[0] === "EVAL" && c[3] === "user:JOINER:profile"],
+];
+for (const [label, predicateFor] of JOIN_STEPS) {
+  test(`Aile 17: katılma sürerken (${label} öncesi) aile tamamen silinirse katılma 404 ve geri alınır (Fable senaryosu)`, async () => {
+    reset();
+    const fam = await createFamily();
+    plus("JOINER");
+    const fired = interleaveOnce(predicateFor(fam.id), async () => {
+      assert.equal((await deleteFam("OWNER", fam.id)).status, 200);
+    });
+    const r = await join("JOINER", fam.inviteCode);
+    setRedisHook(null);
+    assert.ok(fired());
+    assert.equal(r.status, 404, JSON.stringify(r.body));
+    assert.deepEqual(profileFamilies("JOINER"), []);
+    assert.deepEqual(familyKeysLeft(fam.id), [], "yeniden yaratılmış boş üye listesi de temizlendi");
+    // Kota boş: iki yeni aileye katılabilir.
+    const a = await createFamily("O2");
+    const b = await createFamily("O3");
+    assert.equal((await join("JOINER", a.inviteCode)).status, 200);
+    assert.equal((await join("JOINER", b.inviteCode)).status, 200);
+  });
+}
+
+test("Aile 18: mevcut hayalet kayıt — aile listesi açılınca profilden temizlenir, kota açılır", async () => {
+  reset();
+  const a = await createFamily("O2");
+  plus("U", ["gone-family-1", "gone-family-2"]); // eski yarıştan kalmış, aile kaydı yok
+  assert.equal((await join("U", a.inviteCode)).status, 200, "katılma da önce hayaletleri temizler");
+  assert.deepEqual(profileFamilies("U"), [a.id]);
+  plus("V", ["gone-family-3"]);
+  const g = await invoke(families, { method: "GET", uid: "V" });
+  assert.equal(g.status, 200);
+  assert.deepEqual(g.body.families, []);
+  assert.deepEqual(profileFamilies("V"), []);
+});
+
+test("Aile 19: geçici okuma hatası 'aile silinmiş' sayılmaz — meşru üyelik silinmez", async () => {
+  reset();
+  const fam = await createFamily();
+  plus("M");
+  await join("M", fam.inviteCode);
+  setRedisFault((c) => c[0] === "MGET" && String(c[1]).endsWith(":meta"));
+  const g = await invoke(families, { method: "GET", uid: "M" });
+  const j = await join("M", "ZZZZZZ");
+  setRedisFault(null);
+  assert.ok(g.status >= 500, String(g.status));
+  assert.ok(j.status >= 500, String(j.status));
+  assert.deepEqual(profileFamilies("M"), [fam.id]);
+  assert.deepEqual(members(fam.id), ["M", "OWNER"]);
+  assert.equal((await readFamily("M", fam.id)).status, 200);
+});
+
+test("Aile 20: yarıda kalmış silme — erişim yok, durum görünür, kurucu tamamlar, üye ayrılabilir", async () => {
+  reset();
+  const fam = await createFamily();
+  plus("M");
+  await join("M", fam.inviteCode);
+  // Silme işaretten hemen sonra çöktü.
+  setRedisFault((c) => c[0] === "DEL" && String(c[1]).startsWith("invite:"));
+  const crashed = await deleteFam("OWNER", fam.id);
+  setRedisFault(null);
+  assert.ok(crashed.status >= 500);
+  assert.equal(JSON.parse(db.get(`family:${fam.id}:meta`)).deleting, true);
+  assert.equal((await readFamily("M", fam.id)).status, 404, "silinmekte olan aileye erişim yok");
+  plus("X");
+  assert.equal((await join("X", fam.inviteCode)).status, 404, "silinmekte olan aileye katılma yok");
+
+  const gm = await invoke(families, { method: "GET", uid: "M" });
+  assert.deepEqual(gm.body.families, [{ id: fam.id, name: "Ev", membership: "deleting", inviteCode: null, ownerUid: "OWNER", members: [] }]);
+  const go = await invoke(families, { method: "GET", uid: "OWNER" });
+  assert.equal(go.body.families[0].membership, "deleting");
+
+  assert.equal((await invoke(families, { uid: "M", body: { action: "leave", familyId: fam.id } })).status, 200);
+  assert.deepEqual(profileFamilies("M"), []);
+  assert.equal((await deleteFam("OWNER", fam.id)).status, 200, "kurucu silmeyi tamamlar");
+  assert.deepEqual(familyKeysLeft(fam.id), []);
+  assert.deepEqual(profileFamilies("OWNER"), []);
+  assert.equal(db.has(`invite:${fam.inviteCode}:family`), false);
+});
+
+test("Aile 21: üye olmayan kişi, kurucu uid'sini bilse de silinmekte olan aileyi silemez; kurucu kimliği yalnız üyeye görünür", async () => {
+  reset();
+  const fam = await createFamily();
+  plus("GHOST", [fam.id]);
+  const meta = JSON.parse(db.get(`family:${fam.id}:meta`));
+  db.set(`family:${fam.id}:meta`, JSON.stringify({ ...meta, deleting: true }));
+  const g = await invoke(families, { method: "GET", uid: "GHOST" });
+  assert.equal(g.body.families[0].ownerUid, null);
+  assert.equal((await deleteFam("GHOST", fam.id)).status, 403);
+  assert.ok(db.has(`family:${fam.id}:meta`));
+});
+
+test("Aile 22: hesabı silinen son üye — aynı anda katılan kişi hayalet kayıtla kalmaz", async () => {
+  reset();
+  const fam = await createFamily("SOLO");
+  plus("JOINER");
+  interleaveOnce((c) => c[0] === "SET" && c[1] === `family:${fam.id}:meta`, async () => {
+    await join("JOINER", fam.inviteCode);
+  });
+  await deleteAccount("SOLO");
+  setRedisHook(null);
+  assert.deepEqual(profileFamilies("JOINER"), []);
+  assert.deepEqual(familyKeysLeft(fam.id), []);
+});
+
+test("Aile 23: eski web paketi uyumluluğu — erişilemeyen her özette members dizisi var, bilgi sızmaz", async () => {
+  reset();
+  const fam = await createFamily();
+  plus("GHOST", [fam.id]);
+  const g = await invoke(families, { method: "GET", uid: "GHOST" });
+  for (const f of g.body.families) {
+    assert.ok(Array.isArray(f.members), "production paketi f.members.map(...) çağırıyor");
+    assert.equal(f.members.length, 0);
+    assert.equal(f.inviteCode, null);
+  }
+  // Production paketinin aynı ifadesi çökmeden çalışır.
+  const t = (k) => k;
+  const label = g.body.families[0].members.map((m) => m.name || m.email || (m.isAnonymous ? t("guest") : t("user"))).join(", ");
+  assert.equal(label, "");
 });

@@ -1,8 +1,16 @@
 import { requireUser } from "./_lib/auth.js";
 import { redisGetJSON, redisSetJSON, redisDel } from "./_lib/redis.js";
 import { getProfile, updateProfile, MAX_FAMILIES } from "./_lib/profile.js";
-import { membersKey, membersKeysWithAux, updateMembers, removeMemberFromFamily, assertFamilyAccess } from "./_lib/families.js";
-import { bucketAuxKeys } from "./_lib/versionedBucket.js";
+import {
+  membersKey,
+  membersKeysWithAux,
+  updateMembers,
+  removeMemberFromFamily,
+  isFamilyDeleting,
+  deleteFamilyCompletely,
+  undoJoinIfFamilyGone,
+  pruneDeletedFamilies,
+} from "./_lib/families.js";
 
 function familyId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -26,19 +34,26 @@ function httpError(status, message, code) {
   return Object.assign(new Error(message), { status, ...(code ? { code } : {}) });
 }
 
-// Üyelik doğrulanamayan (profilde var, üye listesinde yok) aile için yalnızca
-// adı ve durum döner: davet kodu ve üye listesi gösterilmez — aksi hâlde
-// "profilde yazıyor" tek başına üyelik vermiş olurdu. Kullanıcı aileden
-// davet kodunu alıp yeniden katılarak (onarım) ya da ayrılarak çözer.
+// Erişimi olmayan aile özetleri yalnızca kimlik + ad + durum taşır; davet kodu,
+// kurucu ve üye listesi gösterilmez (aksi hâlde "profilde yazıyor" tek başına
+// üyelik vermiş olurdu). `members: []`, `inviteCode: null`, `ownerUid: null`
+// alanları eski web paketi uyumluluğu içindir: production'daki paket her
+// aile için `f.members.map(...)` çağırıyor; alan yoksa Aileler ekranı çöker.
+//   membership "verified"   — tam özet
+//   membership "unverified" — profilde var, üye listesinde yok (yeniden katıl / ayrıl)
+//   membership "deleting"   — silme sürüyor ya da yarıda kaldı (kurucu tamamlar,
+//                             diğerleri ayrılır); kurucu kimliği yalnızca
+//                             doğrulanmış üyeye gösterilir.
 async function loadFamilySummary(id, uid) {
   const [meta, members] = await Promise.all([
     redisGetJSON(metaKey(id), null),
     redisGetJSON(membersKey(id), {}),
   ]);
   if (!meta) return null;
-  if (!members || typeof members !== "object" || !members[uid]) {
-    return { id, name: meta.name, membership: "unverified" };
-  }
+  const isMember = !!(members && typeof members === "object" && members[uid]);
+  const restricted = (membership, extra = {}) => ({ id, name: meta.name, membership, inviteCode: null, ownerUid: null, members: [], ...extra });
+  if (isFamilyDeleting(meta)) return restricted("deleting", isMember || meta.ownerUid === uid ? { ownerUid: meta.ownerUid } : {});
+  if (!isMember) return restricted("unverified");
   return {
     id,
     name: meta.name,
@@ -95,9 +110,11 @@ export default async function handler(req, res) {
 async function handle(req, res, user) {
   if (req.method === "GET") {
     const profile = await getProfile(user.uid);
+    // Silinmiş ailenin (aile kaydı gerçekten yok) profilde kalan kimliği temizlenir.
+    const familyIds = await pruneDeletedFamilies(user.uid, profile.families);
     const name = (req.query.name || "").trim();
-    if (name) await syncDisplayName(user.uid, profile.families, name);
-    const families = (await Promise.all(profile.families.map((id) => loadFamilySummary(id, user.uid)))).filter(Boolean);
+    if (name) await syncDisplayName(user.uid, familyIds, name);
+    const families = (await Promise.all(familyIds.map((id) => loadFamilySummary(id, user.uid)))).filter(Boolean);
     res.status(200).json({ isPlus: profile.isPlus, families });
     return;
   }
@@ -109,6 +126,8 @@ async function handle(req, res, user) {
 
   const { action } = req.body || {};
   const profile = await getProfile(user.uid);
+  // Hayalet aile 2'lik sınırdan yer yemesin (yalnızca kesin silinmişler).
+  if (action === "create" || action === "join") profile.families = await pruneDeletedFamilies(user.uid, profile.families);
 
   // Ayrılmak her zaman serbest — sadece yeni bir aile kurmak/katılmak Plus gerektiriyor.
   // Aksi halde Plus'ı kapatan biri, üyesi olduğu bir ailede sonsuza dek takılı kalırdı.
@@ -169,7 +188,7 @@ async function handle(req, res, user) {
     }
     const id = await redisGetJSON(inviteKey(code), null);
     const meta = id ? await redisGetJSON(metaKey(id), null) : null;
-    if (!id || !meta) {
+    if (!id || !meta || isFamilyDeleting(meta)) {
       res.status(404).json({ error: "Bu davet kodu geçersiz." });
       return;
     }
@@ -193,6 +212,12 @@ async function handle(req, res, user) {
     } catch (e) {
       if (added.changed) await removeMemberFromFamily(user.uid, id).catch(() => {});
       throw e;
+    }
+    // Son kontrol: bu arada aile silindiyse ya da silinmeye başladıysa
+    // katılma geri alınır (bkz. _lib/families.js "Aile silme ve hayalet kayıtlar").
+    if (await undoJoinIfFamilyGone(user.uid, id)) {
+      res.status(404).json({ error: "Bu davet kodu geçersiz." });
+      return;
     }
     const summary = await loadFamilySummary(id, user.uid);
     res.status(200).json({ ...summary, repaired: inProfile || inMembers });
@@ -221,42 +246,25 @@ async function handle(req, res, user) {
       res.status(400).json({ error: "Bu ailenin üyesi değilsin." });
       return;
     }
-    // Silme yetkisi: doğrulanmış üyelik + sahiplik.
-    let access;
-    try {
-      access = await assertFamilyAccess(user.uid, id, profile);
-    } catch (e) {
-      res.status(e.status === 404 ? 404 : e.status || 403).json({ error: e.status === 404 ? "Aile bulunamadı." : e.message });
+    const meta = await redisGetJSON(metaKey(id), null);
+    if (!meta) {
+      // Zaten silinmiş: profilde kalan kimlik temizlenir.
+      await pruneDeletedFamilies(user.uid, [id]);
+      res.status(200).json({ ok: true, alreadyDeleted: true });
       return;
     }
-    const { meta, members } = access;
     if (meta.ownerUid !== user.uid) {
       res.status(403).json({ error: "Sadece aileyi kuran kişi silebilir." });
       return;
     }
-    // Davet kodu önce: silme sürerken yeni katılım olmasın.
-    if (meta.inviteCode) await redisDel(inviteKey(meta.inviteCode));
-    // Silinen ailenin tüm üyelerinin kendi profilinden de bu aile çıkarılıyor
-    // (atomik; aynı anda yapılan katılma/Plus değişikliği ezilmez). Biri
-    // başarısız olursa veri silinmez, işlem tekrar denenebilir.
-    // Sahibin profili EN SON: yarıda kalırsa sahip silmeyi tekrar deneyebilir.
-    const dropFamily = (uid) =>
-      updateProfile(uid, (p) => (p.families.includes(id) ? { ...p, families: p.families.filter((f) => f !== id) } : undefined));
-    await Promise.all(Object.keys(members).filter((uid) => uid !== user.uid).map(dropFamily));
-    await dropFamily(user.uid);
-    // Ortak listeler, sürüm sayaçları ve yedekleri birlikte siliniyor.
-    // pendingJobRecipes: eski sürümden kalmış olabilecek işaretçi (artık yazılmıyor).
-    const dataKeys = ["recipes", "shopping-list", "pantry-items"].flatMap((b) => {
-      const key = `family:${id}:${b}`;
-      return [key, ...bucketAuxKeys(key)];
-    });
-    await Promise.all([
-      ...membersKeysWithAux(id).map((key) => redisDel(key)),
-      ...dataKeys.map((key) => redisDel(key)),
-      redisDel(`family:${id}:pendingJobRecipes`),
-    ]);
-    // meta en son: yarıda kalırsa aile hâlâ bulunup silme tekrar denenebilir.
-    await redisDel(metaKey(id));
+    // Kurucu doğrulanmış üye olmalı; yarıda kalmış silmede (işaretli) üye
+    // listesi zaten silinmiş olabileceğinden kurucu tamamlayabilir.
+    const members = await redisGetJSON(membersKey(id), {});
+    if (!isFamilyDeleting(meta) && !(members && members[user.uid])) {
+      res.status(403).json({ error: "Bu ailenin üyesi değilsin." });
+      return;
+    }
+    await deleteFamilyCompletely(id, { lastUid: user.uid });
     res.status(200).json({ ok: true });
     return;
   }

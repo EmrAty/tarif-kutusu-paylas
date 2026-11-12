@@ -754,7 +754,7 @@ export default function TarifKutusu() {
   const [authUser, setAuthUser] = useState(null);
   const [isPlus, setIsPlus] = useState(false);
   const [families, setFamilies] = useState([]); // [{ id, name, inviteCode, members:[{uid,email,isAnonymous}] }]
-  const [unverifiedFamilies, setUnverifiedFamilies] = useState([]); // [{ id, name, membership: "unverified" }]
+  const [unverifiedFamilies, setUnverifiedFamilies] = useState([]); // erişilemeyen: [{ id, name, membership: "unverified" | "deleting", ownerUid? }]
   // Uzun ömürlü native dinleyiciler (resume/bildirim) güncel aile listesini
   // yeniden abone olmadan okuyabilsin diye.
   const familiesRef = useRef(families);
@@ -963,8 +963,10 @@ export default function TarifKutusu() {
       // veri yüklemeye ve hedef listelerine girmez; yalnızca Aileler ekranında
       // "tekrar katıl / ayrıl" kartı olarak görünür.
       const all = Array.isArray(data.families) ? data.families : [];
-      setFamilies(all.filter((f) => f.membership !== "unverified"));
-      setUnverifiedFamilies(all.filter((f) => f.membership === "unverified"));
+      // membership alanı olmayan yanıt (eski sunucu) tam üyelik sayılır.
+      const usable = (f) => !f.membership || f.membership === "verified";
+      setFamilies(all.filter(usable));
+      setUnverifiedFamilies(all.filter((f) => !usable(f)));
     } catch (e) {
       // bilgi alınamazsa sessizce geç, bir sonraki denemede tekrar bakılır
     } finally {
@@ -5991,10 +5993,14 @@ function FamiliesView({ isPlus, families, unverifiedFamilies = [], personName, c
   const [error, setError] = useState("");
   const [importState, setImportState] = useState({});
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  // Bütün hook'lar aşağıdaki erken dönüşten ÖNCE: Plus bilgisi sonradan
+  // yüklenince hook sırası değişmemeli.
+  const [repairCodes, setRepairCodes] = useState({});
 
   // Plus kapatılmış ama hâlâ üyesi olduğu aileler varsa (ör. Plus'ı kapattı), onları
   // görüp ayrılabilsin diye upsell sadece hiç ailesi yoksa tam ekran gösteriliyor.
-  if (!isPlus && families.length === 0) {
+  // Doğrulanamayan aile de sayılır: ondan da ayrılabilmeli.
+  if (!isPlus && families.length === 0 && unverifiedFamilies.length === 0) {
     return (
       <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "28px", boxShadow: CARD_SHADOW, textAlign: "center" }}>
         <Users size={26} color={COLORS.forest} style={{ marginBottom: "10px" }} />
@@ -6013,7 +6019,6 @@ function FamiliesView({ isPlus, families, unverifiedFamilies = [], personName, c
   }
 
   const atLimit = families.length + unverifiedFamilies.length >= MAX_FAMILIES;
-  const [repairCodes, setRepairCodes] = useState({});
 
   // Onarım: geçerli davet koduyla yeniden katılmak eksik üyelik kaydını tamamlar.
   const handleRepair = async (familyId) => {
@@ -6121,19 +6126,25 @@ function FamiliesView({ isPlus, families, unverifiedFamilies = [], personName, c
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
-      {unverifiedFamilies.map((f) => (
+      {unverifiedFamilies.map((f) => {
+        const deleting = f.membership === "deleting";
+        const canFinishDelete = deleting && f.ownerUid === currentUid;
+        return (
         <div key={f.id} style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
             <h3 style={{ fontFamily: SERIF, fontSize: "18px", color: COLORS.ink, margin: 0 }}>{f.name}</h3>
             <button
-              onClick={() => handleLeave(f.id)}
+              onClick={() => (canFinishDelete ? handleDelete(f.id) : handleLeave(f.id))}
               disabled={busy}
               style={{ fontSize: "12px", color: COLORS.danger, background: "transparent", border: "none", cursor: "pointer" }}
             >
-              {t("families.leaveFamily")}
+              {canFinishDelete ? t("families.finishDelete") : t("families.leaveFamily")}
             </button>
           </div>
-          <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: "0 0 12px" }}>{t("families.membershipUnverified")}</p>
+          <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: deleting ? 0 : "0 0 12px" }}>
+            {deleting ? t("families.familyDeleting") : t("families.membershipUnverified")}
+          </p>
+          {!deleting && (
           <div style={{ display: "flex", gap: "8px" }}>
             <input
               value={repairCodes[f.id] || ""}
@@ -6149,8 +6160,10 @@ function FamiliesView({ isPlus, families, unverifiedFamilies = [], personName, c
               {t("families.rejoin")}
             </button>
           </div>
+          )}
         </div>
-      ))}
+        );
+      })}
       {families.map((f) => (
         <div key={f.id} style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "10px" }}>

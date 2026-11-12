@@ -1,6 +1,6 @@
 import { redisGet, redisSet, redisDel, redisGetJSON, redisSetJSON, redisCommand } from "./redis.js";
 import { getProfile, profileKey } from "./profile.js";
-import { membersKeysWithAux, removeMemberFromFamily } from "./families.js";
+import { removeMemberFromFamily, deleteFamilyCompletely, isFamilyDeleting } from "./families.js";
 import { fcmTokensKey, pushTargetsKey, releasePushOwnership } from "./fcm.js";
 import { bucketAuxKeys } from "./versionedBucket.js";
 import { getServiceAccountToken } from "./googleAuth.js";
@@ -34,7 +34,6 @@ export function accountDeletedError() {
 }
 
 const familyMetaKey = (id) => `family:${id}:meta`;
-const inviteKey = (code) => `invite:${code}:family`;
 
 // Sabit kişisel anahtarlar. Bunlara ek olarak user:<uid>:* altında kalan her
 // şey de taranıp siliniyor (ileride eklenecek yeni bir kişisel anahtar
@@ -86,17 +85,6 @@ async function deleteKeys(keys) {
   }
 }
 
-async function deleteWholeFamily(id, meta) {
-  await deleteKeys([
-    ...bucketKeysWithAux(`family:${id}`),
-    `family:${id}:pendingJobRecipes`,
-    ...(meta.inviteCode ? [inviteKey(meta.inviteCode)] : []),
-  ]);
-  await deleteKeys(membersKeysWithAux(id));
-  // meta en son: yarıda kalırsa tekrar çağrıda aile hâlâ bulunup temizleniyor.
-  await redisDel(familyMetaKey(id));
-}
-
 // Sahiplik devri: kalan üyelerden en eski katılan (eşitlikte uid sırası).
 function nextOwner(members) {
   return Object.entries(members)
@@ -110,8 +98,10 @@ async function leaveFamilyForDeletion(uid, id) {
   if (!meta) return { id, result: "missing" };
   // Atomik: aynı anda katılan başka bir üye listeden düşmez.
   const { value: members } = await removeMemberFromFamily(uid, id);
-  if (Object.keys(members).length === 0) {
-    await deleteWholeFamily(id, meta);
+  if (Object.keys(members).length === 0 || isFamilyDeleting(meta)) {
+    // Ortak silme (işaret → üyeleri işaretten sonra oku → profiller → veri →
+    // meta): aynı anda katılan biri hayalet kayıtla kalmaz.
+    await deleteFamilyCompletely(id, { skipUid: uid });
     return { id, result: "deleted" };
   }
   if (meta.ownerUid === uid) {
