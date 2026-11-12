@@ -25,6 +25,51 @@ function accessError(status, message) {
   return err;
 }
 
+// Aile verisine (okuma/yazma, çeviri, bildirim) erişim için ortak kontrol.
+// Kimlik doğrulaması tek başına yetmez; üç kayıt birlikte doğrulanır:
+// kullanıcının profilinde aile var, aile kaydı (meta) var VE ailenin üye
+// listesinde kullanıcı var. Biri eksikse erişim yok (fail-closed). Plus
+// şartı burada YOK: Plus'ı kapanan üye ailesinin verisini görmeye devam eder
+// (eski davranış); yalnızca share-panel job'u Plus ister (assertFamilyMember).
+// profile verilirse yeniden okunmaz.
+export async function assertFamilyAccess(uid, familyId, profile) {
+  if (typeof familyId !== "string" || !FAMILY_ID_RE.test(familyId)) {
+    throw accessError(400, "Geçersiz aile.");
+  }
+  const p = profile || (await getProfile(uid));
+  if (!Array.isArray(p.families) || !p.families.includes(familyId)) {
+    throw accessError(403, "Bu ailenin üyesi değilsin.");
+  }
+  const [meta, members] = await Promise.all([
+    redisGetJSON(`family:${familyId}:meta`, null),
+    redisGetJSON(membersKey(familyId), {}),
+  ]);
+  if (!meta) throw accessError(404, "Aile bulunamadı.");
+  if (!members || typeof members !== "object" || !members[uid]) {
+    throw accessError(403, "Bu ailenin üyesi değilsin.");
+  }
+  return { profile: p, meta, members };
+}
+
+// Kullanıcının erişimi gerçekten doğrulanan aileleri (profil + meta + üyelik).
+// Doğrulanamayan aile sessizce dışarıda kalır; Redis hatası yukarı fırlar.
+export async function verifiedFamilyIds(uid, profile) {
+  const p = profile || (await getProfile(uid));
+  const ids = Array.isArray(p.families) ? p.families : [];
+  const checks = await Promise.all(
+    ids.map((id) =>
+      assertFamilyAccess(uid, id, p).then(
+        () => id,
+        (e) => {
+          if (e && (e.status === 400 || e.status === 403 || e.status === 404)) return null;
+          throw e;
+        }
+      )
+    )
+  );
+  return checks.filter(Boolean);
+}
+
 // Bir aileye tarif yazmadan önce sunucu tarafı kontrol: kullanıcı Plus mı,
 // aile gerçekten var mı, kullanıcı hem kendi profilinde hem ailenin üye
 // listesinde o ailenin üyesi mi. Başarısızsa status'lu hata fırlatır — çağıran

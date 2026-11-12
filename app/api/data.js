@@ -2,6 +2,7 @@ import { requireUser } from "./_lib/auth.js";
 import { redisGetJSON, redisSetJSON } from "./_lib/redis.js";
 import { getProfile, FREE_RECIPE_LIMIT, FREE_LIMIT_ERROR_CODE, FREE_LIMIT_MESSAGE } from "./_lib/profile.js";
 import { readBucket, compareAndSet, isValidBaseVersion } from "./_lib/versionedBucket.js";
+import { assertFamilyAccess } from "./_lib/families.js";
 
 const ALLOWED_BUCKETS = new Set(["recipes", "shopping-list", "pantry-items"]);
 
@@ -85,10 +86,15 @@ export default async function handler(req, res) {
         res.status(400).json({ error: "Aile kimliği gerekli." });
         return;
       }
-      const profile = await getProfile(user.uid);
-      if (!profile.families.includes(familyId)) {
-        res.status(403).json({ error: "Bu ailenin üyesi değilsin." });
-        return;
+      // Profil + aile kaydı + üye listesi birlikte doğrulanır (bkz. assertFamilyAccess).
+      try {
+        await assertFamilyAccess(user.uid, familyId);
+      } catch (e) {
+        if (e.status === 400 || e.status === 403 || e.status === 404) {
+          res.status(e.status).json({ error: e.message });
+          return;
+        }
+        throw e;
       }
     }
 

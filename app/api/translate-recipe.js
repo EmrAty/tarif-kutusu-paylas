@@ -12,7 +12,7 @@
 import crypto from "node:crypto";
 import { requireUser } from "./_lib/auth.js";
 import { redisGetJSON, redisSet, redisCommand } from "./_lib/redis.js";
-import { getProfile } from "./_lib/profile.js";
+import { assertFamilyAccess, verifiedFamilyIds } from "./_lib/families.js";
 import { checkRateLimit, reserveAiBudget, assertKillSwitchOff, clientIp, sendGuardError } from "./_lib/aiGuard.js";
 import { checkInputBudget, textChars, INPUT_TOO_LARGE_CODE } from "./_lib/aiInputBudget.js";
 import { CONTENT_LANGUAGES, contentLangOf, isContentLanguage, sameNumbers, translationPayload } from "../shared/recipeLocales.js";
@@ -176,8 +176,8 @@ async function translateOne(uid, { recipeId, scope, target }, guard) {
   if (scope === "personal") {
     key = `user:${uid}:recipes`;
   } else {
-    const profile = await getProfile(uid);
-    if (typeof scope !== "string" || !profile.families.includes(scope)) throw Object.assign(new Error("Bu ailenin üyesi değilsin."), { status: 403 });
+    if (typeof scope !== "string") throw Object.assign(new Error("Bu ailenin üyesi değilsin."), { status: 403 });
+    await assertFamilyAccess(uid, scope);
     key = `family:${scope}:recipes`;
   }
   const recipe = (await readRecipes(key)).find((r) => r && r.id === recipeId);
@@ -214,8 +214,8 @@ async function translateOne(uid, { recipeId, scope, target }, guard) {
 
 // Liste ekranı için: kullanıcının erişebildiği tüm tariflerin başlıkları tek istekte.
 async function translateTitles(uid, target, guard) {
-  const profile = await getProfile(uid);
-  const buckets = await Promise.all([`user:${uid}:recipes`, ...profile.families.map((f) => `family:${f}:recipes`)].map(readRecipes));
+  const families = await verifiedFamilyIds(uid);
+  const buckets = await Promise.all([`user:${uid}:recipes`, ...families.map((f) => `family:${f}:recipes`)].map(readRecipes));
   const wanted = new Map(); // alan -> { title, lang }
   let skipped = 0;
   for (const r of buckets.flat()) {
