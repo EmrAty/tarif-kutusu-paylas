@@ -1,37 +1,45 @@
-# Grup 3 — FCM token yaşam döngüsü + legacy veri erişimi
+# Grup 3 — FCM token yaşam döngüsü + legacy veri + aile üyeliği
 
-Branch `group-3-legacy-fcm`, production main `52e04fd` üzerinden. Main'e merge / deploy YOK.
+Branch `group-3-legacy-fcm`, production main `52e04fd` üzerinden. Main'e merge / push / deploy YOK.
+İlk sürüm `73d9338` Fable tarafından denetlendi; bu notlar denetim sonrası revizyonu anlatır.
 
-## Problem 8 — FCM
+## Aile üyeliği (Fable D1)
 
-**Kök neden (koddan doğrulandı):**
-- Tek liste `user:<uid>:fcmTokens` (JSON dizi). Native Android token'ı ile Chrome web-push token'ı aynı `/api/fcm-token`'a, platform bilgisi olmadan yazılıyordu (`App.jsx` web'de `requestFcmToken`, native'de `nativeFcmToken`).
-- `recipe-jobs.js` → `notifyUserDevices` listedeki HER token'a gönderiyordu → Chrome da tarif bildirimi alıyordu.
-- Chrome'da tek mesajın iki bildirim olması: `firebase-messaging-sw.js` `onBackgroundMessage` içinde `showNotification` çağırıyordu; mesajda `notification` alanı olduğu için Firebase SDK bildirimi zaten kendisi gösteriyor → aynı mesaj 2 kez. (Diğer olasılık: aynı hesapta birden çok web token'ı — eski token'lar hiç silinmiyordu. Production verisi okunmadı; Preview'da doğrulanmalı.)
-- Ayrıca: token birden çok hesapta kalabiliyordu, çıkışta silinmiyordu, yenilenen token eskisini silmiyordu, `INVALID_ARGUMENT` (yük hatası da olabilir) token'ı siliyordu.
+**Kök neden:** `family:<id>:members` ve `user:<uid>:profile` "oku → değiştir → geri yaz" ile yazılıyordu (katılma, ayrılma, görünen ad senkronu, Plus kapatma, hesap silme). Eşzamanlı iki yazımda biri diğerini eziyordu; katılan üye listeden düşüp profilde aile kalabiliyordu. Grup 3'ün sıkı üyelik kontrolü bunu 403 olarak görünür kıldı.
 
-**Yeni şema (`api/_lib/fcm.js`):**
-- `user:<uid>:pushTargets` HASH: token → `{platform, installationId, updatedAt}`.
-- `push-owner:<sha256(token)>` = uid (270 gün TTL): token'ın tek sahibi. Okumada sahibi başka olan kayıt hedeflenmez ve tembel silinir.
-- Aynı `installationId` yeni token kaydederse eskisi silinir; hesap başına en çok 10 kayıt.
-- Tarif hazır/başarısız: `nativeOnly` → yalnızca `android`. Hiç android kaydı yoksa geçiş için yalnızca eski listedeki, sahibi başka olmayan token'lar (web etiketliler asla).
-- Job başına dedupe: `push-sent:<uid>:<jobId>:ready|failed` (SET NX, 7 gün). Redis hatasında gönderilir.
-- Kalıcı geçersiz: `UNREGISTERED`, `SENDER_ID_MISMATCH`, `NOT_FOUND`, ya da mesajı "registration token" diyen `INVALID_ARGUMENT`.
-- Aile "canı çekti" (`notify.js`) platformdan bağımsız kalır (Android + web), yinelenmesiz.
-- Çıkış: `DELETE /api/fcm-token {token, installationId}` (istemci `signOut`'tan önce, 3 sn zaman aşımı).
-- Hesap silme: `pushTargets` silinir, sahiplik işaretleri yalnızca hâlâ bu hesaptaysa bırakılır.
+**Düzeltme:** üye listesi ve profil artık Grup 1'in karşılaştır-ve-yaz motoruyla (`mutateBucket`, Lua, sürüm + yedek) yazılıyor: `updateMembers`, `updateProfile`. Düz `SET` ile profil yazan yol kalmadı (`setProfile` kaldırıldı). Çakışmada güncel değer yeniden okunup niyet tekrar uygulanıyor.
 
-**Geçiş:** eski liste silinmez; token platformla yeniden kaydedildikçe oradan çıkar. Android uygulaması web paketini canlı sunucudan yüklediği için, deploy sonrası her uygulama açılışında token `android` etiketiyle yeniden kaydolur — yeni APK gerekmez.
+**Mevcut tutarsız kayıtlar:** otomatik üyelik verilmez. Profilde olup üye listesinde olmayan aile:
+- veri / bildirim / çeviri: 403;
+- `GET /api/families`: yalnızca `{id, name, membership: "unverified"}` (davet kodu ve üye listesi gösterilmez);
+- onarım: geçerli davet koduyla tekrar katılma (`repaired: true`, eski katılma tarihi korunur) ya da ayrılma.
+Ters durum (üye listesinde var, profilde yok) da aynı kodla onarılır. Katılmada profil yazılamazsa üye listesine eklenen geri alınır.
 
-## Problem 4 — Legacy veri
+## Push (Fable D2, D3, D4)
 
-**Kaynak:** `api/legacy.js` UID'siz global `recipes` / `shopping-list` / `pantry-items` anahtarlarını giriş yapmış HERKESE (anonim misafir dahil) veriyordu; `App.jsx` `importLegacyInto` bunu kişisel listeye ya da aileye aktarabiliyordu.
+**Şema:** `user:<uid>:pushTargets` (HASH: token → {platform, installationId, updatedAt}), `push-owner:<sha256(token)>` = uid. Eski `user:<uid>:fcmTokens` okunur, silinmez; token platformla kaydolunca oradan çıkar.
 
-**Düzeltme:** varsayılan kapalı. Yalnızca `LEGACY_DATA_OWNER_UIDS` (Vercel env, virgülle) içindeki anonim olmayan hesaplar okuyabilir; diğerleri 403 `legacy_not_eligible` ("aktarılacak eski veri yok"). Bozuk/kısmi veri `null`. Global anahtarlar silinmez. Aktarım yine boş kovaya `baseVersion 0` ile (dolu kova 409, ezilmez).
+**Tarif hazır / başarısız:** yalnızca bu hesaba ait `android` kayıtları. Platformu bilinmeyen eski token'lara artık GİTMEZ (geri dönüş yok). Sebep: eski listede Android ve Chrome token'ı sunucuda ayırt edilemez (ikisi aynı FCM biçimi); ayırt etmenin tek yolu cihazın kendisinin platformla kaydolması. Bedel: ana uygulama deploy sonrası yeni web paketiyle bir kez açılana kadar o cihaza tarif bildirimi gitmez; tarif yine kaydedilir, paylaşım paneli "bu cihaz için bildirim kaydı yok" notunu gösterir.
 
-**Aile erişimi:** `assertFamilyAccess` (profil + `family:<id>:meta` + üye listesi birlikte) artık `data.js`, `notify.js`, `translate-recipe.js`'te. Eskiden yalnızca profildeki liste kontrol ediliyordu.
+**Paylaşım paneli / APK:** `ShareActivity` düz WebView; köprüde yalnızca `getSharedText/ready/close/jobAccepted/openInApp` var, FCM token'ına erişimi yok. Ana uygulama (`server.url` ile canlı web paketi) her açılışta token'ı `android` olarak kaydediyor → yeni APK GEREKMİYOR. Paneli token kaydedebilir yapmak native değişiklik (yeni APK) ister; bu turda yapılmadı, gerekli değil.
 
-Taranan diğer yerler: kişisel veri her yerde token uid'siyle (`user:<uid>:*`); "yeni boşsa eskiyi oku" fallback'i, migration-on-login, anonim→hesap otomatik veri taşıma kodu YOK (`googleLink` bilerek taşımıyor).
+**Sahiplik (D2):** başka hesabın elindeki token'ı devralmak sahiplik kanıtı ister. Sunucu token'a sessiz (data-only) `push_verify` mesajı gönderir; Android'de sistem bildirimi çıkmaz, ön plandaki uygulama `pushNotificationReceived` ile alır (Capacitor kaynağından doğrulandı); web'de sayfa açıkken `onMessage`. İstemci kodu yalnızca doğrulama bekliyorsa ve kendi oturumuyla geri yollar; kod isteyen hesaba bağlı, tek kullanımlık, 5 dk. Doğrulama push'u token+hesap başına 30 sn'de bir. Sahiplik bayatsa (eski sahip token'ı artık tutmuyor) kanıt istenmez. Normal çıkış → giriş yolunda (çıkış kaydı silindiyse) kanıt gerekmez.
+
+**Çıkış:** `POST /api/fcm-token {action: "unregister"}` (gövdeli DELETE yerine; DELETE geriye uyumlu kabul ediliyor).
+
+**Aile "canı çekti" (D7):** platformdan bağımsız kaldı (Android + web) — ürün kararı bekliyor. Aynı platformda tek mesajın iki kez gösterimi (SW) düzeltildi; farklı kayıtlı cihazlara teslimat ayrı konu.
+
+**Web:** `firebase-messaging-sw.js` notification'lı mesajı kendisi göstermiyor (Firebase SDK zaten gösteriyor — `@firebase/messaging` SW kaynağında doğrulandı: `onPush` önce `showNotification`, sonra `onBackgroundMessage`). İkon artık yükte `webpush.notification.icon`. `push_verify` asla gösterilmez.
+
+**Tekrar engeli:** `push-sent:<uid>:<jobId>:ready|failed` (SET NX, 7 gün) gönderimden önce. Redis hatasında gönderilir (çift ancak aynı job iki kez işlenir VE iki seferde de Redis hata verirse). İşaretten sonra süreç ölürse o bildirim kaybolur. Hesap silmede `push-sent:<uid>:*` de silinir.
+
+## Legacy veri (Fable D5)
+
+Erişim: yalnızca `LEGACY_DATA_OWNER_UIDS` (anonim olmayan). Biçim: repo geçmişinde legacy döneminde (3 Eylül → `42a31ed`) yazılan biçim bugünkü kovalarla aynı: tarif `[{id: "<ms>-xxxxxx"}]` (id metin), alışveriş `{selected: [id], checked: {}}`, kiler `["metin"]`. Dönüşüm yok. Her kova için `missing / empty / ok / invalid(reason)` ayrı raporlanır; `invalid` kısmen aktarılmaz, eski veri yerinde kalır. Kullanıcıya kova başına sonuç gösterilir (aktarıldı / hedefte kayıt var, üzerine yazılmadı / eski veri yok / biçim tanınmadı). Dolu (daha önce yazılmış) hedefe aktarım yok. Production'daki gerçek biçim bilinmiyor → aşağıdaki salt okunur denetimle bakılmalı.
+
+## Salt okunur denetim
+
+`app/scripts/audit-group3-readonly.mjs` — yalnızca SCAN/GET/MGET/HLEN (diğer komutları reddeder), içerik yazdırmaz. Raporlar: tutarsız aile kayıtları, legacy biçim sınıfı, eski/yeni push kayıt sayıları.
 
 ## Test
-`test/group3Fcm.test.mjs` (17), `test/group3Legacy.test.mjs` (11). `npm test` 234/234, `vite build` temiz.
+`group3Fcm` (24), `group3Family` (15), `group3Legacy` (12). `npm test` 257/257, `vite build` temiz.

@@ -5,7 +5,7 @@ import {
   FileText, Pencil, Check, ChevronDown, Star, Search, ShoppingCart, Clock, Gauge, Undo2, X, Package, Download,
   Mail, LogOut, Users, Crown, Settings, UserCircle, Copy, Sparkles, LogIn, Bell, Info, Lock,
 } from "lucide-react";
-import { auth, googleProvider, requestFcmToken } from "./firebase.js";
+import { auth, googleProvider, requestFcmToken, onForegroundPushMessage } from "./firebase.js";
 import {
   onAuthStateChanged,
   signInWithPopup,
@@ -391,11 +391,47 @@ function pushInstallationId() {
 // Bu cihazda en son hangi hesaba hangi token kaydedildi (çıkışta silmek için).
 let lastPushRegistration = null;
 
+// Sahiplik doğrulaması: token başka bir hesapta kayıtlıysa (ör. bu cihazda
+// önceki hesaptan çıkış kaydı silinemedi) sunucu bu cihaza sessiz bir
+// "push_verify" mesajı gönderir; içindeki kodu yalnızca bu cihaz alabilir.
+// Kod, ancak bu oturum gerçekten doğrulama beklerken geri gönderilir.
+let pendingPushVerification = null; // { uid, token, until }
+let bufferedVerifyNonce = null; // { nonce, at } — yanıt gelmeden ulaşan mesaj
+
+async function submitPushVerification(nonce) {
+  const pending = pendingPushVerification;
+  if (!pending || pending.until < Date.now() || pending.uid !== auth.currentUser?.uid) return;
+  try {
+    await authedFetch("/api/fcm-token", { method: "POST", body: { action: "verify", token: pending.token, nonce } });
+    if (pendingPushVerification === pending) pendingPushVerification = null;
+    lastPushRegistration = { uid: pending.uid, token: pending.token, installationId: pushInstallationId() };
+  } catch (e) {
+    // Yanlış/eski kod (ör. başka bir oturumun isteğine ait): bekleyen
+    // doğrulama SÜRER — asıl kod gelince yine denenir. Süre dolarsa bir
+    // sonraki açılışta kayıt yeniden başlar.
+  }
+}
+
+function handlePushVerifyMessage(data) {
+  if (!data || data.type !== "push_verify" || typeof data.nonce !== "string") return false;
+  if (pendingPushVerification) submitPushVerification(data.nonce);
+  else bufferedVerifyNonce = { nonce: data.nonce, at: Date.now() };
+  return true;
+}
+
 async function registerFcmToken(token) {
   const installationId = pushInstallationId();
+  const uid = auth.currentUser?.uid || null;
   const body = { token, platform: pushPlatform(), ...(installationId ? { installationId } : {}) };
-  await authedFetch("/api/fcm-token", { method: "POST", body });
-  lastPushRegistration = { uid: auth.currentUser?.uid || null, token, installationId };
+  const result = await authedFetch("/api/fcm-token", { method: "POST", body });
+  if (result?.status === "verification_required") {
+    pendingPushVerification = { uid, token, until: Date.now() + 4 * 60 * 1000 };
+    const buffered = bufferedVerifyNonce;
+    bufferedVerifyNonce = null;
+    if (buffered && Date.now() - buffered.at < 2 * 60 * 1000) submitPushVerification(buffered.nonce);
+    return;
+  }
+  lastPushRegistration = { uid, token, installationId };
 }
 
 // Çıkıştan ÖNCE çağrılır (oturum hâlâ geçerliyken): bu cihaz eski hesaptan
@@ -408,7 +444,7 @@ async function unregisterPushForSignOut() {
   if (!installationId && !reg) return;
   const body = { ...(reg ? { token: reg.token } : {}), ...(installationId ? { installationId } : {}) };
   await Promise.race([
-    authedFetch("/api/fcm-token", { method: "DELETE", body }).catch(() => {}),
+    authedFetch("/api/fcm-token", { method: "POST", body: { action: "unregister", ...body } }).catch(() => {}),
     new Promise((resolve) => setTimeout(resolve, 3000)),
   ]);
   lastPushRegistration = null;
@@ -427,13 +463,36 @@ const LEGACY_BUCKET_MAP = { recipes: "recipes", shoppingList: "shopping-list", p
 // Aile hesapları eklenmeden önceki tek paylaşımlı listeyi ("recipes" vb. sabit
 // anahtarlar) seçilen bir hedefe (kişisel ya da bir aile) aktarır — hedefte o
 // veri türü zaten doluysa üzerine yazmaz, sessizce atlar.
+const LEGACY_RESULT_BUCKETS = ["recipes", "shopping-list", "pantry-items"];
+
+// İçe aktarma sonucu: her veri türü için ne olduğu ayrı ayrı (hiçbir şey
+// sessizce "aktarıldı" ya da "yok" diye özetlenmez).
+function LegacyImportResult({ results }) {
+  const { t } = useLanguage();
+  if (!results) return null;
+  const nothing = LEGACY_RESULT_BUCKETS.every((b) => results[b] === "missing" || results[b] === "empty");
+  if (nothing) return <div style={{ fontSize: "12px", color: COLORS.inkSoft, marginTop: "8px" }}>{t("families.legacyNotEligible")}</div>;
+  return (
+    <ul style={{ fontSize: "12px", margin: "8px 0 0", paddingLeft: "18px", color: COLORS.inkSoft }}>
+      {LEGACY_RESULT_BUCKETS.map((b) => (
+        <li key={b} style={{ color: results[b] === "invalid" ? COLORS.danger : results[b] === "imported" ? COLORS.forest : COLORS.inkSoft }}>
+          {t(`legacyImport.bucket.${b}`)}: {t(`legacyImport.result.${results[b]}`)}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 async function importLegacyInto(scopeKey) {
   const legacy = await fetchLegacyData();
+  // Sonuç kodları: imported | skipped_not_empty | missing | empty | invalid
+  // (invalid: biçim tanınmadı, hiçbir şey aktarılmadı, eski veri yerinde).
   const results = {};
   for (const [legacyKey, bucket] of Object.entries(LEGACY_BUCKET_MAP)) {
     const legacyValue = legacy[legacyKey];
+    const state = legacy.status?.[legacyKey]?.state;
     if (!legacyValue) {
-      results[bucket] = "yok";
+      results[bucket] = state === "invalid" ? "invalid" : state === "empty" ? "empty" : "missing";
       continue;
     }
     // Hedef okunamazsa hata: "okunamadı" hiçbir zaman "boş" sayılıp üzerine yazılmaz.
@@ -441,7 +500,7 @@ async function importLegacyInto(scopeKey) {
     const current = dataStore.get(bucket, scopeKey);
     if (!current || current.status !== BUCKET_STATUS.READY) throw new Error(translate("errors.dataNotLoaded"));
     if (current.version > 0) {
-      results[bucket] = "atlandı (hedefte zaten veri var)";
+      results[bucket] = "skipped_not_empty";
       continue;
     }
     const legacyData = parseBucketValue(bucket, legacyValue);
@@ -451,7 +510,7 @@ async function importLegacyInto(scopeKey) {
       const empty = Array.isArray(cur) ? cur.length === 0 : Object.keys(cur || {}).length === 0;
       return empty ? legacyData : undefined;
     });
-    results[bucket] = saved === legacyData ? "aktarıldı" : "atlandı (hedefte zaten veri var)";
+    results[bucket] = saved === legacyData ? "imported" : "skipped_not_empty";
   }
   return results;
 }
@@ -695,6 +754,7 @@ export default function TarifKutusu() {
   const [authUser, setAuthUser] = useState(null);
   const [isPlus, setIsPlus] = useState(false);
   const [families, setFamilies] = useState([]); // [{ id, name, inviteCode, members:[{uid,email,isAnonymous}] }]
+  const [unverifiedFamilies, setUnverifiedFamilies] = useState([]); // [{ id, name, membership: "unverified" }]
   // Uzun ömürlü native dinleyiciler (resume/bildirim) güncel aile listesini
   // yeniden abone olmadan okuyabilsin diye.
   const familiesRef = useRef(families);
@@ -899,7 +959,12 @@ export default function TarifKutusu() {
       const data = await fetchFamilies(personName);
       setIsPlus(!!data.isPlus);
       rememberPlusStatus(!!data.isPlus);
-      setFamilies(data.families || []);
+      // Üyeliği sunucuda doğrulanamayan aile (profilde var, üye listesinde yok)
+      // veri yüklemeye ve hedef listelerine girmez; yalnızca Aileler ekranında
+      // "tekrar katıl / ayrıl" kartı olarak görünür.
+      const all = Array.isArray(data.families) ? data.families : [];
+      setFamilies(all.filter((f) => f.membership !== "unverified"));
+      setUnverifiedFamilies(all.filter((f) => f.membership === "unverified"));
     } catch (e) {
       // bilgi alınamazsa sessizce geç, bir sonraki denemede tekrar bakılır
     } finally {
@@ -919,6 +984,16 @@ export default function TarifKutusu() {
     // desteklemiyorsa ya da izin reddedilirse sessizce hiçbir şey yapmaz.
     if (!authUser) return;
     let cancelled = false;
+    // Sahiplik doğrulama mesajı (sessiz, data-only) kayıttan ÖNCE dinlenir:
+    // sunucu mesajı kayıt yanıtından önce gönderebilir.
+    const removers = [];
+    if (Capacitor.isNativePlatform()) {
+      PushNotifications.addListener("pushNotificationReceived", (n) => handlePushVerifyMessage(n?.data)).then((h) =>
+        cancelled ? h.remove() : removers.push(() => h.remove())
+      );
+    } else {
+      onForegroundPushMessage(handlePushVerifyMessage).then((off) => (cancelled ? off() : removers.push(off)));
+    }
     (async () => {
       const token = Capacitor.isNativePlatform() ? await nativeFcmToken() : await requestFcmToken();
       if (token && !cancelled) {
@@ -931,6 +1006,7 @@ export default function TarifKutusu() {
     })();
     return () => {
       cancelled = true;
+      removers.forEach((remove) => remove());
     };
   }, [authUser]);
 
@@ -1914,6 +1990,7 @@ export default function TarifKutusu() {
           <FamiliesView
             isPlus={isPlus}
             families={families}
+            unverifiedFamilies={unverifiedFamilies}
             personName={personName}
             currentUid={authUser?.uid}
             onReload={loadFamiliesState}
@@ -5906,7 +5983,7 @@ function FavoritesView({ recipes, familyNameById, isRecipeLocked, onSelect, onOp
   );
 }
 
-function FamiliesView({ isPlus, families, personName, currentUid, onReload, onOpenPlus, onImportFamily }) {
+function FamiliesView({ isPlus, families, unverifiedFamilies = [], personName, currentUid, onReload, onOpenPlus, onImportFamily }) {
   const { t } = useLanguage();
   const [nameDraft, setNameDraft] = useState("");
   const [codeDraft, setCodeDraft] = useState("");
@@ -5935,7 +6012,28 @@ function FamiliesView({ isPlus, families, personName, currentUid, onReload, onOp
     );
   }
 
-  const atLimit = families.length >= MAX_FAMILIES;
+  const atLimit = families.length + unverifiedFamilies.length >= MAX_FAMILIES;
+  const [repairCodes, setRepairCodes] = useState({});
+
+  // Onarım: geçerli davet koduyla yeniden katılmak eksik üyelik kaydını tamamlar.
+  const handleRepair = async (familyId) => {
+    setError("");
+    const code = (repairCodes[familyId] || "").trim();
+    if (!code) {
+      setError(t("families.errorCodeRequired"));
+      return;
+    }
+    setBusy(true);
+    try {
+      await joinFamily(code, personName);
+      setRepairCodes((prev) => ({ ...prev, [familyId]: "" }));
+      await onReload();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
   const inputStyle = {
     flex: 1,
     minWidth: 0,
@@ -6013,9 +6111,9 @@ function FamiliesView({ isPlus, families, personName, currentUid, onReload, onOp
   const handleImport = async (familyId) => {
     setImportState((prev) => ({ ...prev, [familyId]: "checking" }));
     try {
-      await importLegacyInto(familyId);
+      const results = await importLegacyInto(familyId);
       await onImportFamily(familyId);
-      setImportState((prev) => ({ ...prev, [familyId]: "done" }));
+      setImportState((prev) => ({ ...prev, [familyId]: results }));
     } catch (e) {
       setImportState((prev) => ({ ...prev, [familyId]: e.code === "legacy_not_eligible" ? "none" : "hata" }));
     }
@@ -6023,6 +6121,36 @@ function FamiliesView({ isPlus, families, personName, currentUid, onReload, onOp
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+      {unverifiedFamilies.map((f) => (
+        <div key={f.id} style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
+            <h3 style={{ fontFamily: SERIF, fontSize: "18px", color: COLORS.ink, margin: 0 }}>{f.name}</h3>
+            <button
+              onClick={() => handleLeave(f.id)}
+              disabled={busy}
+              style={{ fontSize: "12px", color: COLORS.danger, background: "transparent", border: "none", cursor: "pointer" }}
+            >
+              {t("families.leaveFamily")}
+            </button>
+          </div>
+          <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: "0 0 12px" }}>{t("families.membershipUnverified")}</p>
+          <div style={{ display: "flex", gap: "8px" }}>
+            <input
+              value={repairCodes[f.id] || ""}
+              onChange={(e) => setRepairCodes((prev) => ({ ...prev, [f.id]: e.target.value.toUpperCase() }))}
+              placeholder={t("families.codePlaceholder")}
+              style={{ flex: 1, minWidth: 0, fontSize: "14px", padding: "8px 10px", borderRadius: "8px", border: `1px solid ${COLORS.line}`, background: COLORS.paper, color: COLORS.ink }}
+            />
+            <button
+              onClick={() => handleRepair(f.id)}
+              disabled={busy}
+              style={{ fontSize: "13px", color: "#fff", background: COLORS.forest, border: "none", borderRadius: "8px", padding: "8px 14px", cursor: "pointer" }}
+            >
+              {t("families.rejoin")}
+            </button>
+          </div>
+        </div>
+      ))}
       {families.map((f) => (
         <div key={f.id} style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "10px" }}>
@@ -6105,7 +6233,7 @@ function FamiliesView({ isPlus, families, personName, currentUid, onReload, onOp
           >
             {importState[f.id] === "checking" ? t("common.checking") : t("families.importButton")}
           </button>
-          {importState[f.id] === "done" && <div style={{ fontSize: "12px", color: COLORS.forest, marginTop: "6px" }}>{t("families.imported")}</div>}
+          {importState[f.id] && typeof importState[f.id] === "object" && <LegacyImportResult results={importState[f.id]} />}
           {importState[f.id] === "hata" && <div style={{ fontSize: "12px", color: COLORS.danger, marginTop: "6px" }}>{t("families.importFailed")}</div>}
           {importState[f.id] === "none" && <div style={{ fontSize: "12px", color: COLORS.inkSoft, marginTop: "6px" }}>{t("families.legacyNotEligible")}</div>}
         </div>
@@ -6771,9 +6899,9 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal, onAcco
   const handleImport = async () => {
     setImportState("checking");
     try {
-      await importLegacyInto(PERSONAL);
+      const results = await importLegacyInto(PERSONAL);
       await onImportPersonal();
-      setImportState("done");
+      setImportState(results);
     } catch (e) {
       setImportState(e.code === "legacy_not_eligible" ? "none" : "hata");
     }
@@ -6961,7 +7089,7 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal, onAcco
         >
           {importState === "checking" ? t("common.checking") : t("account.importToPersonal")}
         </button>
-        {importState === "done" && <div style={{ fontSize: "12px", color: COLORS.forest, marginTop: "8px" }}>{t("families.imported")}</div>}
+        {importState && typeof importState === "object" && <LegacyImportResult results={importState} />}
         {importState === "hata" && <div style={{ fontSize: "12px", color: COLORS.danger, marginTop: "8px" }}>{t("families.importFailed")}</div>}
         {importState === "none" && <div style={{ fontSize: "12px", color: COLORS.inkSoft, marginTop: "8px" }}>{t("families.legacyNotEligible")}</div>}
       </div>

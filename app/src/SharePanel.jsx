@@ -95,7 +95,7 @@ export default function SharePanel() {
     authedFetch("/api/families")
       .then((data) => {
         if (cancelled) return;
-        const families = data.isPlus && Array.isArray(data.families) ? data.families : [];
+        const families = data.isPlus && Array.isArray(data.families) ? data.families.filter((f) => f.membership !== "unverified") : [];
         writeFamiliesHint(families.length > 0);
         setFamilyInfo({ status: "ready", families: families.map((f) => ({ id: f.id, name: f.name })) });
       })
@@ -175,7 +175,8 @@ export default function SharePanel() {
           : t("sharePanel.willNotify")
       );
       // Panel yalnızca sunucu job'ı kabul ettikten sonra kapanıyor.
-      setTimeout(() => bridge?.close(), 1400);
+      // Bildirim gitmeyecekse not okunabilsin diye biraz daha uzun.
+      setTimeout(() => bridge?.close(), data.notifyDevices === 0 ? 2600 : 1400);
     } catch (e) {
       setStatus("idle");
       setError(e.message || t("sharePanel.errorJobStartFailed"));

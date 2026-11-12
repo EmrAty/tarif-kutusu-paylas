@@ -6,7 +6,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { setRoutes, invoke, resetDb, json, db, calls } from "./helpers/fakeServices.mjs";
 
-const { default: legacy, sanitizeLegacyValue } = await import("../api/legacy.js");
+const { default: legacy, sanitizeLegacyValue, classifyLegacyValue } = await import("../api/legacy.js");
 const { default: dataHandler } = await import("../api/data.js");
 const { default: notify } = await import("../api/notify.js");
 const { default: translate } = await import("../api/translate-recipe.js");
@@ -117,20 +117,44 @@ test("Legacy 6: yeni kişisel veri, eski veri aktarımıyla ezilmez (sürüm ça
   assert.deepEqual(JSON.parse(db.get(`user:${OWNER}:recipes`)).map((x) => x.id), ["mine"]);
 });
 
-test("Legacy 7: bozuk/kısmi eski veri reddedilir (null), kısmen aktarılmaz", async () => {
+test("Legacy 7: bozuk eski veri 'yok'tan AYRI raporlanır, kısmen aktarılmaz, eski veri yerinde kalır", async () => {
   reset();
   db.set("recipes", "{bozuk json");
   db.set("shopping-list", JSON.stringify(["dizi ama nesne olmalı"]));
   db.set("pantry-items", JSON.stringify([]));
   const r = await invoke(legacy, { method: "GET", uid: OWNER });
   assert.equal(r.status, 200);
-  assert.deepEqual(r.body, { recipes: null, shoppingList: null, pantryItems: null });
+  assert.equal(r.body.recipes, null);
+  assert.equal(r.body.shoppingList, null);
+  assert.equal(r.body.pantryItems, null);
+  assert.deepEqual(r.body.status.recipes, { state: "invalid", reason: "not_json" });
+  assert.deepEqual(r.body.status.shoppingList, { state: "invalid", reason: "array_instead_of_object" });
+  assert.deepEqual(r.body.status.pantryItems, { state: "empty" });
+  assert.equal(db.get("recipes"), "{bozuk json", "eski veri silinmedi/değişmedi");
 
-  assert.equal(sanitizeLegacyValue("recipes", JSON.stringify([{ id: "ok" }, { title: "id yok" }])), null, "id'siz tarif içeren liste reddedilir");
-  assert.equal(sanitizeLegacyValue("recipes", JSON.stringify([{ id: "ok" }, "metin"])), null);
-  assert.equal(sanitizeLegacyValue("recipes", JSON.stringify({ id: "x" })), null);
-  assert.equal(sanitizeLegacyValue("shopping-list", JSON.stringify({})), null);
-  assert.ok(sanitizeLegacyValue("recipes", JSON.stringify([{ id: "ok" }])));
+  db.delete("recipes");
+  const m = await invoke(legacy, { method: "GET", uid: OWNER });
+  assert.deepEqual(m.body.status.recipes, { state: "missing" });
+});
+
+test("Legacy 7b (D5): geçmişte yazılmamış biçimler tahminle dönüştürülmez; geçmişteki biçim aynen kabul edilir", () => {
+  const c = (bucket, value) => classifyLegacyValue(bucket, JSON.stringify(value));
+  // Denetimin örnekleri: hepsi "invalid" (veri yok DEĞİL), hiçbiri kısmen alınmaz.
+  assert.deepEqual(c("recipes", [{ id: 1725000000000, title: "Mercimek" }]), { state: "invalid", reason: "id_not_text", count: 1 });
+  assert.deepEqual(c("recipes", [{ id: "a", title: "x" }, { title: "y" }]), { state: "invalid", reason: "id_missing", count: 2 });
+  assert.deepEqual(c("shopping-list", ["r1", "r2"]), { state: "invalid", reason: "array_instead_of_object" });
+  assert.equal(c("recipes", [{ id: "a" }, { id: "a" }]).reason, "duplicate_id");
+  assert.equal(c("recipes", [{ id: "a" }, "metin"]).reason, "item_not_object");
+  assert.equal(c("pantry-items", ["un", 3]).reason, "item_not_text");
+  assert.equal(c("shopping-list", { selected: [1] }).reason, "selected_not_id_list");
+  // Legacy dönemindeki gerçek biçimler (repo geçmişi, 42a31ed öncesi):
+  const recipes = [{ id: "1756850000000-ab12cd", title: "Mercimek", createdAt: 1756850000000, isFavorite: false }];
+  assert.equal(c("recipes", recipes).state, "ok");
+  assert.equal(c("recipes", recipes).value, JSON.stringify(recipes), "dönüştürülmeden aynen");
+  assert.deepEqual(c("shopping-list", { selected: ["1756850000000-ab12cd"], checked: { "tuz": true } }).state, "ok");
+  assert.deepEqual(c("shopping-list", { selected: [], checked: {} }), { state: "empty" });
+  assert.equal(c("pantry-items", ["un", "şeker"]).state, "ok");
+  assert.equal(sanitizeLegacyValue("recipes", JSON.stringify([{ id: 1 }])), null);
 });
 
 test("Legacy 8: aile üyesi yalnız üyesi olduğu aileyi okur; üye olmayan erişemez", async () => {
