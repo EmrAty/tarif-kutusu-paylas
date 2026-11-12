@@ -1,8 +1,6 @@
 import { requireUser } from "./_lib/auth.js";
-import { redisGetJSON, redisSetJSON } from "./_lib/redis.js";
-import { getProfile } from "./_lib/profile.js";
-import { membersKey } from "./_lib/families.js";
-import { fcmTokensKey, sendFcmMessage } from "./_lib/fcm.js";
+import { assertFamilyAccess } from "./_lib/families.js";
+import { collectPushTargets, sendToTargets } from "./_lib/fcm.js";
 import { craveNotificationBody } from "./_lib/turkish.js";
 
 export default async function handler(req, res) {
@@ -25,13 +23,14 @@ export default async function handler(req, res) {
     return;
   }
 
-  const profile = await getProfile(user.uid);
-  if (!profile.families.includes(familyId)) {
-    res.status(403).json({ error: "Bu ailenin üyesi değilsin." });
+  // Profil + aile kaydı + üye listesi birlikte doğrulanır.
+  let members;
+  try {
+    ({ members } = await assertFamilyAccess(user.uid, familyId));
+  } catch (e) {
+    res.status(e.status || 502).json({ error: e.message });
     return;
   }
-
-  const members = await redisGetJSON(membersKey(familyId), {});
   const name = (senderName || "").trim() || members[user.uid]?.name || "Biri";
   const body = craveNotificationBody(name, recipeTitle);
   const recipientUids = Object.keys(members).filter((uid) => uid !== user.uid);
@@ -43,34 +42,29 @@ export default async function handler(req, res) {
   let sent = 0;
   let attempted = 0;
   let lastError = null;
+  // "Canı çekti" bildirimi platformdan bağımsız (Android + web) gider; her
+  // alıcının hedefleri yinelenmesiz okunur, başka hesaba geçmiş token'a gitmez.
   await Promise.all(
     recipientUids.map(async (uid) => {
-      const tokens = await redisGetJSON(fcmTokensKey(uid), []);
-      if (!tokens.length) return;
-      attempted += tokens.length;
-      const stillValid = [];
-      for (const token of tokens) {
-        try {
-          await sendFcmMessage(token, {
-            title: "Tarif Kutusu",
-            body,
-            // Bildirime tıklanınca doğrudan bu tarifin açılması için (bkz.
-            // App.jsx'teki pushNotificationActionPerformed dinleyicisi ve
-            // firebase-messaging-sw.js'teki notificationclick).
-            data: recipeId ? { recipeId } : undefined,
-          });
-          sent++;
-          stillValid.push(token);
-        } catch (e) {
-          // invalidToken değilse geçici bir hata olabilir (ör. ağ) — token'ı
-          // silmeden bırakıyoruz, sadece kalıcı olarak geçersizse temizliyoruz.
-          if (!e.invalidToken) stillValid.push(token);
-          lastError = e.message;
-        }
+      let targets;
+      try {
+        targets = await collectPushTargets(uid);
+      } catch (e) {
+        lastError = e.message;
+        return;
       }
-      if (stillValid.length !== tokens.length) {
-        await redisSetJSON(fcmTokensKey(uid), stillValid);
-      }
+      if (!targets.length) return;
+      // Bildirime tıklanınca doğrudan bu tarifin açılması için (bkz.
+      // App.jsx'teki pushNotificationActionPerformed dinleyicisi ve
+      // firebase-messaging-sw.js'teki notificationclick).
+      const result = await sendToTargets(uid, targets, {
+        title: "Tarif Kutusu",
+        body,
+        data: recipeId ? { recipeId } : undefined,
+      });
+      attempted += result.attempted;
+      sent += result.sent;
+      if (result.error) lastError = result.error;
     })
   );
 

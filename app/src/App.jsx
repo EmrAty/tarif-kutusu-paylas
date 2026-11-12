@@ -368,8 +368,50 @@ async function fetchLegacyData() {
   return authedFetch("/api/legacy");
 }
 
+// Push kaydı (bkz. api/_lib/fcm.js): platform açıkça gönderilir — tarif hazır
+// bildirimi yalnızca native Android'e gider, web (Chrome) kaydı ona katılmaz.
+// installationId: bu kurulumu (uygulama / tarayıcı profili) tanır; token
+// yenilenince sunucu aynı kurulumun eski token'ını kaldırır.
+function pushPlatform() {
+  return Capacitor.isNativePlatform() ? Capacitor.getPlatform() : "web";
+}
+
+function pushInstallationId() {
+  try {
+    const existing = storageGet("push-installation-id");
+    if (existing && /^[A-Za-z0-9_-]{8,64}$/.test(existing.value)) return existing.value;
+    const id = (window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`).replace(/[^A-Za-z0-9_-]/g, "");
+    storageSet("push-installation-id", id);
+    return id;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Bu cihazda en son hangi hesaba hangi token kaydedildi (çıkışta silmek için).
+let lastPushRegistration = null;
+
 async function registerFcmToken(token) {
-  return authedFetch("/api/fcm-token", { method: "POST", body: { token } });
+  const installationId = pushInstallationId();
+  const body = { token, platform: pushPlatform(), ...(installationId ? { installationId } : {}) };
+  await authedFetch("/api/fcm-token", { method: "POST", body });
+  lastPushRegistration = { uid: auth.currentUser?.uid || null, token, installationId };
+}
+
+// Çıkıştan ÖNCE çağrılır (oturum hâlâ geçerliyken): bu cihaz eski hesaptan
+// ayrılır, eski hesap artık bu cihaza bildirim gönderemez. Hata/zaman aşımı
+// çıkışı engellemez; bir sonraki hesap aynı token'ı kaydettiğinde sunucu
+// sahipliği zaten taşır.
+async function unregisterPushForSignOut() {
+  const installationId = pushInstallationId();
+  const reg = lastPushRegistration && lastPushRegistration.uid === auth.currentUser?.uid ? lastPushRegistration : null;
+  if (!installationId && !reg) return;
+  const body = { ...(reg ? { token: reg.token } : {}), ...(installationId ? { installationId } : {}) };
+  await Promise.race([
+    authedFetch("/api/fcm-token", { method: "DELETE", body }).catch(() => {}),
+    new Promise((resolve) => setTimeout(resolve, 3000)),
+  ]);
+  lastPushRegistration = null;
 }
 
 async function sendFamilyNotification(familyId, recipeId, recipeTitle, senderName) {
@@ -795,7 +837,10 @@ export default function TarifKutusu() {
 
   const handleGuestEntry = () => signInAnonymously(auth);
 
-  const handleSignOut = () => signOut(auth);
+  const handleSignOut = async () => {
+    await unregisterPushForSignOut();
+    await signOut(auth);
+  };
 
   // Hesap sunucuda silindikten sonra: bu hesaba ait cihazdaki kayıtlar
   // (Plus önbelleği, görünen isim, paylaşım paneli aile ipucu) temizlenip oturum
@@ -5972,7 +6017,7 @@ function FamiliesView({ isPlus, families, personName, currentUid, onReload, onOp
       await onImportFamily(familyId);
       setImportState((prev) => ({ ...prev, [familyId]: "done" }));
     } catch (e) {
-      setImportState((prev) => ({ ...prev, [familyId]: "hata" }));
+      setImportState((prev) => ({ ...prev, [familyId]: e.code === "legacy_not_eligible" ? "none" : "hata" }));
     }
   };
 
@@ -6062,6 +6107,7 @@ function FamiliesView({ isPlus, families, personName, currentUid, onReload, onOp
           </button>
           {importState[f.id] === "done" && <div style={{ fontSize: "12px", color: COLORS.forest, marginTop: "6px" }}>{t("families.imported")}</div>}
           {importState[f.id] === "hata" && <div style={{ fontSize: "12px", color: COLORS.danger, marginTop: "6px" }}>{t("families.importFailed")}</div>}
+          {importState[f.id] === "none" && <div style={{ fontSize: "12px", color: COLORS.inkSoft, marginTop: "6px" }}>{t("families.legacyNotEligible")}</div>}
         </div>
       ))}
 
@@ -6729,7 +6775,7 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal, onAcco
       await onImportPersonal();
       setImportState("done");
     } catch (e) {
-      setImportState("hata");
+      setImportState(e.code === "legacy_not_eligible" ? "none" : "hata");
     }
   };
 
@@ -6917,6 +6963,7 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal, onAcco
         </button>
         {importState === "done" && <div style={{ fontSize: "12px", color: COLORS.forest, marginTop: "8px" }}>{t("families.imported")}</div>}
         {importState === "hata" && <div style={{ fontSize: "12px", color: COLORS.danger, marginTop: "8px" }}>{t("families.importFailed")}</div>}
+        {importState === "none" && <div style={{ fontSize: "12px", color: COLORS.inkSoft, marginTop: "8px" }}>{t("families.legacyNotEligible")}</div>}
       </div>
 
       <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>

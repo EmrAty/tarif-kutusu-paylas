@@ -4,7 +4,7 @@ import { requireUser } from "./_lib/auth.js";
 import { redisDel, redisGet, redisGetJSON, redisSet, redisSetJSON, redisSetNX } from "./_lib/redis.js";
 import { getProfile, FREE_RECIPE_LIMIT, FREE_LIMIT_ERROR_CODE, FREE_LIMIT_MESSAGE } from "./_lib/profile.js";
 import { extractRecipeFromCaption } from "./_lib/extractRecipe.js";
-import { fcmTokensKey, notifyUserDevices } from "./_lib/fcm.js";
+import { collectPushTargets, notifyUserDevices } from "./_lib/fcm.js";
 import { mutateBucket, parseListOrThrow, bucketAuxKeys } from "./_lib/versionedBucket.js";
 import { assertFamilyMember, familyRecipesKey } from "./_lib/families.js";
 import { isAccountDeleted, accountDeletedError } from "./_lib/accountDeletion.js";
@@ -292,7 +292,7 @@ async function runRecipeJob({ uid, jobId, sourceUrl, caption, category, addedBy,
       title: "Tarif oluşturulamadı",
       body: e.notifyBody || "Paylaştığın videodan tarif çıkarılamadı. Dokun, uygulamada tekrar deneyelim.",
       data: { type: "recipe_failed", link: sourceUrl },
-    }).catch((err) => ({ sent: 0, attempted: 0, error: err.message }));
+    }, { nativeOnly: true, dedupeKey: `${uid}:${jobId}:failed` }).catch((err) => ({ sent: 0, attempted: 0, error: err.message }));
     // Başarısız job'da da bildirim sonucu kayda yazılıyor (önceden yalnızca
     // başarılı yolda vardı; "bildirim geldi mi" sorusu yanıtsız kalıyordu).
     logStep(jobId, "fcm", Date.now() - t, { sent: notify.sent, attempted: notify.attempted, kind: "failed" });
@@ -329,7 +329,7 @@ async function runRecipeJob({ uid, jobId, sourceUrl, caption, category, addedBy,
       target.scope === "family"
         ? { type: "recipe_ready", recipeId: recipe.id, scope: "family", familyId: target.familyId }
         : { type: "recipe_ready", recipeId: recipe.id },
-  }).catch((e) => ({ sent: 0, attempted: 0, error: e.message }));
+  }, { nativeOnly: true, dedupeKey: `${uid}:${jobId}:ready` }).catch((e) => ({ sent: 0, attempted: 0, error: e.message }));
   timings.fcm = Date.now() - t;
   timings.total = Date.now() - startedAt;
   logStep(jobId, "fcm", timings.fcm, { sent: notify.sent, attempted: notify.attempted });
@@ -339,8 +339,8 @@ async function runRecipeJob({ uid, jobId, sourceUrl, caption, category, addedBy,
 
 async function countDevices(uid) {
   try {
-    const tokens = await redisGetJSON(fcmTokensKey(uid), []);
-    return Array.isArray(tokens) ? tokens.length : 0;
+    // Tarif bildiriminin gideceği (native) cihaz sayısı; yalnızca okur.
+    return (await collectPushTargets(uid, { nativeOnly: true, cleanup: false })).length;
   } catch (e) {
     return 0;
   }

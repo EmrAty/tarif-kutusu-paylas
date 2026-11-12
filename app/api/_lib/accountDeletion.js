@@ -1,7 +1,7 @@
 import { redisGet, redisSet, redisDel, redisGetJSON, redisSetJSON, redisCommand } from "./redis.js";
 import { getProfile, profileKey } from "./profile.js";
 import { membersKey } from "./families.js";
-import { fcmTokensKey } from "./fcm.js";
+import { fcmTokensKey, pushTargetsKey, releasePushOwnership } from "./fcm.js";
 import { bucketAuxKeys } from "./versionedBucket.js";
 import { getServiceAccountToken } from "./googleAuth.js";
 
@@ -53,6 +53,7 @@ function personalKeys(uid) {
   return [
     ...bucketKeysWithAux(`user:${uid}`),
     fcmTokensKey(uid),
+    pushTargetsKey(uid),
     `user:${uid}:pendingJobRecipes`,
     `user:${uid}:recentlyRemovedRecipes`,
   ];
@@ -155,6 +156,10 @@ export async function deleteAccount(uid) {
     families.push(await leaveFamilyForDeletion(uid, id));
   }
 
+  // Cihaz token'larının sahiplik işaretleri (push-owner:*) yalnızca hâlâ bu
+  // hesaba aitse kaldırılır. Hata silmeyi durdurmaz: kalan işaret silinmiş
+  // uid'yi gösterir ve hiçbir hesaba bildirim götürmez.
+  await releasePushOwnership(uid).catch(() => {});
   await deleteKeys(personalKeys(uid));
   const scanned = [];
   for (const pattern of jobKeyPatterns(uid)) {

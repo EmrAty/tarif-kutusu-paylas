@@ -16,8 +16,14 @@ firebase.initializeApp({
 
 const messaging = firebase.messaging();
 
+// Mesajda `notification` alanı varsa (sunucunun gönderdiği her bildirimde
+// var, bkz. api/_lib/fcm.js) Firebase SDK bildirimi KENDİSİ gösterir ve
+// tıklamada fcm_options.link'i açar. Burada ikinci kez showNotification
+// çağırmak Chrome'da aynı mesaj için İKİ bildirim çıkarıyordu (Grup 3).
+// Yalnızca notification alanı olmayan (data-only) mesajı biz gösteriyoruz.
 messaging.onBackgroundMessage((payload) => {
-  const { title, body } = payload.notification || {};
+  if (payload && payload.notification) return;
+  const { title, body } = (payload && payload.data) || {};
   self.registration.showNotification(title || "Tarif Kutusu", {
     body: body || "",
     icon: "/icon-192.png",
@@ -29,6 +35,9 @@ messaging.onBackgroundMessage((payload) => {
 // Bildirime tıklanınca, varsa data.recipeId'yi taşıyarak uygulamayı açar -
 // App.jsx'teki ?openRecipe= query param okuyucusu doğru tarife yönlendiriyor.
 self.addEventListener("notificationclick", (event) => {
+  // SDK'nın kendi gösterdiği bildirimin tıklamasını SDK karşılıyor (FCM_MSG);
+  // ikinci pencere açılmasın.
+  if (event.notification.data && event.notification.data.FCM_MSG) return;
   event.notification.close();
   const recipeId = event.notification.data && event.notification.data.recipeId;
   const url = recipeId ? `/?openRecipe=${encodeURIComponent(recipeId)}` : "/";

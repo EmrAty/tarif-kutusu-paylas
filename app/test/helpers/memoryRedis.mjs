@@ -170,6 +170,14 @@ export function createMemoryRedis(db = new Map()) {
         const map = getHash(args[0], false) || new Map();
         return args.slice(1).map((f) => (map.has(f) ? map.get(f) : null));
       }
+      case "SCAN": {
+        // Tek seferde tüm eşleşenler (imleç her zaman "0" döner).
+        const idx = args.findIndex((a) => String(a).toUpperCase() === "MATCH");
+        const pattern = idx >= 0 ? String(args[idx + 1]) : "*";
+        const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
+        const re = new RegExp(`^${escaped}$`);
+        return ["0", [...db.keys()].filter((k) => re.test(k))];
+      }
       case "EVAL":
         return evalLua(args[0], Number(args[1]), args.slice(2));
       default:
