@@ -23,6 +23,8 @@ const messaging = firebase.messaging();
 // Yalnızca notification alanı olmayan (data-only) mesajı biz gösteriyoruz.
 messaging.onBackgroundMessage((payload) => {
   if (payload && payload.notification) return;
+  // Sahiplik doğrulama mesajı (sessiz) asla bildirim olarak gösterilmez.
+  if (payload && payload.data && payload.data.type === "push_verify") return;
   const { title, body } = (payload && payload.data) || {};
   self.registration.showNotification(title || "Tarif Kutusu", {
     body: body || "",

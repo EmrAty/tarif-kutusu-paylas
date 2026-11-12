@@ -292,7 +292,7 @@ async function runRecipeJob({ uid, jobId, sourceUrl, caption, category, addedBy,
       title: "Tarif oluşturulamadı",
       body: e.notifyBody || "Paylaştığın videodan tarif çıkarılamadı. Dokun, uygulamada tekrar deneyelim.",
       data: { type: "recipe_failed", link: sourceUrl },
-    }, { nativeOnly: true, dedupeKey: `${uid}:${jobId}:failed` }).catch((err) => ({ sent: 0, attempted: 0, error: err.message }));
+    }, { nativeOnly: true, dedupeKey: `${jobId}:failed` }).catch((err) => ({ sent: 0, attempted: 0, error: err.message }));
     // Başarısız job'da da bildirim sonucu kayda yazılıyor (önceden yalnızca
     // başarılı yolda vardı; "bildirim geldi mi" sorusu yanıtsız kalıyordu).
     logStep(jobId, "fcm", Date.now() - t, { sent: notify.sent, attempted: notify.attempted, kind: "failed" });
@@ -329,7 +329,7 @@ async function runRecipeJob({ uid, jobId, sourceUrl, caption, category, addedBy,
       target.scope === "family"
         ? { type: "recipe_ready", recipeId: recipe.id, scope: "family", familyId: target.familyId }
         : { type: "recipe_ready", recipeId: recipe.id },
-  }, { nativeOnly: true, dedupeKey: `${uid}:${jobId}:ready` }).catch((e) => ({ sent: 0, attempted: 0, error: e.message }));
+  }, { nativeOnly: true, dedupeKey: `${jobId}:ready` }).catch((e) => ({ sent: 0, attempted: 0, error: e.message }));
   timings.fcm = Date.now() - t;
   timings.total = Date.now() - startedAt;
   logStep(jobId, "fcm", timings.fcm, { sent: notify.sent, attempted: notify.attempted });

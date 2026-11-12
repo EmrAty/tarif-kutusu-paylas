@@ -231,7 +231,9 @@ test(
   quiet(async () => {
     seed();
     pageCaption = "Fit Tavuk Tantuni: 600 g tavuk göğsü, 2 yemek kaşığı zeytinyağı, 1 çay kaşığı tuz. Tavuğu küp doğrayın, suyunu çekene kadar pişirin ve lavaşa sarın.";
-    db.set("user:A:fcmTokens", JSON.stringify(["test-device"]));
+    // Grup 3: tarif bildirimi yalnızca "android" etiketli yeni kayda gider
+    // (platformsuz eski fcmTokens listesine artık gitmez — bkz. group3Fcm.test.mjs).
+    db.set("user:A:pushTargets", { type: "hash", map: new Map([["test-device", JSON.stringify({ platform: "android", installationId: "install-test-device", updatedAt: 1 })]]) });
     const r = await post(body({ sourceUrl: SHORT_URL, caption: "" }));
     assert.equal(r.status, 200);
     assert.equal(r.body.notifyDevices, 1);

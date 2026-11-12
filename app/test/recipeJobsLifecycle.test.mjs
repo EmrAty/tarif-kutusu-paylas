@@ -164,7 +164,9 @@ function seed() {
   failRedisWriteFor = null;
   db.set("user:A:profile", JSON.stringify({ isPlus: false, families: [] }));
   db.set("user:A:recipes", JSON.stringify([]));
-  db.set("user:A:fcmTokens", JSON.stringify(["device-1"]));
+  // Grup 3: tarif bildirimi yalnızca "android" etiketli yeni kayda gider
+  // (platformsuz eski fcmTokens listesine artık gitmez — bkz. group3Fcm.test.mjs).
+  db.set("user:A:pushTargets", { type: "hash", map: new Map([["device-1", JSON.stringify({ platform: "android", installationId: "install-device-1", updatedAt: 1 })]]) });
 }
 
 // Job terminal duruma geçip bildirim sonucu kayda yazılana kadar bekler.

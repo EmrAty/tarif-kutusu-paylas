@@ -1,6 +1,6 @@
 import { initializeApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider } from "firebase/auth";
-import { getMessaging, isSupported, getToken } from "firebase/messaging";
+import { getMessaging, isSupported, getToken, onMessage } from "firebase/messaging";
 
 // Bu değerler Firebase konsolundaki proje ayarlarından ("Web app" config) geliyor.
 // Gizli değildir — Firebase web config'i tarayıcıda görünmesi normal olan public bir
@@ -41,5 +41,17 @@ export async function requestFcmToken() {
     return await getToken(messaging, { vapidKey: VAPID_KEY, serviceWorkerRegistration: registration });
   } catch (e) {
     return null;
+  }
+}
+
+// Sayfa açıkken (ön planda) gelen web push mesajları. Yalnızca sahiplik
+// doğrulaması (data-only "push_verify") için kullanılıyor; görünür bildirim
+// göstermiyor. Desteklenmiyorsa hiçbir şey yapmaz.
+export async function onForegroundPushMessage(callback) {
+  try {
+    if (!VAPID_KEY || !(await isSupported())) return () => {};
+    return onMessage(getMessaging(app), (payload) => callback(payload?.data || {}));
+  } catch (e) {
+    return () => {};
   }
 }
