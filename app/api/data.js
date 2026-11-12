@@ -58,6 +58,23 @@ function conflict(res, current) {
   });
 }
 
+// Kilitli aile kartı özeti (Grup 4): Plus'ı kapalı üye aile tariflerini
+// açamaz; listede yalnızca kilitli kart görünür. Kart için gerekenden fazlası
+// (malzeme, yapılış, besin, link, görsel…) istemciye HİÇ gönderilmez.
+const SUMMARY_TITLE_MAX = 200;
+function lockedSummary(list) {
+  return list
+    .filter((r) => r && typeof r === "object" && (typeof r.id === "string" || typeof r.id === "number"))
+    .map((r) => ({
+      id: r.id,
+      title: typeof r.title === "string" ? r.title.slice(0, SUMMARY_TITLE_MAX) : "",
+      category: typeof r.category === "string" ? r.category.slice(0, 80) : "",
+      createdAt: Number.isFinite(Number(r.createdAt)) ? Number(r.createdAt) : null,
+      addedBy: typeof r.addedBy === "string" ? r.addedBy.slice(0, 40) : null,
+      isFavorite: !!r.isFavorite,
+    }));
+}
+
 export default async function handler(req, res) {
   let user;
   try {
@@ -80,18 +97,26 @@ export default async function handler(req, res) {
     return;
   }
 
+  // summary=1: yalnızca aile tarif listesinin kilitli kart özeti (okuma).
+  const summary = req.method === "GET" && req.query.summary === "1";
+  if (summary && (scope !== "family" || bucket !== "recipes")) {
+    res.status(400).json({ error: "Geçersiz istek." });
+    return;
+  }
+
   try {
     if (scope === "family") {
       if (!familyId) {
         res.status(400).json({ error: "Aile kimliği gerekli." });
         return;
       }
-      // Profil + aile kaydı + üye listesi birlikte doğrulanır (bkz. assertFamilyAccess).
+      // Profil + aile kaydı + üye listesi + Plus birlikte doğrulanır (bkz.
+      // assertFamilyAccess). Plus'sız üye yalnızca özeti alabilir.
       try {
-        await assertFamilyAccess(user.uid, familyId);
+        await assertFamilyAccess(user.uid, familyId, undefined, { requirePlus: !summary });
       } catch (e) {
         if (e.status === 400 || e.status === 403 || e.status === 404) {
-          res.status(e.status).json({ error: e.message });
+          res.status(e.status).json({ error: e.message, ...(e.code ? { code: e.code } : {}) });
           return;
         }
         throw e;
@@ -99,6 +124,12 @@ export default async function handler(req, res) {
     }
 
     const key = bucketKey(scope, user.uid, familyId, bucket);
+
+    if (summary) {
+      const current = await readBucket(key);
+      res.status(200).json({ summary: lockedSummary(parseStoredList(current.raw)) });
+      return;
+    }
 
     // Okuma: değer + sürüm. "Kayıt yok" { value: null } demektir; her türlü
     // okuma hatası 5xx döner ve istemci bunu ASLA boş liste saymaz.

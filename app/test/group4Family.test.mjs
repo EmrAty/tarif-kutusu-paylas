@@ -1,5 +1,6 @@
 // Grup 4 — aile yönetimi: üye çıkarma, sahiplik devri, davet kodu yenileme,
-// deneme sınırı, e-posta gizliliği, sahipsiz aile kalmaması.
+// deneme sınırı, e-posta gizliliği, sahipsiz aile kalmaması, Plus kapalıyken
+// aile kilidi.
 // Bellek içi Redis (gerçek Lua ile EVAL); dış ağ yok.
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -330,18 +331,6 @@ test("Çıkar 4: çıkarma sırasında hedefin yeniden katılması (üye listesi
   assert.equal((await readFamily("M1", fam.id)).status, 403);
 });
 
-test("Çıkar 5: aile Plus'sız sahibin de yönetilebilir (yalnızca create/join Plus ister)", async () => {
-  reset();
-  const fam = await createFamily();
-  await joinAll(fam, ["M1"]);
-  db.set("user:OWNER:profile", JSON.stringify({ isPlus: false, families: [fam.id] }));
-  assert.equal((await post("OWNER", { action: "remove", familyId: fam.id, memberUid: "M1" })).status, 200);
-  assert.equal((await post("OWNER", { action: "rotateCode", familyId: fam.id })).status, 200);
-  assert.equal((await post("OWNER", { action: "create", name: "Yeni" })).status, 403);
-});
-
-// --------------------------- sahiplik devri -----------------------------
-
 test("Devir 1: sahip devreder → yeni sahip yönetir, eski sahip yönetemez ama üye kalır", async () => {
   reset();
   const fam = await createFamily();
@@ -441,52 +430,246 @@ test("Ayrıl 3: eski kayıt — sahip üye listesinde yoksa aile listesi açıl�
   assert.equal(r.body.families[0].members.find((x) => x.uid === "M1").isOwner, true);
 });
 
-// ------------------------------ Plus kapanınca ---------------------------
+// ------------------------- Plus kapalı: aile kilitli -------------------------
+// Ürün kararı (Grup 4): Plus kapanınca üyelik ve sahiplik KORUNUR, aile
+// kilitlenir; Plus açılınca her şey olduğu gibi geri gelir.
 
-test("Plus 1: sahip Plus'ı kapatınca aileden çıkar, sahiplik en eski üyeye geçer", async () => {
-  reset();
+const plusOff = (uid) => invoke(profileHandler, { uid, body: { isPlus: false } });
+const plusOn = (uid) => invoke(profileHandler, { uid, body: { isPlus: true } });
+const getBucket = (uid, id, bucket, extra = {}) => invoke(dataHandler, { method: "GET", uid, query: { bucket, scope: "family", familyId: id, ...extra } });
+const putBucket = (uid, id, bucket, value, baseVersion) => invoke(dataHandler, { uid, body: { bucket, scope: "family", familyId: id, value: JSON.stringify(value), baseVersion } });
+const FULL_RECIPE = {
+  id: "r1",
+  title: "Mercimek Çorbası",
+  category: "Çorba",
+  createdAt: 1700000000000,
+  addedBy: "Ayşe",
+  isFavorite: true,
+  ingredients: [{ name: "kırmızı mercimek", amount: "1 su bardağı" }],
+  instructions: ["GİZLİ ADIM"],
+  link: "https://www.tiktok.com/@x/video/1",
+  nutrition: { calories: 500 },
+};
+
+async function familyWithRecipe() {
   const fam = await createFamily();
   await joinAll(fam, ["M1", "M2"]);
-  const r = await invoke(profileHandler, { uid: "OWNER", body: { isPlus: false } });
+  assert.equal((await putBucket("OWNER", fam.id, "recipes", [FULL_RECIPE], 0)).status, 200);
+  assert.equal((await putBucket("OWNER", fam.id, "shopping-list", { selected: ["r1"], checked: {} }, 0)).status, 200);
+  return fam;
+}
+
+test("Kilit 1: Plus kapanınca üyelik ve sahiplik korunur; Plus açılınca aynı aile, aynı kod, aynı içerik", async () => {
+  reset();
+  const fam = await familyWithRecipe();
+  const off = await plusOff("OWNER");
+  assert.equal(off.status, 200);
+  assert.equal(off.body.isPlus, false);
+  assert.deepEqual(off.body.families, [fam.id]);
+  assert.equal(meta(fam.id).ownerUid, "OWNER", "sahiplik devredilmedi");
+  assert.deepEqual(memberUids(fam.id), ["M1", "M2", "OWNER"]);
+
+  const g = await list("OWNER");
+  const f = g.body.families[0];
+  assert.equal(f.membership, "locked");
+  assert.equal(f.locked, true);
+  assert.equal(f.inviteCode, null, "kilitliyken davet kodu gösterilmez");
+  assert.equal(f.isOwner, true);
+  assert.deepEqual(f.members.map((m) => m.uid).sort(), ["M1", "M2", "OWNER"]);
+
+  const on = await plusOn("OWNER");
+  assert.equal(on.status, 200);
+  const g2 = await list("OWNER");
+  assert.equal(g2.body.families[0].membership, "verified");
+  assert.equal(g2.body.families[0].inviteCode, meta(fam.id).inviteCode);
+  assert.equal(g2.body.families[0].inviteCode, fam.inviteCode, "kod aynı kaldı");
+  const r = await getBucket("OWNER", fam.id, "recipes");
   assert.equal(r.status, 200);
-  assert.equal(r.body.isPlus, false);
-  assert.deepEqual(r.body.families, []);
-  assert.deepEqual(r.body.keptFamilies, []);
-  assert.equal(meta(fam.id).ownerUid, "M1");
-  assert.deepEqual(memberUids(fam.id), ["M1", "M2"]);
+  assert.deepEqual(JSON.parse(r.body.value), [FULL_RECIPE]);
 });
 
-test("Plus 2: tek üye sahip Plus'ı kapatınca üyelik korunur (sahipsiz/erişilemez aile oluşmaz)", async () => {
+test("Kilit 2: kilitliyken aile verisi sunucuda kapalı (okuma ve yazma, tüm kovalar); kişisel veri etkilenmez", async () => {
+  reset();
+  const fam = await familyWithRecipe();
+  await plusOff("M1");
+  for (const bucket of ["recipes", "shopping-list", "pantry-items"]) {
+    const r = await getBucket("M1", fam.id, bucket);
+    assert.equal(r.status, 403, bucket);
+    assert.equal(r.body.code, "family_locked");
+    assert.ok(!JSON.stringify(r.body).includes("GİZLİ"));
+  }
+  const versionBefore = db.get(`family:${fam.id}:recipes:version`);
+  const w = await putBucket("M1", fam.id, "recipes", [], Number(versionBefore));
+  assert.equal(w.status, 403);
+  assert.equal(db.get(`family:${fam.id}:recipes:version`), versionBefore, "hiçbir şey yazılmadı");
+  const ws = await putBucket("M1", fam.id, "shopping-list", { selected: [], checked: {} }, 1);
+  assert.equal(ws.status, 403);
+  // Diğer üyeler etkilenmez; kişisel liste çalışır.
+  assert.equal((await getBucket("M2", fam.id, "recipes")).status, 200);
+  const personal = await invoke(dataHandler, { uid: "M1", body: { bucket: "recipes", scope: "personal", value: "[]", baseVersion: 0 } });
+  assert.equal(personal.status, 200);
+});
+
+test("Kilit 3: kilitli kart özeti yalnızca kart alanlarını taşır (malzeme/yapılış/link yok); üye olmayan alamaz", async () => {
+  reset();
+  const fam = await familyWithRecipe();
+  await plusOff("M1");
+  const s = await getBucket("M1", fam.id, "recipes", { summary: "1" });
+  assert.equal(s.status, 200);
+  assert.deepEqual(s.body.summary, [{ id: "r1", title: "Mercimek Çorbası", category: "Çorba", createdAt: 1700000000000, addedBy: "Ayşe", isFavorite: true }]);
+  assert.ok(!JSON.stringify(s.body).includes("GİZLİ") && !JSON.stringify(s.body).includes("tiktok"));
+  // Özet yalnızca tarif listesi için; alışveriş listesi özeti yok.
+  assert.equal((await getBucket("M1", fam.id, "shopping-list", { summary: "1" })).status, 400);
+  plus("STRANGER");
+  assert.equal((await getBucket("STRANGER", fam.id, "recipes", { summary: "1" })).status, 403);
+  // Çıkarılan üye özeti de alamaz.
+  await plusOn("M1");
+  assert.equal((await post("OWNER", { action: "remove", familyId: fam.id, memberUid: "M1" })).status, 200);
+  assert.equal((await getBucket("M1", fam.id, "recipes", { summary: "1" })).status, 403);
+});
+
+test("Kilit 4: Plus'ı kapalı sahip yönetemez (çıkar/devret/kod/sil); Plus açılınca yönetimi geri gelir", async () => {
+  reset();
+  const fam = await familyWithRecipe();
+  await plusOff("OWNER");
+  const code = meta(fam.id).inviteCode;
+  for (const body of [
+    { action: "remove", familyId: fam.id, memberUid: "M1" },
+    { action: "transfer", familyId: fam.id, memberUid: "M1" },
+    { action: "rotateCode", familyId: fam.id },
+    { action: "delete", familyId: fam.id },
+  ]) {
+    const r = await post("OWNER", body);
+    assert.equal(r.status, 403, body.action);
+    assert.equal(r.body.code, "family_locked", body.action);
+  }
+  assert.deepEqual(memberUids(fam.id), ["M1", "M2", "OWNER"]);
+  assert.equal(meta(fam.id).ownerUid, "OWNER");
+  assert.equal(meta(fam.id).inviteCode, code);
+  await plusOn("OWNER");
+  assert.equal((await post("OWNER", { action: "remove", familyId: fam.id, memberUid: "M1" })).status, 200);
+  assert.equal((await post("OWNER", { action: "transfer", familyId: fam.id, memberUid: "M2" })).status, 200);
+  assert.equal(meta(fam.id).ownerUid, "M2");
+});
+
+test("Kilit 5: kilitli üye ayrılabilir; sahipse güvenli devir çalışır; tek üye sahip 409 (Plus mesajıyla)", async () => {
+  reset();
+  let fam = await familyWithRecipe();
+  await plusOff("M2");
+  assert.equal((await post("M2", { action: "leave", familyId: fam.id })).status, 200);
+  assert.deepEqual(memberUids(fam.id), ["M1", "OWNER"]);
+  await plusOff("OWNER");
+  assert.equal((await post("OWNER", { action: "leave", familyId: fam.id })).status, 200);
+  assert.equal(meta(fam.id).ownerUid, "M1", "devir en eski üyeye");
+  assert.deepEqual(profileFamilies("OWNER"), []);
+
+  reset();
+  fam = await createFamily();
+  await plusOff("OWNER");
+  const r = await post("OWNER", { action: "leave", familyId: fam.id });
+  assert.equal(r.status, 409);
+  assert.equal(r.body.code, "sole_member");
+  assert.match(r.body.error, /Plus/);
+  assert.equal((await post("OWNER", { action: "delete", familyId: fam.id })).status, 403);
+});
+
+test("Kilit 6: kilitli sahip yarıda kalmış silmeyi tamamlayabilir (yalnızca temizlik)", async () => {
   reset();
   const fam = await createFamily();
-  const r = await invoke(profileHandler, { uid: "OWNER", body: { isPlus: false } });
-  assert.equal(r.status, 200);
-  assert.deepEqual(r.body.keptFamilies, [fam.id]);
-  assert.deepEqual(r.body.families, [fam.id]);
-  assert.equal((await readFamily("OWNER", fam.id)).status, 200);
-  const g = await list("OWNER");
-  assert.equal(g.body.isPlus, false);
-  assert.equal(g.body.families[0].isOwner, true);
-  // Yeni aile yok ama kendi ailesini silebilir.
-  assert.equal((await post("OWNER", { action: "join", code: fam.inviteCode })).status, 403);
+  db.set(`family:${fam.id}:meta`, JSON.stringify({ ...meta(fam.id), deleting: true }));
+  await plusOff("OWNER");
   assert.equal((await post("OWNER", { action: "delete", familyId: fam.id })).status, 200);
+  assert.deepEqual([...db.keys()].filter((k) => k.startsWith(`family:${fam.id}`)), []);
 });
 
-test("Plus 3: Plus kapatma ile aynı anda katılma — yeni aileye girilemez (önce isPlus yazılır)", async () => {
+test("Kilit 7: kilitliyken bildirim gönderemez; kilitli üye bildirim almaz (yalnız Android kuralı korunur)", async () => {
   reset();
-  const fam = await createFamily("O2");
-  plus("U");
-  let joinStatus;
-  const fired = interleaveOnce((c) => c[0] === "EVAL" && c[3] === "user:U:profile", async () => {
-    joinStatus = (await join("U", fam.inviteCode)).status;
+  const fam = await familyWithRecipe();
+  const { default: notify } = await import("../api/notify.js");
+  await plusOff("M1");
+  const s = await invoke(notify, { uid: "M1", body: { familyId: fam.id, recipeId: "r1", recipeTitle: "Çorba", senderName: "A" } });
+  assert.equal(s.status, 403);
+  assert.equal(s.body.code, "family_locked");
+  // Sahip gönderir: alıcı yalnızca Plus'lı M2 (kilitli M1 sayılmaz).
+  const ok = await invoke(notify, { uid: "OWNER", body: { familyId: fam.id, recipeId: "r1", recipeTitle: "Çorba", senderName: "Sahip" } });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.recipientCount, 1);
+});
+
+test("Kilit 8: diğer giriş yolları — paylaşım paneli job'u, çeviri ve eski veri aktarımı aileye gidemez", async () => {
+  reset();
+  const fam = await familyWithRecipe();
+  await plusOff("M1");
+  const { default: recipeJobs } = await import("../api/recipe-jobs.js");
+  const job = await invoke(recipeJobs, {
+    uid: "M1",
+    body: { requestId: "req-lock-1", sourceUrl: "https://www.instagram.com/p/LOCK/", caption: "1 kg tavuk, 2 yemek kaşığı salça ile fırında.", category: "Kahvaltı", target: "family", familyId: fam.id },
   });
-  assert.equal((await invoke(profileHandler, { uid: "U", body: { isPlus: false } })).status, 200);
+  assert.equal(job.status, 403);
+  const { default: translate } = await import("../api/translate-recipe.js");
+  const tr = await invoke(translate, { uid: "M1", body: { recipeId: "r1", scope: fam.id, target: "en" } });
+  assert.equal(tr.status, 403);
+  assert.ok(!JSON.stringify(tr.body).includes("GİZLİ"));
+  // Eski veri aktarımı istemcide /api/data yazımıyla yapılır → aynı kilit.
+  const imp = await putBucket("M1", fam.id, "pantry-items", ["un"], 0);
+  assert.equal(imp.status, 403);
+  // Kilitli üye yeni aileye katılamaz, aile kuramaz.
+  const other = await createFamily("O2", "Başka");
+  assert.equal((await join("M1", other.inviteCode)).status, 403);
+});
+
+test("Kilit 9: Plus kapatma ile aynı anda sahiplik devri ve ayrılma — üyelik/sahiplik tutarlı kalır", async () => {
+  reset();
+  const fam = await familyWithRecipe();
+  // Sahip Plus'ı kapatırken (profil yazımından hemen önce) M1 ayrılsın.
+  const fired = interleaveOnce((c) => c[0] === "EVAL" && c[3] === "user:OWNER:profile", async () => {
+    assert.equal((await post("M1", { action: "leave", familyId: fam.id })).status, 200);
+  });
+  assert.equal((await plusOff("OWNER")).status, 200);
   setRedisHook(null);
   assert.ok(fired(), "yarış gerçekten oluştu");
-  // Katılma ya profilde Plus'ı kapalı görüp reddedildi ya da önce tamamlandı;
-  // her iki durumda kayıt tutarlı.
-  const inMembers = memberUids(fam.id).includes("U");
-  assert.equal(inMembers, profileFamilies("U").includes(fam.id), `join=${joinStatus}`);
+  assert.equal(meta(fam.id).ownerUid, "OWNER");
+  assert.deepEqual(memberUids(fam.id), ["M2", "OWNER"]);
+  assert.deepEqual(profileFamilies("OWNER"), [fam.id]);
+  // Devir sürerken hedef Plus'ı kapatırsa: devir yine geçerli (hedef üye),
+  // yeni sahip kilitli olur ama aile sahipsiz kalmaz; Plus açınca yönetir.
+  const fired2 = interleaveOnce(isMetaWrite(fam.id), async () => {
+    assert.equal((await plusOff("M2")).status, 200);
+  });
+  await plusOn("OWNER");
+  assert.equal((await post("OWNER", { action: "transfer", familyId: fam.id, memberUid: "M2" })).status, 200);
+  setRedisHook(null);
+  assert.ok(fired2(), "yarış gerçekten oluştu");
+  assert.equal(meta(fam.id).ownerUid, "M2");
+  assert.equal((await post("M2", { action: "rotateCode", familyId: fam.id })).status, 403);
+  await plusOn("M2");
+  assert.equal((await post("M2", { action: "rotateCode", familyId: fam.id })).status, 200);
+});
+
+test("Kilit 10: Plus'ı kapalı üyenin hesabı silinirse sahiplik yine güvenle devredilir", async () => {
+  reset();
+  const fam = await familyWithRecipe();
+  await plusOff("OWNER");
+  const out = await deleteAccount("OWNER");
+  assert.equal(out.families[0].result, "ownership_transferred");
+  assert.equal(meta(fam.id).ownerUid, "M1");
+  assert.equal((await getBucket("M1", fam.id, "recipes")).status, 200, "ortak veri korunur");
+});
+
+// ------------------------------- aile reisi -------------------------------
+
+test("Reis: sahip işareti mevcut sahipte; devirde yeni sahibe geçer, kurucuya sabit değil; kilitliyken de doğru", async () => {
+  reset();
+  const fam = await createFamily();
+  await joinAll(fam, ["M1"]);
+  const owners = async (uid) => (await list(uid)).body.families[0].members.filter((m) => m.isOwner).map((m) => m.uid);
+  assert.deepEqual(await owners("M1"), ["OWNER"]);
+  await post("OWNER", { action: "transfer", familyId: fam.id, memberUid: "M1" });
+  assert.deepEqual(await owners("OWNER"), ["M1"]);
+  assert.deepEqual(await owners("M1"), ["M1"]);
+  assert.equal(meta(fam.id).ownerUid, "M1");
+  await plusOff("OWNER");
+  assert.deepEqual(await owners("OWNER"), ["M1"]);
 });
 
 // ------------------------------ hesap silme ------------------------------
@@ -547,4 +730,20 @@ test("Denetim: salt okunur betik sahipsiz aileyi, üyesiz aileyi, eski kodu ve s
   assert.equal(report.families.storedMemberEmails, 1);
   assert.ok(!JSON.stringify(report).includes("@ornek.test"), "e-posta raporda yok");
   assert.equal(JSON.stringify([...db.entries()].map(([k, v]) => [k, typeof v === "string" ? v : "x"])), before);
+});
+
+test("İstemci deposu: kilitlenen ailenin kovaları bellekten atılır, diğer kapsamlar kalır", async () => {
+  const { createBucketStore } = await import("../src/syncedBuckets.js");
+  const data = { "recipes|personal": '[{"id":"p"}]', "recipes|F1": '[{"id":"f"}]', "shopping-list|F1": '{"selected":[],"checked":{}}' };
+  const transport = {
+    get: async (bucket, scope) => ({ value: data[`${bucket}|${scope}`] ?? null, version: 1 }),
+    set: async () => ({ ok: true, version: 2 }),
+  };
+  const store = createBucketStore({ transport });
+  await Promise.all([store.load("recipes", "personal"), store.load("recipes", "F1"), store.load("shopping-list", "F1")]);
+  assert.ok(store.get("recipes", "F1")?.data);
+  store.dropScope("F1");
+  assert.equal(store.get("recipes", "F1"), null);
+  assert.equal(store.get("shopping-list", "F1"), null);
+  assert.deepEqual(store.get("recipes", "personal").data, [{ id: "p" }]);
 });

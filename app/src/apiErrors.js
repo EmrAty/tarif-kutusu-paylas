@@ -30,6 +30,7 @@ export const SERVER_ERROR_KEYS = {
   sole_member: "families.errorSoleMember",
   not_owner: "families.errorNotOwner",
   member_not_found: "families.errorMemberNotFound",
+  family_locked: "families.errorLocked",
 };
 
 export function serverErrorKey(code) {

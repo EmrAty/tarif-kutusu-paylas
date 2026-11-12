@@ -118,14 +118,25 @@ function accessError(status, message) {
   return err;
 }
 
+// Plus kapalı üyenin ailesi KİLİTLİ (Grup 4 ürün kararı): üyelik ve sahiplik
+// korunur, ama aile içeriğine erişim ve aile işlemleri kapalı. Plus yeniden
+// açılınca hiçbir taşıma/davet gerekmeden her şey erişilebilir olur.
+export const FAMILY_LOCKED_CODE = "family_locked";
+export function familyLockedError(message = "Aile içeriği Plus üyelere açık. Plus'ı açınca ailen kaldığı yerden devam eder.") {
+  const err = new Error(message);
+  err.status = 403;
+  err.code = FAMILY_LOCKED_CODE;
+  return err;
+}
+
 // Aile verisine (okuma/yazma, çeviri, bildirim) erişim için ortak kontrol.
 // Kimlik doğrulaması tek başına yetmez; üç kayıt birlikte doğrulanır:
 // kullanıcının profilinde aile var, aile kaydı (meta) var VE ailenin üye
-// listesinde kullanıcı var. Biri eksikse erişim yok (fail-closed). Plus
-// şartı burada YOK: Plus'ı kapanan üye ailesinin verisini görmeye devam eder
-// (eski davranış); yalnızca share-panel job'u Plus ister (assertFamilyMember).
+// listesinde kullanıcı var. Biri eksikse erişim yok (fail-closed).
+// Grup 4: üyelik doğrulandıktan sonra Plus da istenir (403 family_locked).
+// requirePlus: false yalnızca kilitli kart özeti için (api/data.js summary).
 // profile verilirse yeniden okunmaz.
-export async function assertFamilyAccess(uid, familyId, profile) {
+export async function assertFamilyAccess(uid, familyId, profile, { requirePlus = true } = {}) {
   if (typeof familyId !== "string" || !FAMILY_ID_RE.test(familyId)) {
     throw accessError(400, "Geçersiz aile.");
   }
@@ -141,10 +152,12 @@ export async function assertFamilyAccess(uid, familyId, profile) {
   if (!members || typeof members !== "object" || !members[uid]) {
     throw accessError(403, "Bu ailenin üyesi değilsin.");
   }
+  if (requirePlus && !p.isPlus) throw familyLockedError();
   return { profile: p, meta, members };
 }
 
-// Kullanıcının erişimi gerçekten doğrulanan aileleri (profil + meta + üyelik).
+// Kullanıcının erişimi gerçekten doğrulanan aileleri (profil + meta + üyelik
+// + Plus; kilitli aileler dışarıda kalır).
 // Doğrulanamayan aile sessizce dışarıda kalır; Redis hatası yukarı fırlar.
 export async function verifiedFamilyIds(uid, profile) {
   const p = profile || (await getProfile(uid));
@@ -345,18 +358,12 @@ export async function handOffOwnership(uid, id, preferredUid = null) {
   return next;
 }
 
-// Kullanıcıyı aileden çıkarır (ayrılma, Plus kapanması): sahiplik devri →
-// üye listesi → profil → sahip kontrolü. keepIfAlone: ailede başka üye yoksa
-// hiçbir şey yapılmaz ("kept") — aile sahipsiz ve erişilemez veriyle kalmasın.
-// Dönüş: "left" | "kept".
-export async function leaveFamily(uid, id, { preferredOwner = null, keepIfAlone = false } = {}) {
-  if (keepIfAlone) {
-    const { meta, members } = await readFamilyState(id);
-    if (meta && !isFamilyDeleting(meta) && members[uid] && !oldestMember(members, uid)) return "kept";
-  }
+// Kullanıcıyı aileden çıkarır (elle ayrılma): sahiplik devri → üye listesi →
+// profil → sahip kontrolü. Plus kapanması artık kimseyi aileden çıkarmaz
+// (aile kilitlenir, bkz. assertFamilyAccess).
+export async function leaveFamily(uid, id, { preferredOwner = null } = {}) {
   await handOffOwnership(uid, id, preferredOwner);
   await removeMemberFromFamily(uid, id);
   await dropFamilyFromProfile(uid, id);
   await ensureOwner(id);
-  return "left";
 }

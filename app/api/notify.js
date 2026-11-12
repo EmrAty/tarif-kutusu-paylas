@@ -1,5 +1,6 @@
 import { requireUser } from "./_lib/auth.js";
 import { assertFamilyAccess } from "./_lib/families.js";
+import { getProfile } from "./_lib/profile.js";
 import { collectPushTargets, sendToTargets } from "./_lib/fcm.js";
 import { craveNotificationBody } from "./_lib/turkish.js";
 
@@ -23,17 +24,22 @@ export default async function handler(req, res) {
     return;
   }
 
-  // Profil + aile kaydı + üye listesi birlikte doğrulanır.
+  // Profil + aile kaydı + üye listesi + Plus birlikte doğrulanır (Plus'sız
+  // üyenin ailesi kilitli: bildirim gönderemez).
   let members;
   try {
     ({ members } = await assertFamilyAccess(user.uid, familyId));
   } catch (e) {
-    res.status(e.status || 502).json({ error: e.message });
+    res.status(e.status || 502).json({ error: e.message, ...(e.code ? { code: e.code } : {}) });
     return;
   }
   const name = (senderName || "").trim() || members[user.uid]?.name || "Biri";
   const body = craveNotificationBody(name, recipeTitle);
-  const recipientUids = Object.keys(members).filter((uid) => uid !== user.uid);
+  // Plus'ı kapalı üyenin ailesi kilitli: tarifi açamayacağı bildirimi almaz
+  // (profil okunamazsa da gönderilmez — fail-closed).
+  const others = Object.keys(members).filter((uid) => uid !== user.uid);
+  const plusFlags = await Promise.all(others.map((uid) => getProfile(uid).then((p) => !!p.isPlus, () => false)));
+  const recipientUids = others.filter((_, i) => plusFlags[i]);
 
   // sent/attempted, gönderenin "gönderildi" görmesine rağmen kimsenin bildirim
   // almadığı durumları (kayıtlı token yok / FCM gönderimi hata verdi) istemcide

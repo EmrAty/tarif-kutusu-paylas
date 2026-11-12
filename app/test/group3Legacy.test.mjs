@@ -160,9 +160,13 @@ test("Legacy 7b (D5): geçmişte yazılmamış biçimler tahminle dönüştürü
 test("Legacy 8: aile üyesi yalnız üyesi olduğu aileyi okur; üye olmayan erişemez", async () => {
   reset();
   seedFamily();
+  const m1 = await getData("M1", { bucket: "recipes", scope: "family", familyId: "F1" });
+  assert.equal(m1.status, 200);
+  assert.deepEqual(JSON.parse(m1.body.value).map((x) => x.id), ["f1"]);
+  // Grup 4 ürün kararı: Plus olmayan üyenin ailesi kilitli (eskiden okuyabiliyordu).
   const m2 = await getData("M2", { bucket: "recipes", scope: "family", familyId: "F1" });
-  assert.equal(m2.status, 200, "Plus olmayan üye de ailesini okuyabilir (mevcut davranış)");
-  assert.deepEqual(JSON.parse(m2.body.value).map((x) => x.id), ["f1"]);
+  assert.equal(m2.status, 403);
+  assert.equal(m2.body.code, "family_locked");
 
   const x = await getData("X", { bucket: "recipes", scope: "family", familyId: "F1" });
   assert.equal(x.status, 403);

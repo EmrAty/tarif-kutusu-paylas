@@ -203,7 +203,9 @@ test("Aile 10: bozuk profil kaydı varsayılanla ezilmez", async () => {
   assert.equal(db.get("user:BAD:profile"), "{bozuk");
 });
 
-test("Aile 11: Plus kapatılırken aynı anda katılınan aile profilden silinmez ama kapatılan ailelerden çıkılır", async () => {
+// Grup 4 ürün kararı: Plus kapanınca artık ailelerden çıkılmıyor (aile
+// kilitleniyor). Yarışın amacı aynı: aynı anda yapılan katılma ezilmez.
+test("Aile 11: Plus kapatılırken aynı anda katılınan aile profilden silinmez; mevcut üyelik de korunur", async () => {
   reset();
   const f1 = await createFamily("O1");
   const f2 = await createFamily("O2");
@@ -217,8 +219,8 @@ test("Aile 11: Plus kapatılırken aynı anda katılınan aile profilden silinme
   assert.equal(r.status, 200);
   const p = JSON.parse(db.get("user:U:profile"));
   assert.equal(p.isPlus, false);
-  assert.equal(p.families.includes(f1.id), false);
-  assert.deepEqual(members(f1.id), ["O1"]);
+  assert.equal(p.families.includes(f1.id), true);
+  assert.deepEqual(members(f1.id), ["O1", "U"]);
   // f2 katılımı ezilmedi: profil ve üye listesi tutarlı kaldı.
   assert.equal(p.families.includes(f2.id), members(f2.id).includes("U"));
 });

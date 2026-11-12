@@ -20,6 +20,7 @@ import {
   oldestMember,
   leaveFamily,
   cleanName,
+  familyLockedError,
   MEMBER_NAME_MAX,
   FAMILY_NAME_MAX,
 } from "./_lib/families.js";
@@ -35,9 +36,11 @@ import { clientIp } from "./_lib/aiGuard.js";
 //   POST action=remove          yalnızca sahip — üyeyi çıkarır, kodu yeniler (Grup 4)
 //   POST action=transfer        yalnızca sahip — sahipliği devreder (Grup 4)
 //   POST action=rotateCode      yalnızca sahip — yeni davet kodu (Grup 4)
-// Yalnızca yeni aileye girmek (create/join) Plus ister; mevcut ailedeki
-// yönetim işlemleri (ayrılma, silme, çıkarma, devir, kod yenileme) istemez —
-// Plus'ı kapanan sahip de ailesini düzenleyebilsin, sahipsiz aile kalmasın.
+// Plus kapalıyken aile KİLİTLİ (Grup 4 ürün kararı): üyelik ve sahiplik
+// korunur; kullanıcı ailesini ve üyelerini görür, yalnızca ayrılabilir (sahipse
+// güvenli devirle). Diğer her işlem (oluşturma, katılma, silme, çıkarma, devir,
+// kod yenileme) Plus ister. Tek istisna: yarıda kalmış bir silmeyi sahibin
+// tamamlaması (aile zaten erişilemez; yalnızca temizlik).
 
 function familyId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -108,12 +111,16 @@ function targetMember(body, uid, members) {
 //   membership "deleting"   — silme sürüyor ya da yarıda kaldı (sahip
 //                             tamamlar, diğerleri ayrılır); sahip kimliği yalnızca
 //                             doğrulanmış üyeye gösterilir.
+//   membership "locked"     — doğrulanmış üye ama Plus kapalı (Grup 4): üye
+//                             listesi ve sahip görünür, davet kodu gösterilmez.
+//                             Ayrı bir değer olduğu için eski paketler bu aileyi
+//                             "kullanılabilir" sanıp verisini istemez.
 //
 // Grup 4 — gizlilik: üye satırı yalnızca {uid, name, isOwner, isAnonymous,
 // joinedAt} taşır. E-posta diğer üyelere hiç gönderilmez (eskiden her üyenin
 // e-postası tüm aileye dönüyordu); adı olmayan üye istemcide "İsimsiz üye"
 // olarak görünür. uid, sahip işlemlerinin (çıkar / devret) hedefi için gerekli.
-async function loadFamilySummary(id, uid, { repairOwner = true } = {}) {
+async function loadFamilySummary(id, uid, { repairOwner = true, isPlus = true } = {}) {
   let [meta, members] = await Promise.all([redisGetJSON(familyMetaKey(id), null), redisGetJSON(membersKey(id), {})]);
   if (!meta) return null;
   const isMember = !!(members && typeof members === "object" && members[uid]);
@@ -138,10 +145,11 @@ async function loadFamilySummary(id, uid, { repairOwner = true } = {}) {
   return {
     id,
     name: meta.name,
-    inviteCode: meta.inviteCode,
+    inviteCode: isPlus ? meta.inviteCode : null,
     ownerUid: meta.ownerUid,
     isOwner: meta.ownerUid === uid,
-    membership: "verified",
+    membership: isPlus ? "verified" : "locked",
+    ...(isPlus ? {} : { locked: true }),
     members: list,
   };
 }
@@ -205,7 +213,7 @@ async function handle(req, res, user) {
     const familyIds = await pruneDeletedFamilies(user.uid, profile.families);
     const name = cleanName(req.query.name, MEMBER_NAME_MAX);
     await syncDisplayName(user.uid, familyIds, name);
-    const families = (await Promise.all(familyIds.map((id) => loadFamilySummary(id, user.uid)))).filter(Boolean);
+    const families = (await Promise.all(familyIds.map((id) => loadFamilySummary(id, user.uid, { isPlus: profile.isPlus })))).filter(Boolean);
     res.status(200).json({ isPlus: profile.isPlus, families });
     return;
   }
@@ -221,12 +229,14 @@ async function handle(req, res, user) {
   // Hayalet aile 2'lik sınırdan yer yemesin (yalnızca kesin silinmişler).
   if (action === "create" || action === "join") profile.families = await pruneDeletedFamilies(user.uid, profile.families);
 
-  // Yalnızca yeni bir aile kurmak/katılmak Plus gerektiriyor. Ayrılmak ve
-  // kendi ailesini yönetmek serbest: aksi halde Plus'ı kapatan biri ailede
-  // takılı kalır ya da aile sahipsiz/yönetilemez olurdu.
+  // Plus kapalıyken yalnızca ayrılmak serbest (aksi halde ailede takılı
+  // kalırdı). Yarıda kalmış silmeyi tamamlamak "delete" içinde ayrıca ele alınır.
   if (!profile.isPlus && (action === "create" || action === "join")) {
     res.status(403).json({ error: "Aile özelliği Plus üyelere özeldir." });
     return;
+  }
+  if (!profile.isPlus && action !== "leave" && action !== "delete") {
+    throw familyLockedError("Aileyi yönetmek için Plus gerekir. Plus'ı açınca yönetim yetkin geri gelir.");
   }
 
   const memberRecord = () => ({
@@ -337,7 +347,13 @@ async function handle(req, res, user) {
     const activeOwner = meta && !isFamilyDeleting(meta) && meta.ownerUid === user.uid && members[user.uid];
     if (activeOwner && !oldestMember(members, user.uid)) {
       // Tek üye sahipse ayrılmak aileyi sahipsiz ve erişilemez bırakırdı.
-      throw httpError(409, "Ailede senden başka üye yok. Aileyi bırakmak istiyorsan silebilirsin.", "sole_member");
+      throw httpError(
+        409,
+        profile.isPlus
+          ? "Ailede senden başka üye yok. Aileyi bırakmak istiyorsan silebilirsin."
+          : "Ailede senden başka üye yok. Aileyi silmek için Plus'ı açman gerekir.",
+        "sole_member"
+      );
     }
     let preferred = null;
     if (activeOwner && body.newOwnerUid != null) preferred = targetMember({ memberUid: body.newOwnerUid }, user.uid, members);
@@ -367,6 +383,9 @@ async function handle(req, res, user) {
       res.status(403).json({ error: "Sadece aile sahibi silebilir.", code: "not_owner" });
       return;
     }
+    // Plus kapalı sahip aileyi silemez (kilitli); yalnızca yarıda kalmış
+    // silmeyi tamamlayabilir (aile zaten erişilemez durumda).
+    if (!profile.isPlus && !isFamilyDeleting(meta)) throw familyLockedError("Aileyi silmek için Plus gerekir.");
     // Sahip doğrulanmış üye olmalı; yarıda kalmış silmede (işaretli) üye
     // listesi zaten silinmiş olabileceğinden sahip tamamlayabilir.
     const members = await redisGetJSON(membersKey(id), {});

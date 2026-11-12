@@ -798,6 +798,11 @@ export default function TarifKutusu() {
   const [isPlus, setIsPlus] = useState(false);
   const [families, setFamilies] = useState([]); // [{ id, name, inviteCode, members:[{uid,email,isAnonymous}] }]
   const [unverifiedFamilies, setUnverifiedFamilies] = useState([]); // erişilemeyen: [{ id, name, membership: "unverified" | "deleting", ownerUid? }]
+  // Plus kapalıyken üyesi olunan aileler (Grup 4: membership "locked"). Tam
+  // verileri yüklenmez; listede yalnızca sunucunun verdiği kilitli kart
+  // özetleri görünür (lockedSummaries). Plus açılınca families listesine geçerler.
+  const [lockedFamilies, setLockedFamilies] = useState([]);
+  const [lockedSummaries, setLockedSummaries] = useState({}); // { [familyId]: [{ id, title, category, createdAt, addedBy, isFavorite }] }
   // Uzun ömürlü native dinleyiciler (resume/bildirim) güncel aile listesini
   // yeniden abone olmadan okuyabilsin diye.
   const familiesRef = useRef(families);
@@ -1008,8 +1013,10 @@ export default function TarifKutusu() {
       const all = Array.isArray(data.families) ? data.families : [];
       // membership alanı olmayan yanıt (eski sunucu) tam üyelik sayılır.
       const usable = (f) => !f.membership || f.membership === "verified";
+      const locked = (f) => f.membership === "locked";
       setFamilies(all.filter(usable));
-      setUnverifiedFamilies(all.filter((f) => !usable(f)));
+      setLockedFamilies(all.filter(locked));
+      setUnverifiedFamilies(all.filter((f) => !usable(f) && !locked(f)));
     } catch (e) {
       // bilgi alınamazsa sessizce geç, bir sonraki denemede tekrar bakılır
     } finally {
@@ -1316,6 +1323,26 @@ export default function TarifKutusu() {
     families.forEach((f) => dataStore.ensureLoaded("recipes", f.id));
   }, [familiesLoaded, families]);
 
+  // Kilitli aileler (Plus kapalı): bellekteki tam veri atılır, yalnızca kart
+  // özeti istenir. Sunucu da tam veriyi zaten vermez (403 family_locked).
+  useEffect(() => {
+    let cancelled = false;
+    lockedFamilies.forEach((f) => dataStore.dropScope(f.id));
+    const ids = new Set(lockedFamilies.map((f) => f.id));
+    setLockedSummaries((prev) => Object.fromEntries(Object.entries(prev).filter(([id]) => ids.has(id))));
+    lockedFamilies.forEach((f) => {
+      const qs = new URLSearchParams({ bucket: "recipes", scope: "family", familyId: f.id, summary: "1" }).toString();
+      authedFetch(`/api/data?${qs}`)
+        .then((data) => {
+          if (!cancelled && Array.isArray(data?.summary)) setLockedSummaries((prev) => ({ ...prev, [f.id]: data.summary }));
+        })
+        .catch(() => {});
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [lockedFamilies]);
+
   // Yüklenemeyen tarif kovaları (ilk yükleme hatası) ve tazelenemeyenler.
   const recipeLoadProblems = useMemo(() => {
     const scopes = [PERSONAL, ...families.map((f) => f.id)];
@@ -1335,11 +1362,11 @@ export default function TarifKutusu() {
 
   const familyNameById = useMemo(() => {
     const map = {};
-    families.forEach((f) => {
+    [...families, ...lockedFamilies].forEach((f) => {
       map[f.id] = f.name;
     });
     return map;
-  }, [families]);
+  }, [families, lockedFamilies]);
 
   // Aynı tarif birden fazla yere (kişisel + bir ya da iki aile) kaydedilebiliyor —
   // her yerde AYNI id'yle saklanıyor. Burada id'ye göre tekilleştirip, o tarifin
@@ -1359,8 +1386,17 @@ export default function TarifKutusu() {
     };
     addFrom(PERSONAL, recipeBuckets[PERSONAL] || []);
     families.forEach((f) => addFrom(f.id, recipeBuckets[f.id] || []));
+    // Kilitli aile tarifleri yalnızca kart olarak (özet; malzeme/yapılış yok).
+    // Aynı tarif erişilebilir bir listede de varsa o kopya kullanılır ve kilitli
+    // ailenin kapsamı ona EKLENMEZ (değişiklikler kilitli aileye yazılmaya
+    // çalışılmasın).
+    lockedFamilies.forEach((f) => {
+      (lockedSummaries[f.id] || []).forEach((r) => {
+        if (r && r.id != null && !byId.has(r.id)) byId.set(r.id, { ...r, ingredients: [], instructions: [], _scopes: [f.id], _lockedFamily: true });
+      });
+    });
     return Array.from(byId.values());
-  }, [recipeBuckets, families]);
+  }, [recipeBuckets, families, lockedFamilies, lockedSummaries]);
 
   // Free hesapta sınırı aşan en yeni kişisel tarifler kilitli (bkz.
   // src/recipeLocks.js). Türetilmiş durum: Redis'e yazılmaz; Plus açılınca,
@@ -1373,12 +1409,16 @@ export default function TarifKutusu() {
         : lockedRecipeIds(recipeBuckets[PERSONAL] || [], { isPlus: plusStatus, limit: FREE_RECIPE_LIMIT }),
     [plusStatus, recipeBuckets]
   );
+  // Plus kapalıyken aile tariflerinin tamamı kilitli (Grup 4) — aynı yeşil
+  // örtü ve kilit (LockedOverlay); kişisel sınır kilidiyle aynı yol.
+  const lockedFamilyRecipeIds = useMemo(() => new Set(recipes.filter((r) => r._lockedFamily).map((r) => r.id)), [recipes]);
   const isRecipeLocked = useCallback(
     (recipeOrId) => {
+      if (recipeOrId && typeof recipeOrId === "object" && recipeOrId._lockedFamily) return true;
       const id = typeof recipeOrId === "string" ? recipeOrId : recipeOrId?.id;
-      return !!id && lockedIds.has(id);
+      return !!id && (lockedIds.has(id) || lockedFamilyRecipeIds.has(id));
     },
-    [lockedIds]
+    [lockedIds, lockedFamilyRecipeIds]
   );
 
   // Bildirime tıklanınca (native pushNotificationActionPerformed ya da web
@@ -1743,6 +1783,10 @@ export default function TarifKutusu() {
     [translations, titleTranslations, language]
   );
   const displayRecipes = useMemo(() => recipes.map(localizeForDisplay), [recipes, localizeForDisplay]);
+  // Alışveriş listesi ve "Elimde Bunlar Var" malzemeyle çalışır; kilitli aile
+  // kartlarının malzemesi zaten yok, hiç gösterilmezler.
+  const accessibleRecipes = useMemo(() => recipes.filter((r) => !r._lockedFamily), [recipes]);
+  const accessibleDisplayRecipes = useMemo(() => displayRecipes.filter((r) => !r._lockedFamily), [displayRecipes]);
   const activeDisplay = useMemo(() => localizeForDisplay(active), [active, localizeForDisplay]);
   useEffect(() => {
     if (active && (view === "detail" || view === "cook")) requestTranslation(active);
@@ -1991,7 +2035,7 @@ export default function TarifKutusu() {
             <div className={screenTransitionClass}>
               <ShoppingList
                 key={shoppingInitialContext}
-                recipes={displayRecipes}
+                recipes={accessibleDisplayRecipes}
                 onNeedTranslation={requestTranslation}
                 isPlus={isPlus}
                 families={families}
@@ -2003,7 +2047,7 @@ export default function TarifKutusu() {
           {view === "pantry" && (
             <div className={screenTransitionClass}>
               <PantryFinder
-                recipes={recipes}
+                recipes={accessibleRecipes}
                 isPlus={isPlus}
                 families={families}
                 isRecipeLocked={isRecipeLocked}
@@ -2036,6 +2080,7 @@ export default function TarifKutusu() {
             isPlus={isPlus}
             families={families}
             unverifiedFamilies={unverifiedFamilies}
+            lockedFamilies={lockedFamilies}
             personName={personName}
             currentUid={authUser?.uid}
             onReload={loadFamiliesState}
@@ -2916,6 +2961,7 @@ function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus,
               />
             </button>
           )}
+          {!r._lockedFamily && (
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -2926,6 +2972,7 @@ function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus,
           >
             <Trash2 size={14} color={isActive || locked ? "#C9C2AE" : COLORS.inkSoft} />
           </button>
+          )}
         </div>
         {isFam && (
           <div style={{ display: "grid", gridTemplateRows: notifyOpen ? "1fr" : "0fr", transition: "grid-template-rows 220ms ease" }}>
@@ -3047,7 +3094,8 @@ function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus,
               recipes.length > 0 ? <span style={{ color: COLORS.inkSoft, fontSize: "15px" }}>({recipes.length})</span> : ""
             ) : (
               <span style={{ color: COLORS.inkSoft, fontSize: "15px" }}>
-                ({recipes.length}/{FREE_RECIPE_LIMIT})
+                {/* Ücretsiz sınır yalnızca kişisel tarifleri sayar (kilitli aile kartları hariç). */}
+                ({recipes.filter((r) => (r._scopes || [r._scope]).includes(PERSONAL)).length}/{FREE_RECIPE_LIMIT})
               </span>
             )}
           </span>
@@ -6032,7 +6080,7 @@ function FavoritesView({ recipes, familyNameById, isRecipeLocked, onSelect, onOp
 // e-posta yok), sahip işlemleri (çıkar / sahip yap / kodu yenile / sil) ve
 // ayrılma. Riskli her işlem satır içi onay ister; sunucu yetkiyi ayrıca
 // doğrular (arayüz yalnızca kolaylık).
-function FamilyCard({ family: f, currentUid, busy, setBusy, onReload, importState, onImport }) {
+function FamilyCard({ family: f, currentUid, busy, setBusy, onReload, importState, onImport, onOpenPlus }) {
   const { t } = useLanguage();
   const [confirm, setConfirm] = useState(null); // { type, uid?, name? }
   const [openMember, setOpenMember] = useState(null);
@@ -6043,6 +6091,11 @@ function FamilyCard({ family: f, currentUid, busy, setBusy, onReload, importStat
   useEffect(() => () => clearTimeout(copiedTimer.current), []);
 
   const isOwner = f.ownerUid === currentUid;
+  // Plus kapalı (Grup 4): üyeliğini ve üyeleri görür, yalnızca ayrılabilir.
+  // Yönetim (çıkar, sahip yap, kod, sil) Plus açılınca geri gelir; sunucu da
+  // aynı kuralı uygular (403 family_locked).
+  const locked = f.membership === "locked" || !!f.locked;
+  const manage = isOwner && !locked;
   const others = f.members.filter((m) => m.uid !== currentUid);
   const me = f.members.find((m) => m.uid === currentUid);
   const memberLabel = (m) => m.name || (m.isAnonymous ? t("families.guestUser") : t("families.unnamedMember"));
@@ -6157,13 +6210,24 @@ function FamilyCard({ family: f, currentUid, busy, setBusy, onReload, importStat
     <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "20px", boxShadow: CARD_SHADOW }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", marginBottom: "12px" }}>
         <h3 style={{ fontFamily: SERIF, fontSize: "18px", color: COLORS.ink, margin: 0, minWidth: 0, overflowWrap: "anywhere" }}>{f.name}</h3>
-        {isOwner && (
+        {locked && (
           <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "11px", fontWeight: 700, color: COLORS.mustardDark, background: "#F6ECD4", borderRadius: "999px", padding: "3px 8px", flexShrink: 0 }}>
-            <Crown size={12} /> {t("families.ownerBadge")}
+            <Lock size={12} /> {t("families.lockedBadge")}
           </span>
         )}
       </div>
 
+      {locked && (
+        <div style={{ padding: "12px", borderRadius: "10px", background: "#F7F1E3", border: `1px solid ${COLORS.line}`, marginBottom: "4px" }}>
+          <p style={{ fontSize: "13px", color: COLORS.ink, margin: "0 0 10px", lineHeight: 1.45 }}>{t("families.lockedBody")}</p>
+          <button onClick={onOpenPlus} style={{ ...solidButton(COLORS.mustard, COLORS.forestDark) }}>
+            {t("families.reviewPlus")}
+          </button>
+        </div>
+      )}
+
+      {!locked && (
+      <>
       <div style={{ fontSize: "12px", color: COLORS.inkSoft, marginBottom: "6px" }}>{t("families.inviteCode")}</div>
       <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
         <code style={{ fontSize: "15px", fontWeight: 700, letterSpacing: "0.06em", color: COLORS.forestDark, background: "#EFE9D8", padding: "5px 10px", borderRadius: "6px" }}>
@@ -6173,14 +6237,16 @@ function FamilyCard({ family: f, currentUid, busy, setBusy, onReload, importStat
           {copied ? <Check size={14} /> : <Copy size={14} />}
           {copied && <span>{t("families.codeCopied")}</span>}
         </button>
-        {isOwner && (
+        {manage && (
           <button onClick={() => ask({ type: "rotate" })} disabled={busy} style={{ ...linkButton(COLORS.forest), display: "inline-flex", alignItems: "center", gap: "4px", marginLeft: "auto" }}>
             <RefreshCw size={13} /> {t("families.rotateCode")}
           </button>
         )}
       </div>
-      {isOwner && legacyCode && <p style={{ fontSize: "12px", color: COLORS.mustardDark, margin: "6px 0 0" }}>{t("families.legacyCodeHint")}</p>}
+      {manage && legacyCode && <p style={{ fontSize: "12px", color: COLORS.mustardDark, margin: "6px 0 0" }}>{t("families.legacyCodeHint")}</p>}
       {confirm?.type === "rotate" && confirmBox}
+      </>
+      )}
 
       <div style={{ fontSize: "12px", fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", color: COLORS.inkSoft, margin: "18px 0 6px" }}>
         {t("families.membersTitle", { count: f.members.length })}
@@ -6188,7 +6254,7 @@ function FamilyCard({ family: f, currentUid, busy, setBusy, onReload, importStat
       <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
         {f.members.map((m) => {
           const self = m.uid === currentUid;
-          const canManage = isOwner && !self;
+          const canManage = manage && !self;
           const open = openMember === m.uid;
           const rowConfirm = confirm && (confirm.type === "remove" || confirm.type === "transfer") && confirm.uid === m.uid;
           return (
@@ -6196,9 +6262,9 @@ function FamilyCard({ family: f, currentUid, busy, setBusy, onReload, importStat
               <div style={{ display: "flex", alignItems: "center", gap: "8px", minHeight: "32px" }}>
                 <span style={{ flex: 1, minWidth: 0, fontSize: "14px", color: m.name ? COLORS.ink : COLORS.inkSoft, overflowWrap: "anywhere" }}>
                   {memberLabel(m)}
+                  {m.isOwner && <span style={{ color: COLORS.mustardDark, fontWeight: 600 }}>{t("families.ownerSuffix")}</span>}
                   {self && <span style={{ color: COLORS.inkSoft }}>{t("families.youSuffix")}</span>}
                 </span>
-                {m.isOwner && <Crown size={14} color={COLORS.mustard} aria-label={t("families.ownerBadge")} />}
                 {canManage && (
                   <button
                     onClick={() => {
@@ -6230,6 +6296,8 @@ function FamilyCard({ family: f, currentUid, busy, setBusy, onReload, importStat
       </ul>
       {me && !me.name && <p style={{ fontSize: "12px", color: COLORS.inkSoft, margin: "8px 0 0" }}>{t("families.setNameHint")}</p>}
 
+      {!locked && (
+      <>
       <button
         onClick={() => onImport(f.id)}
         disabled={importState === "checking"}
@@ -6240,15 +6308,17 @@ function FamilyCard({ family: f, currentUid, busy, setBusy, onReload, importStat
       {importState && typeof importState === "object" && <LegacyImportResult results={importState} />}
       {importState === "hata" && <div style={{ fontSize: "12px", color: COLORS.danger, marginTop: "6px" }}>{t("families.importFailed")}</div>}
       {importState === "none" && <div style={{ fontSize: "12px", color: COLORS.inkSoft, marginTop: "6px" }}>{t("families.legacyNotEligible")}</div>}
+      </>
+      )}
 
-      <div style={{ display: "flex", justifyContent: isOwner ? "space-between" : "flex-end", alignItems: "center", gap: "8px", marginTop: "14px", paddingTop: "10px", borderTop: `1px solid ${COLORS.line}` }}>
+      <div style={{ display: "flex", justifyContent: manage ? "space-between" : "flex-end", alignItems: "center", gap: "8px", marginTop: "14px", paddingTop: "10px", borderTop: `1px solid ${COLORS.line}` }}>
         {(!isOwner || others.length > 0) && (
           <button onClick={() => ask({ type: "leave" })} disabled={busy} style={linkButton(COLORS.danger)}>
             {t("families.leaveFamily")}
           </button>
         )}
-        {isOwner && others.length === 0 && <span style={{ fontSize: "12px", color: COLORS.inkSoft, flex: 1 }}>{t("families.soleOwnerHint")}</span>}
-        {isOwner && (
+        {isOwner && others.length === 0 && <span style={{ fontSize: "12px", color: COLORS.inkSoft, flex: 1 }}>{t(locked ? "families.soleOwnerLockedHint" : "families.soleOwnerHint")}</span>}
+        {manage && (
           <button onClick={() => ask({ type: "delete" })} disabled={busy} style={{ ...linkButton(COLORS.danger), display: "inline-flex", alignItems: "center", gap: "4px" }}>
             <Trash2 size={13} /> {t("families.deleteFamily")}
           </button>
@@ -6266,7 +6336,7 @@ function FamilyCard({ family: f, currentUid, busy, setBusy, onReload, importStat
   );
 }
 
-function FamiliesView({ isPlus, families, unverifiedFamilies = [], personName, currentUid, onReload, onOpenPlus, onImportFamily }) {
+function FamiliesView({ isPlus, families, unverifiedFamilies = [], lockedFamilies = [], personName, currentUid, onReload, onOpenPlus, onImportFamily }) {
   const { t } = useLanguage();
   const [nameDraft, setNameDraft] = useState("");
   const [codeDraft, setCodeDraft] = useState("");
@@ -6281,7 +6351,7 @@ function FamiliesView({ isPlus, families, unverifiedFamilies = [], personName, c
   // Plus kapatılmış ama hâlâ üyesi olduğu aileler varsa (ör. Plus'ı kapattı), onları
   // görüp ayrılabilsin diye upsell sadece hiç ailesi yoksa tam ekran gösteriliyor.
   // Doğrulanamayan aile de sayılır: ondan da ayrılabilmeli.
-  if (!isPlus && families.length === 0 && unverifiedFamilies.length === 0) {
+  if (!isPlus && families.length === 0 && unverifiedFamilies.length === 0 && lockedFamilies.length === 0) {
     return (
       <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "28px", boxShadow: CARD_SHADOW, textAlign: "center" }}>
         <Users size={26} color={COLORS.forest} style={{ marginBottom: "10px" }} />
@@ -6299,7 +6369,7 @@ function FamiliesView({ isPlus, families, unverifiedFamilies = [], personName, c
     );
   }
 
-  const atLimit = families.length + unverifiedFamilies.length >= MAX_FAMILIES;
+  const atLimit = families.length + lockedFamilies.length + unverifiedFamilies.length >= MAX_FAMILIES;
 
   // Onarım: geçerli davet koduyla yeniden katılmak eksik üyelik kaydını tamamlar.
   const handleRepair = async (familyId) => {
@@ -6453,7 +6523,7 @@ function FamiliesView({ isPlus, families, unverifiedFamilies = [], personName, c
         </div>
         );
       })}
-      {families.map((f) => (
+      {[...families, ...lockedFamilies].map((f) => (
         <FamilyCard
           key={f.id}
           family={f}
@@ -6463,10 +6533,11 @@ function FamiliesView({ isPlus, families, unverifiedFamilies = [], personName, c
           onReload={onReload}
           importState={importState[f.id]}
           onImport={handleImport}
+          onOpenPlus={onOpenPlus}
         />
       ))}
 
-      {!isPlus && (
+      {!isPlus && lockedFamilies.length === 0 && (
         <div style={{ borderRadius: "14px", border: `1px dashed ${COLORS.mustard}`, background: COLORS.panel, padding: "20px", textAlign: "center" }}>
           <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: "0 0 10px" }}>
             {t("families.plusOffHint")}

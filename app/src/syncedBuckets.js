@@ -262,6 +262,19 @@ export function createBucketStore({ transport, maxAttempts = 4, normalize, updat
     emit();
   }
 
+  // Bir kapsamın (ör. kilitlenen ailenin) tüm kovalarını bellekten atar.
+  // Yoldaki yüklemeler kopmuş kayda yazar, görünüme dönmez.
+  function dropScope(scope) {
+    let changed = false;
+    for (const [key, e] of entries) {
+      if (e.scope === scope) {
+        entries.delete(key);
+        changed = true;
+      }
+    }
+    if (changed) emit();
+  }
+
   return {
     getState: () => state,
     get: (bucket, scope) => state[keyOf(bucket, scope)] || null,
@@ -274,6 +287,7 @@ export function createBucketStore({ transport, maxAttempts = 4, normalize, updat
     refresh,
     mutate,
     reset,
+    dropScope,
   };
 }
 
