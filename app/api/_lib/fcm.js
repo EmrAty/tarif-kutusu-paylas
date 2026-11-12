@@ -28,13 +28,18 @@ async function getAccessToken() {
 //   `push-owner:<sha256(token)>` = uid — token'ın şu anki TEK sahibi.
 //
 // Kurallar:
-//   * Tarif hazır/başarısız bildirimi YALNIZCA "android" etiketli, bu hesaba ait
-//     kayıtlara gider. Platformu bilinmeyen eski token'lara GİTMEZ (geri dönüş
-//     yok): bunlar arasında Chrome token'ı olabilir ve sunucu ayırt edemez.
-//     Bedeli: ana uygulama yeni web paketiyle bir kez açılana kadar o cihaza
-//     tarif bildirimi gitmez (tarif yine kaydedilir; panel bunu gösterir).
-//   * Aile "canı çekti" bildirimi platformdan bağımsızdır (ürün kararı bekliyor):
-//     yeni + eski kayıtlar, yinelenmesiz ve başka hesaba geçmiş olanlar hariç.
+//   * ÜRÜN KARARI: web (Chrome) push KAPALI. Bütün bildirimler (tarif hazır /
+//     başarısız, aile "canı çekti") YALNIZCA "android" etiketli, bu hesaba ait
+//     kayıtlara gider. Android kaydı yoksa hiçbir yere gitmez — web'e ya da
+//     platformu bilinmeyen eski listeye (`fcmTokens`) GERİ DÖNÜŞ YOK: eski
+//     listede Chrome token'ı olabilir ve sunucu ayırt edemez. Bedeli: ana
+//     uygulama yeni web paketiyle bir kez açılana kadar o cihaza bildirim
+//     gitmez (tarif yine kaydedilir; panel bunu gösterir).
+//   * "web" kaydı artık kabul edilmez (sahiplik alınmaz, hedefe yazılmaz);
+//     gelen web token'ı bu hesabın kayıtlarından silinir. Eskiden yazılmış
+//     "web" kayıtları hedeflenmez ve gönderim sırasında temizlenir.
+//   * Platform göndermeyen eski istemci paketinin kaydı da yok sayılır (eski
+//     listeye artık yazılmaz; o liste hiçbir bildirimin hedefi değil).
 //   * Bir token aynı anda tek hesaba aittir. Sahipsiz ya da sahibi artık
 //     tutmayan token hemen alınır; BAŞKA bir hesabın elindeki token ancak
 //     sahiplik kanıtıyla devralınır: sunucu o token'a sessiz (data-only)
@@ -44,8 +49,11 @@ async function getAccessToken() {
 //     yalnızca kendi hesabının kayıtları arasında (başkasınınkine dokunmaz).
 // ---------------------------------------------------------------------------
 
+// Kabul edilen platform değerleri (giriş doğrulaması). "web" geriye uyum için
+// 400 yerine "ignored" ile yanıtlanır; hiçbir zaman hedef olmaz.
 export const PUSH_PLATFORMS = new Set(["android", "ios", "web"]);
-export const NATIVE_RECIPE_PLATFORMS = new Set(["android"]);
+// Bildirim gönderilen tek platform.
+export const PUSH_TARGET_PLATFORMS = new Set(["android"]);
 const OWNER_TTL_SECONDS = 270 * 24 * 3600; // FCM pasif token ömrü
 const MAX_TARGETS_PER_USER = 10;
 const SENT_MARKER_TTL_SECONDS = 7 * 24 * 3600;
@@ -170,15 +178,6 @@ async function claimToken(uid, { token, platform, installationId }) {
     await removeFromLegacy(previousOwner, [token]).catch(() => {});
   }
 
-  if (!platform) {
-    // Platform göndermeyen eski istemci paketi: eski şemaya (davranış aynı).
-    const list = await redisGetJSON(fcmTokensKey(uid), []);
-    const current = Array.isArray(list) ? list : [];
-    const [inNew] = (await redisCommand(["HMGET", pushTargetsKey(uid), token])) || [];
-    if (!current.includes(token) && !inNew) await redisSetJSON(fcmTokensKey(uid), [...current, token]);
-    return { status: "registered", schema: "legacy" };
-  }
-
   const existing = await readTargets(uid);
   await redisCommand([
     "HSET",
@@ -210,12 +209,19 @@ async function claimToken(uid, { token, platform, installationId }) {
 // Cihaz kaydı. Dönüş: {status: "registered"} ya da
 // {status: "verification_required"} (token başka hesabın; kanıt bekleniyor).
 export async function registerPushTarget(uid, { token, platform, installationId }) {
+  if (platform === "web") {
+    // Web push kapalı: sahiplik alınmaz, hedef yazılmaz. Bu token ve aynı
+    // kurulumun eski web kayıtları YALNIZCA bu hesabın kayıtlarından silinir.
+    await unregisterPushTarget(uid, { token, installationId, onlyPlatform: "web" });
+    return { status: "ignored", reason: "web_push_disabled" };
+  }
+  if (!platform) {
+    // Platform göndermeyen eski istemci paketi: hiçbir şey yazılmaz (eski
+    // liste hiçbir bildirimin hedefi değil). Yeni paket platformla kaydeder.
+    return { status: "ignored", reason: "platform_required" };
+  }
   const owner = await redisCommand(["GET", pushOwnerKey(token)]);
   if (owner && owner !== uid && (await ownerStillHolds(owner, token))) {
-    if (!platform) {
-      // Eski istemci kanıt adımını bilmiyor: hiçbir şey değişmez.
-      return { status: "ignored", reason: "owned_by_other_account" };
-    }
     return startVerification(uid, { token, platform, installationId });
   }
   return claimToken(uid, { token, platform, installationId });
@@ -257,50 +263,51 @@ export async function verifyPushTarget(uid, { token, nonce }) {
 }
 
 // Çıkış: bu kurulumun token'ı bu hesaptan ayrılır (yalnızca kendi kayıtları).
-export async function unregisterPushTarget(uid, { token, installationId }) {
+// onlyPlatform: kurulum eşleşmesinde yalnızca o platformun kayıtları (verilen
+// token'ın kendisi her durumda bu hesaptan ayrılır).
+export async function unregisterPushTarget(uid, { token, installationId, onlyPlatform = null }) {
   const tokens = new Set();
   if (isValidPushToken(token)) tokens.add(token);
   if (installationId) {
-    for (const [t, meta] of await readTargets(uid)) if (meta.installationId === installationId) tokens.add(t);
+    for (const [t, meta] of await readTargets(uid)) {
+      if (meta.installationId === installationId && (!onlyPlatform || meta.platform === onlyPlatform)) tokens.add(t);
+    }
   }
   for (const t of tokens) await forgetToken(uid, t);
   return { removed: tokens.size };
 }
 
-// Hedef listesi (yinelenmesiz). nativeOnly: tarif bildirimleri.
-// cleanup=false: yalnızca okur (cihaz sayımı).
-export async function collectPushTargets(uid, { nativeOnly = false, cleanup = true } = {}) {
-  const [targets, legacy] = await Promise.all([readTargets(uid), nativeOnly ? Promise.resolve([]) : readLegacyTokens(uid)]);
-  const all = [...new Set([...targets.keys(), ...legacy])];
+// Bildirim hedefleri: YALNIZCA bu hesaba ait "android" kayıtları (tarif ve
+// aile bildirimi aynı kural). Eski platformsuz liste okunmaz. Bir cihaz = bir
+// kayıt: iki Android cihazı olan hesaba her cihaz için bir bildirim gider.
+// cleanup=false: yalnızca okur (cihaz sayımı). cleanup=true: başka hesaba
+// geçmiş kayıtlar ve eskiden yazılmış "web" kayıtları bu hesaptan silinir.
+// (Eski çağrılardaki nativeOnly seçeneği yok sayılır; her şey zaten native.)
+export async function collectPushTargets(uid, { cleanup = true } = {}) {
+  const targets = await readTargets(uid);
+  const all = [...targets.keys()];
   const owners = await readOwners(all);
   const ownerOf = new Map(all.map((t, i) => [t, owners[i]]));
-  const ownedElsewhere = (t) => {
-    const o = ownerOf.get(t);
-    return o != null && o !== uid;
-  };
 
-  const staleNew = [];
-  const v2 = [];
+  const out = [];
+  const stale = [];
+  const retiredWeb = [];
   for (const [token, meta] of targets) {
-    if (ownedElsewhere(token)) staleNew.push(token);
-    else v2.push({ token, platform: meta.platform, source: "v2" });
-  }
-  const staleLegacy = [];
-  const legacyOnly = [];
-  for (const token of legacy) {
-    if (targets.has(token)) staleLegacy.push(token); // yeni şemada zaten var
-    else if (ownedElsewhere(token)) staleLegacy.push(token); // başka hesaba geçmiş
-    else legacyOnly.push({ token, platform: null, source: "legacy" });
+    const owner = ownerOf.get(token);
+    if (owner != null && owner !== uid) stale.push(token);
+    else if (meta.platform === "web") retiredWeb.push(token);
+    else if (PUSH_TARGET_PLATFORMS.has(meta.platform)) out.push({ token, platform: meta.platform, source: "v2" });
   }
 
-  if (cleanup && (staleNew.length || staleLegacy.length)) {
+  if (cleanup) {
     // Temizlik bildirim akışını asla bozmaz.
-    for (const t of staleNew) await redisCommand(["HDEL", pushTargetsKey(uid), t]).catch(() => {});
-    await removeFromLegacy(uid, staleLegacy).catch(() => {});
+    for (const t of stale) await redisCommand(["HDEL", pushTargetsKey(uid), t]).catch(() => {});
+    for (const t of retiredWeb) {
+      await redisCommand(["HDEL", pushTargetsKey(uid), t]).catch(() => {});
+      await releaseOwnerIfMine(uid, t).catch(() => {});
+    }
   }
-
-  if (nativeOnly) return v2.filter((t) => NATIVE_RECIPE_PLATFORMS.has(t.platform));
-  return [...v2, ...legacyOnly];
+  return out;
 }
 
 // FCM hata sınıflandırması: yalnızca token'ın KALICI olarak geçersiz olduğu
@@ -322,27 +329,21 @@ export function isPermanentTokenError(status, body) {
 // ön plandaysa JS dinleyicisine gelir) — sahiplik doğrulaması için.
 export async function sendFcmMessage(token, { title, body, data, dataOnly = false }) {
   const { accessToken, projectId } = await getAccessToken();
-  const recipeId = data?.recipeId;
   const stringData = data ? Object.fromEntries(Object.entries(data).map(([k, v]) => [k, String(v)])) : undefined;
+  // Yalnızca Android'e gönderilir (web push kapalı) — webpush yükü yok.
   const message = dataOnly
-    ? { token, data: stringData || {}, android: { priority: "high" }, webpush: { headers: { Urgency: "high" } } }
+    ? { token, data: stringData || {}, android: { priority: "high" } }
     : {
         token,
         notification: { title, body },
         // data, bildirime tıklanınca doğru tarifin açılabilmesi için (bkz.
-        // App.jsx / firebase-messaging-sw.js) - FCM data payload'ı sadece
+        // App.jsx pushNotificationActionPerformed) - FCM data payload'ı sadece
         // string değer kabul ediyor.
         ...(stringData ? { data: stringData } : {}),
         // Varsayılan ("normal") öncelik, cihaz Doze/pil optimizasyonu
         // modundayken bildirimi dakikalarca geciktirebiliyordu ("geç geliyor"
         // diye bildirildi, 10 Eylül 2026) - "high" cihazı hemen uyandırıyor.
         android: { priority: "high" },
-        // Web'de bildirimi Firebase SDK'sı gösterir (firebase-messaging-sw.js);
-        // ikon buradan gelir, tıklayınca link açılır.
-        webpush: {
-          notification: { icon: "/icon-192.png", badge: "/icon-192.png" },
-          fcm_options: { link: recipeId ? `/?openRecipe=${encodeURIComponent(recipeId)}` : "/" },
-        },
       };
   const res = await fetch(`https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`, {
     method: "POST",
@@ -388,7 +389,7 @@ export async function sendToTargets(uid, targets, message) {
 //   * İşaret yazıldıktan sonra gönderim başarısız olursa yeniden deneme
 //     yoktur (zaten hiçbir yol yeniden denemiyor) — işaret kayıp yaratmaz.
 //   * İşaret yazıldıktan hemen sonra süreç ölürse o job'un bildirimi kaybolur.
-export async function notifyUserDevices(uid, { title, body, data }, { nativeOnly = false, dedupeKey = null } = {}) {
+export async function notifyUserDevices(uid, { title, body, data }, { dedupeKey = null } = {}) {
   if (dedupeKey) {
     let acquired = true;
     try {
@@ -398,6 +399,6 @@ export async function notifyUserDevices(uid, { title, body, data }, { nativeOnly
     }
     if (!acquired) return { sent: 0, attempted: 0, error: null, duplicate: true };
   }
-  const targets = await collectPushTargets(uid, { nativeOnly });
+  const targets = await collectPushTargets(uid);
   return sendToTargets(uid, targets, { title, body, data });
 }

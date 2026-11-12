@@ -2,6 +2,8 @@
 // Production'da görülen hata: tek tarif → Android 1 + Chrome 2 = 3 bildirim.
 // Fable denetiminin D2 (token devralma), D3 (çıkış sonrası Chrome'a geri dönüş)
 // ve D4 (deploy sonrası ilk paylaşımda eski davranış) senaryoları da burada.
+// Ürün kararı: web (Chrome) push tamamen kapalı — tarif VE aile bildirimleri
+// yalnızca Android'e, Android kaydı yoksa web'e/eski listeye geri dönüş yok.
 // Bellek içi Redis + sahte Google OAuth/FCM + sahte Anthropic; dış ağ yok.
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -69,7 +71,7 @@ const register = (uid, token, platform, installationId, opts = {}) =>
 const unregister = (uid, body) => invoke(fcmToken, { uid, body: { action: "unregister", ...body } });
 const verify = (uid, token, nonce) => invoke(fcmToken, { uid, body: { action: "verify", token, nonce } });
 const recipeReady = (uid, dedupeKey) =>
-  notifyUserDevices(uid, { title: "Tarifin hazır", body: "x", data: { type: "recipe_ready", recipeId: "r1" } }, { nativeOnly: true, dedupeKey });
+  notifyUserDevices(uid, { title: "Tarifin hazır", body: "x", data: { type: "recipe_ready", recipeId: "r1" } }, { dedupeKey });
 const hashFields = (uid) => {
   const v = db.get(pushTargetsKey(uid));
   return v && v.type === "hash" ? [...v.map.keys()].sort() : [];
@@ -111,7 +113,7 @@ async function runJob(uid, i = 1) {
 
 // ------------------------------- teslimat ---------------------------------
 
-test("FCM 1: tek Android token → tarif bildirimi tam 1 push (web ikon/link yükü dahil)", async () => {
+test("FCM 1: tek Android token → tarif bildirimi tam 1 push (webpush yükü yok)", async () => {
   reset();
   assert.equal((await register("A", ANDROID_1, "android", INSTALL_A)).status, 200);
   const { job } = await runJob("A");
@@ -119,7 +121,8 @@ test("FCM 1: tek Android token → tarif bildirimi tam 1 push (web ikon/link yü
   assert.deepEqual(visibleTokens(), [ANDROID_1]);
   assert.equal(sentTo[0].data.type, "recipe_ready");
   assert.deepEqual(job.notify, { sent: 1, attempted: 1, error: null });
-  assert.equal(sentTo[0].message.webpush.notification.icon, "/icon-192.png");
+  assert.equal(sentTo[0].message.webpush, undefined, "web push kapalı: webpush yükü gönderilmez");
+  assert.equal(sentTo[0].message.android.priority, "high");
 });
 
 test("FCM 2: aynı token iki kez kaydedilirse tek kayıt ve tek push", async () => {
@@ -332,7 +335,7 @@ test("FCM 13: aynı hesaba bağlı iki Android cihaz → her biri tam 1 bildirim
   assert.equal(job.notify.sent, 2);
 });
 
-test("FCM 14: eski şema — Android yeni paketle kaydolunca eski listeden taşınır; web'ler silinmez, tarif bildirimine girmez", async () => {
+test("FCM 14: eski şema — Android yeni paketle kaydolunca eski listeden taşınır; eski liste ve web hiçbir bildirimin hedefi değil", async () => {
   reset();
   db.set(fcmTokensKey("A"), JSON.stringify([ANDROID_1, WEB_1, WEB_2]));
   await register("A", ANDROID_1, "android", INSTALL_A);
@@ -341,14 +344,18 @@ test("FCM 14: eski şema — Android yeni paketle kaydolunca eski listeden taş�
   assert.deepEqual(visibleTokens(), [ANDROID_1]);
 
   sentTo = [];
-  await register("A", WEB_1, "web", "install-web-desktop");
+  // Eski paketin web kaydı: kabul edilmez, eski listedeki aynı token da silinir.
+  const r = await register("A", WEB_1, "web", "install-web-desktop");
+  assert.equal(r.status, 200);
+  assert.equal(r.body.status, "ignored");
   assert.deepEqual(JSON.parse(db.get(fcmTokensKey("A"))), [WEB_2]);
+  assert.deepEqual(hashFields("A"), [ANDROID_1]);
   await recipeReady("A", "job-3:ready");
   assert.deepEqual(visibleTokens(), [ANDROID_1]);
 
-  // Aile bildirimi (platformdan bağımsız) eski + yeni hedefleri yinelenmesiz kullanır.
+  // Aile bildirimi de aynı hedefleri kullanır: yalnızca Android.
   const all = (await collectPushTargets("A")).map((t) => t.token).sort();
-  assert.deepEqual(all, [ANDROID_1, WEB_1, WEB_2].sort());
+  assert.deepEqual(all, [ANDROID_1]);
 });
 
 test("FCM 14b: başka hesaba geçmiş eski şema token'ı aile bildiriminde de kullanılmaz", async () => {
@@ -358,11 +365,14 @@ test("FCM 14b: başka hesaba geçmiş eski şema token'ı aile bildiriminde de k
   assert.deepEqual(await collectPushTargets("A"), []);
 });
 
-test("FCM 14c: platform göndermeyen eski istemci paketi eski şemaya yazar (geriye uyumlu); hatalı girdi reddedilir", async () => {
+test("FCM 14c: platform göndermeyen eski istemci paketi yok sayılır (hiçbir şey yazılmaz); hatalı girdi reddedilir", async () => {
   reset();
-  assert.equal((await register("A", ANDROID_1)).status, 200);
-  assert.deepEqual(JSON.parse(db.get(fcmTokensKey("A"))), [ANDROID_1]);
-  assert.equal(db.get(pushOwnerKey(ANDROID_1)), "A");
+  const legacy = await register("A", ANDROID_1);
+  assert.equal(legacy.status, 200);
+  assert.equal(legacy.body.status, "ignored");
+  assert.equal(db.has(fcmTokensKey("A")), false);
+  assert.equal(db.has(pushOwnerKey(ANDROID_1)), false);
+  assert.deepEqual(hashFields("A"), []);
   assert.equal((await register("A", ANDROID_1, "desktop")).status, 400, "bilinmeyen platform");
   assert.equal((await register("A", ANDROID_1, "android", "x")).status, 400, "geçersiz kurulum kimliği");
   assert.equal((await invoke(fcmToken, { uid: "A", body: { action: "nope", token: ANDROID_1 } })).status, 400);
@@ -386,7 +396,16 @@ test("FCM 15: aynı job için ikinci bildirim denemesi gönderilmez; Redis hatas
   assert.equal(r.sent, 1);
 });
 
-test("FCM 16: web kaydı olsa bile tarif HATA bildirimi de yalnızca native'e; aile bildirimi Android + web'e gider", async () => {
+const familyOf = (members) => {
+  for (const uid of members) db.set(`user:${uid}:profile`, JSON.stringify({ isPlus: true, families: ["F1"] }));
+  db.set("family:F1:meta", JSON.stringify({ name: "Ev", ownerUid: members[0], inviteCode: "ABCDEF" }));
+  db.set("family:F1:members", JSON.stringify(Object.fromEntries(members.map((uid, i) => [uid, { joinedAt: i + 1 }]))));
+};
+const crave = (uid) => invoke(notify, { uid, body: { familyId: "F1", recipeId: "r1", recipeTitle: "Menemen" } });
+const webTarget = (installationId) => JSON.stringify({ platform: "web", installationId, updatedAt: 1 });
+const seedHash = (uid, entries) => db.set(pushTargetsKey(uid), { type: "hash", map: new Map(entries) });
+
+test("FCM 16: tarif HATA bildirimi ve aile 'canı çekti' bildirimi yalnızca Android'e (web push kapalı)", async () => {
   reset();
   await register("A", ANDROID_1, "android", INSTALL_A);
   await register("A", WEB_1, "web", "install-web-desktop");
@@ -397,14 +416,85 @@ test("FCM 16: web kaydı olsa bile tarif HATA bildirimi de yalnızca native'e; a
   assert.equal(sentTo[0].data.type, "recipe_failed");
 
   sentTo = [];
-  db.set("user:S:profile", JSON.stringify({ isPlus: true, families: ["F1"] }));
-  db.set("user:A:profile", JSON.stringify({ isPlus: true, families: ["F1"] }));
-  db.set("family:F1:meta", JSON.stringify({ name: "Ev", ownerUid: "S", inviteCode: "ABCDEF" }));
-  db.set("family:F1:members", JSON.stringify({ S: { joinedAt: 1 }, A: { joinedAt: 2 } }));
-  const r = await invoke(notify, { uid: "S", body: { familyId: "F1", recipeId: "r1", recipeTitle: "Menemen" } });
+  familyOf(["S", "A"]);
+  const r = await crave("S");
   assert.equal(r.status, 200);
-  assert.deepEqual(visibleTokens(), [ANDROID_1, WEB_1].sort());
+  assert.deepEqual(visibleTokens(), [ANDROID_1]);
+  assert.equal(r.body.sent, 1);
+  assert.equal(r.body.attempted, 1);
+  assert.equal(sentTo[0].message.webpush, undefined);
+});
+
+test("FCM 16b: aile bildirimi — Android kaydı olmayan üyeye web'e ya da eski listeye geri dönüş yok", async () => {
+  reset();
+  // B: yalnızca eski (platformsuz) liste + eskiden yazılmış bir web kaydı.
+  db.set(fcmTokensKey("B"), JSON.stringify([WEB_2]));
+  seedHash("B", [[WEB_1, webTarget("install-web-desktop")]]);
+  db.set(pushOwnerKey(WEB_1), "B");
+  familyOf(["S", "B"]);
+  const r = await crave("S");
+  assert.equal(r.status, 200);
+  assert.deepEqual(sentTo, [], "hiçbir FCM çağrısı yapılmaz");
+  assert.equal(r.body.sent, 0);
+  assert.equal(r.body.attempted, 0);
+  assert.equal(r.body.recipientCount, 1);
+  // Eski web kaydı gönderim sırasında temizlenir, sahipliği bırakılır; eski liste yerinde.
+  assert.deepEqual(hashFields("B"), []);
+  assert.equal(db.has(pushOwnerKey(WEB_1)), false);
+  assert.deepEqual(JSON.parse(db.get(fcmTokensKey("B"))), [WEB_2]);
+});
+
+test("FCM 16c: aile bildirimi — iki Android cihazı olan üyeye her cihaz için tam 1 bildirim", async () => {
+  reset();
+  await register("B", ANDROID_1, "android", INSTALL_A);
+  await register("B", ANDROID_2, "android", INSTALL_B);
+  await register("B", WEB_1, "web", "install-web-desktop");
+  familyOf(["S", "B"]);
+  const r = await crave("S");
+  assert.deepEqual(visibleTokens(), [ANDROID_1, ANDROID_2].sort());
   assert.equal(r.body.sent, 2);
+  assert.equal(sentTo.length, 2);
+});
+
+test("FCM 16d: web kaydı sahiplik almaz, başkasının Android kaydına dokunmaz; aynı kurulumun eski web kaydını siler", async () => {
+  reset();
+  await register("A", ANDROID_1, "android", INSTALL_A);
+  // Eski paket / saldırgan A'nın Android token'ını "web" diye kendi hesabına yazmaya çalışır.
+  const r = await register("B", ANDROID_1, "web", "install-web-phone");
+  assert.equal(r.status, 200);
+  assert.equal(r.body.status, "ignored");
+  assert.equal(db.get(pushOwnerKey(ANDROID_1)), "A");
+  assert.deepEqual(hashFields("A"), [ANDROID_1]);
+  assert.deepEqual(verifyMessages(), [], "web kaydı doğrulama push'u da tetiklemez");
+
+  // Eskiden yazılmış web kaydı: aynı kurulumdan gelen web kaydı onu siler, Android'e dokunmaz.
+  seedHash("C", [
+    [WEB_1, webTarget("install-web-desktop")],
+    [ANDROID_2, JSON.stringify({ platform: "android", installationId: INSTALL_B, updatedAt: 1 })],
+  ]);
+  db.set(pushOwnerKey(WEB_1), "C");
+  await register("C", WEB_2, "web", "install-web-desktop");
+  assert.deepEqual(hashFields("C"), [ANDROID_2]);
+  assert.equal(db.has(pushOwnerKey(WEB_1)), false);
+  assert.equal(db.has(pushOwnerKey(WEB_2)), false);
+
+  // İstemcinin girişteki temizliği: kurulum kimliğiyle unregister.
+  seedHash("D", [[WEB_1, webTarget("install-web-desktop")]]);
+  assert.equal((await unregister("D", { installationId: "install-web-desktop" })).status, 200);
+  assert.deepEqual(hashFields("D"), []);
+});
+
+test("FCM 16e: sessiz sahiplik doğrulaması yalnızca Android yüküyle gider (webpush yok)", async () => {
+  reset();
+  await register("A", ANDROID_1, "android", INSTALL_A);
+  const r = await register("B", ANDROID_1, "android", INSTALL_B);
+  assert.equal(r.body.status, "verification_required");
+  const [msg] = verifyMessages();
+  assert.ok(msg);
+  assert.equal(msg.visible, false);
+  assert.equal(msg.message.webpush, undefined);
+  assert.equal((await deviceEchoes("B", ANDROID_1)).status, 200);
+  assert.equal(db.get(pushOwnerKey(ANDROID_1)), "B");
 });
 
 test("FCM 17: hesap silinince push kayıtları, sahiplik ve job bildirim işaretleri temizlenir; başka hesabınkine dokunulmaz", async () => {
@@ -441,7 +531,7 @@ test("FCM 18: HGETALL nesne biçiminde dönse de hedefler okunur (Upstash biçim
     return realFetch(input, init);
   };
   try {
-    const targets = await collectPushTargets("A", { nativeOnly: true });
+    const targets = await collectPushTargets("A");
     assert.deepEqual(targets.map((t) => t.token), [ANDROID_1]);
   } finally {
     globalThis.fetch = realFetch;

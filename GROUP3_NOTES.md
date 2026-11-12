@@ -27,7 +27,7 @@ Ters durum (üye listesinde var, profilde yok) da aynı kodla onarılır. Katıl
 
 **Şema:** `user:<uid>:pushTargets` (HASH: token → {platform, installationId, updatedAt}), `push-owner:<sha256(token)>` = uid. Eski `user:<uid>:fcmTokens` okunur, silinmez; token platformla kaydolunca oradan çıkar.
 
-**Tarif hazır / başarısız:** yalnızca bu hesaba ait `android` kayıtları. Platformu bilinmeyen eski token'lara artık GİTMEZ (geri dönüş yok). Sebep: eski listede Android ve Chrome token'ı sunucuda ayırt edilemez (ikisi aynı FCM biçimi); ayırt etmenin tek yolu cihazın kendisinin platformla kaydolması. Bedel: ana uygulama deploy sonrası yeni web paketiyle bir kez açılana kadar o cihaza tarif bildirimi gitmez; tarif yine kaydedilir, paylaşım paneli "bu cihaz için bildirim kaydı yok" notunu gösterir.
+**Tarif hazır / başarısız:** yalnızca bu hesaba ait `android` kayıtları (aile bildirimi de aynı, bkz. aşağı). Platformu bilinmeyen eski token'lara artık GİTMEZ (geri dönüş yok). Sebep: eski listede Android ve Chrome token'ı sunucuda ayırt edilemez (ikisi aynı FCM biçimi); ayırt etmenin tek yolu cihazın kendisinin platformla kaydolması. Bedel: ana uygulama deploy sonrası yeni web paketiyle bir kez açılana kadar o cihaza tarif bildirimi gitmez; tarif yine kaydedilir, paylaşım paneli "bu cihaz için bildirim kaydı yok" notunu gösterir.
 
 **Paylaşım paneli / APK:** `ShareActivity` düz WebView; köprüde yalnızca `getSharedText/ready/close/jobAccepted/openInApp` var, FCM token'ına erişimi yok. Ana uygulama (`server.url` ile canlı web paketi) her açılışta token'ı `android` olarak kaydediyor → yeni APK GEREKMİYOR. Paneli token kaydedebilir yapmak native değişiklik (yeni APK) ister; bu turda yapılmadı, gerekli değil.
 
@@ -35,9 +35,11 @@ Ters durum (üye listesinde var, profilde yok) da aynı kodla onarılır. Katıl
 
 **Çıkış:** `POST /api/fcm-token {action: "unregister"}` (gövdeli DELETE yerine; DELETE geriye uyumlu kabul ediliyor).
 
-**Aile "canı çekti" (D7):** platformdan bağımsız kaldı (Android + web) — ürün kararı bekliyor. Aynı platformda tek mesajın iki kez gösterimi (SW) düzeltildi; farklı kayıtlı cihazlara teslimat ayrı konu.
+**Aile "canı çekti" (D7):** ürün kararıyla tarif bildirimiyle aynı kurala bağlandı — yalnızca alıcının `android` kayıtları; Android kaydı olmayan üyeye hiçbir şey gitmez (web'e / eski listeye geri dönüş yok). İki Android cihazı olan üyeye her cihaz için bir bildirim. Gönderen web'deyse ve kimseye gitmediyse "Ailede bildirim alan Android uygulaması yok" görür.
 
-**Web:** `firebase-messaging-sw.js` notification'lı mesajı kendisi göstermiyor (Firebase SDK zaten gösteriyor — `@firebase/messaging` SW kaynağında doğrulandı: `onPush` önce `showNotification`, sonra `onBackgroundMessage`). İkon artık yükte `webpush.notification.icon`. `push_verify` asla gösterilmez.
+**Web push KAPALI (ürün kararı, Grup 3 son tur):** web istemcisi bildirim izni istemez, FCM token almaz, `/api/fcm-token`'a kayıt göndermez (`firebase/messaging` paketten çıktı). Sunucu: `platform: "web"` kaydı `ignored` (sahiplik alınmaz, doğrulama push'u tetiklenmez; o token ve aynı kurulumun eski web kaydı yalnızca bu hesaptan silinir); platformsuz eski paket kaydı da `ignored` (eski listeye artık yazılmaz). Eskiden yazılmış `web` kayıtları hedeflenmez, gönderim sırasında silinip sahiplikleri bırakılır; eski `fcmTokens` listesi hiç okunmaz (silinmez, hesap silmede temizlenir). FCM yükünde `webpush` bölümü yok.
+
+**Mevcut web abonelikleri:** girişte (yalnızca web) `retireWebPush()` tarayıcıdaki YALNIZCA `/firebase-messaging-sw.js` kaydının push aboneliğini iptal edip kaydı kaldırır, sunucuya bir kez (`web-push-retired:<uid>`) kurulum kimliğiyle `unregister` gönderir (yeni kurulum kimliği üretmez). `public/firebase-messaging-sw.js` artık Firebase yüklemeyen, bildirim göstermeyen ve `activate`/`push`'ta kendini söken bir sürüm (eski sekme yeniden kaydederse de söner); eski bildirime tıklama `/?openRecipe=` ile açılır. Uygulamanın başka service worker'ı yok: güncelleme `/version.json` bandıyla, çevrimdışı önbellek yok (kökteki `sw.js` GitHub Pages paylaşım shim'ine ait, Vercel uygulamasına dağıtılmıyor) — bunlara dokunulmadı. Tarayıcının verdiği bildirim izni sayfadan geri alınamaz; abonelik olmadığı için etkisiz.
 
 **Tekrar engeli:** `push-sent:<uid>:<jobId>:ready|failed` (SET NX, 7 gün) gönderimden önce. Redis hatasında gönderilir (çift ancak aynı job iki kez işlenir VE iki seferde de Redis hata verirse). İşaretten sonra süreç ölürse o bildirim kaybolur. Hesap silmede `push-sent:<uid>:*` de silinir.
 
@@ -50,4 +52,4 @@ Erişim: yalnızca `LEGACY_DATA_OWNER_UIDS` (anonim olmayan). Biçim: repo geçm
 `app/scripts/audit-group3-readonly.mjs` — yalnızca SCAN/GET/MGET/HLEN (diğer komutları reddeder), içerik yazdırmaz. Raporlar: tutarsız aile kayıtları, legacy biçim sınıfı, eski/yeni push kayıt sayıları.
 
 ## Test
-`group3Fcm` (24), `group3Family` (28), `group3Legacy` (12). `npm test` 270/270, `vite build` temiz. Hook sırası testi paket dışında: eslint `react-hooks/rules-of-hooks` + jsdom ile gerçek `FamiliesView` render geçişi (repoya bağımlılık eklenmedi).
+`group3Fcm` (28), `group3Family` (28), `group3Legacy` (12). `npm test` 274/274, `vite build` temiz. Hook sırası testi paket dışında: eslint `react-hooks/rules-of-hooks` + jsdom ile gerçek `FamiliesView` render geçişi (repoya bağımlılık eklenmedi).

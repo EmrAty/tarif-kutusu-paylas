@@ -42,8 +42,9 @@ export default async function handler(req, res) {
   let sent = 0;
   let attempted = 0;
   let lastError = null;
-  // "Canı çekti" bildirimi platformdan bağımsız (Android + web) gider; her
-  // alıcının hedefleri yinelenmesiz okunur, başka hesaba geçmiş token'a gitmez.
+  // "Canı çekti" bildirimi de YALNIZCA alıcının Android kayıtlarına gider (web
+  // push kapalı, web'e geri dönüş yok); her Android cihaza bir bildirim,
+  // başka hesaba geçmiş token'a hiç.
   await Promise.all(
     recipientUids.map(async (uid) => {
       let targets;
@@ -55,8 +56,7 @@ export default async function handler(req, res) {
       }
       if (!targets.length) return;
       // Bildirime tıklanınca doğrudan bu tarifin açılması için (bkz.
-      // App.jsx'teki pushNotificationActionPerformed dinleyicisi ve
-      // firebase-messaging-sw.js'teki notificationclick).
+      // App.jsx'teki pushNotificationActionPerformed dinleyicisi).
       const result = await sendToTargets(uid, targets, {
         title: "Tarif Kutusu",
         body,

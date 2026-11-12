@@ -1,6 +1,5 @@
 import { initializeApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider } from "firebase/auth";
-import { getMessaging, isSupported, getToken, onMessage } from "firebase/messaging";
 
 // Bu değerler Firebase konsolundaki proje ayarlarından ("Web app" config) geliyor.
 // Gizli değildir — Firebase web config'i tarayıcıda görünmesi normal olan public bir
@@ -15,43 +14,38 @@ const firebaseConfig = {
   appId: "1:821289337714:web:f124f1e033a7126c6753eb",
 };
 
-// VAPID anahtarı ("Web Push sertifikaları"), apiKey gibi tarayıcıya gömülmesi
-// normal olan public bir değer — Firebase Console > Project Settings > Cloud
-// Messaging > Web Push certificates'ten üretilip buraya yapıştırılmalı.
-// Boş bırakılırsa bildirim özelliği sessizce devre dışı kalır (çökmez).
-const VAPID_KEY = "BP10K8TFmNgb6T7g2s20h-7J8zinVRIH0PHXWzgK76TMRapq-OtBLR2tthQxXITIRybf22Swz76qpeCVLf_Id9M";
-
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 
-// Bildirim izni isteyip bir FCM (Firebase Cloud Messaging) cihaz token'ı alır.
-// Tarayıcı push bildirimlerini desteklemiyorsa (ör. iOS Safari'de ana ekrana
-// eklenmemiş sekme), VAPID anahtarı henüz girilmemişse ya da kullanıcı izni
-// reddederse null döner — çağıran taraf bunu sessizce yok sayabilir.
-export async function requestFcmToken() {
+// ÜRÜN KARARI: web (Chrome) push bildirimleri kapalı; bildirimler yalnızca
+// Android uygulamasına gider (bkz. api/_lib/fcm.js). Web istemcisi artık
+// bildirim izni istemez ve token kaydetmez.
+//
+// Eskiden kurulmuş web push'u bu tarayıcıda söker: YALNIZCA
+// /firebase-messaging-sw.js kaydının push aboneliğini iptal eder ve o kaydı
+// kaldırır. Başka service worker'lara dokunmaz. Bildirim izni sayfadan geri
+// alınamaz (tarayıcı ayarı); abonelik olmadığı için bir anlamı kalmaz.
+// Hiçbir zaman hata fırlatmaz; bir kayıt söküldüyse true döner.
+export async function retireWebPush() {
   try {
-    if (!VAPID_KEY) return null;
-    if (!(await isSupported())) return null;
-    if (typeof Notification === "undefined") return null;
-    const permission = await Notification.requestPermission();
-    if (permission !== "granted") return null;
-    const registration = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
-    const messaging = getMessaging(app);
-    return await getToken(messaging, { vapidKey: VAPID_KEY, serviceWorkerRegistration: registration });
+    if (typeof navigator === "undefined" || !navigator.serviceWorker?.getRegistrations) return false;
+    const registrations = await navigator.serviceWorker.getRegistrations();
+    let retired = false;
+    for (const registration of registrations) {
+      const worker = registration.active || registration.waiting || registration.installing;
+      const script = String(worker?.scriptURL || "").split(/[?#]/)[0];
+      if (!script.endsWith("/firebase-messaging-sw.js")) continue;
+      try {
+        const subscription = await registration.pushManager?.getSubscription();
+        if (subscription) await subscription.unsubscribe();
+      } catch (e) {
+        // abonelik okunamadı/iptal edilemedi: kayıt yine de kaldırılır
+      }
+      if (await registration.unregister().catch(() => false)) retired = true;
+    }
+    return retired;
   } catch (e) {
-    return null;
-  }
-}
-
-// Sayfa açıkken (ön planda) gelen web push mesajları. Yalnızca sahiplik
-// doğrulaması (data-only "push_verify") için kullanılıyor; görünür bildirim
-// göstermiyor. Desteklenmiyorsa hiçbir şey yapmaz.
-export async function onForegroundPushMessage(callback) {
-  try {
-    if (!VAPID_KEY || !(await isSupported())) return () => {};
-    return onMessage(getMessaging(app), (payload) => callback(payload?.data || {}));
-  } catch (e) {
-    return () => {};
+    return false;
   }
 }

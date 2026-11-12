@@ -151,7 +151,7 @@ const translations = {
     // notifyResultMessage
     "notify.sent": "Bildirim gönderildi",
     "notify.noOtherMembers": "Ailede başka üye yok",
-    "notify.noOneRegistered": "Kimsenin bildirim kaydı yok",
+    "notify.noOneRegistered": "Ailede bildirim alan Android uygulaması yok",
     "notify.failed": "Gönderilemedi",
     "notify.failedWithReason": "Gönderilemedi: {reason}",
     "notify.partial": "Kısmen gönderildi ({sent}/{attempted})",
@@ -561,7 +561,7 @@ const translations = {
 
     "notify.sent": "Notification sent",
     "notify.noOtherMembers": "No other members in this family",
-    "notify.noOneRegistered": "No one has notifications registered",
+    "notify.noOneRegistered": "No one in the family gets notifications in the Android app",
     "notify.failed": "Couldn't send",
     "notify.failedWithReason": "Couldn't send: {reason}",
     "notify.partial": "Partially sent ({sent}/{attempted})",

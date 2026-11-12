@@ -5,7 +5,7 @@ import {
   FileText, Pencil, Check, ChevronDown, Star, Search, ShoppingCart, Clock, Gauge, Undo2, X, Package, Download,
   Mail, LogOut, Users, Crown, Settings, UserCircle, Copy, Sparkles, LogIn, Bell, Info, Lock,
 } from "lucide-react";
-import { auth, googleProvider, requestFcmToken, onForegroundPushMessage } from "./firebase.js";
+import { auth, googleProvider, retireWebPush } from "./firebase.js";
 import {
   onAuthStateChanged,
   signInWithPopup,
@@ -81,9 +81,8 @@ async function googleSignIn() {
 // Worker + push aboneliği) arka planda güvenilir şekilde çalıştırmıyor — TWA
 // gerçek Chrome olduğu için sorun değildi, ama WebView'de "canı çekti"
 // bildirimleri sessizce hiç ulaşmıyordu. Bunun yerine native Android FCM
-// (@capacitor/push-notifications) kullanılıp aynı `/api/fcm-token`'a
-// kaydediliyor — sunucu tarafı token'ın web push mü native FCM mi olduğunu
-// ayırt etmiyor, ikisi de aynı FCM HTTP v1 API'sine gidiyor.
+// (@capacitor/push-notifications) kullanılıp `/api/fcm-token`'a platformuyla
+// kaydediliyor. Web push artık tamamen kapalı (yalnızca Android bildirim alır).
 async function nativeFcmToken() {
   try {
     const current = await PushNotifications.checkPermissions();
@@ -368,12 +367,13 @@ async function fetchLegacyData() {
   return authedFetch("/api/legacy");
 }
 
-// Push kaydı (bkz. api/_lib/fcm.js): platform açıkça gönderilir — tarif hazır
-// bildirimi yalnızca native Android'e gider, web (Chrome) kaydı ona katılmaz.
-// installationId: bu kurulumu (uygulama / tarayıcı profili) tanır; token
-// yenilenince sunucu aynı kurulumun eski token'ını kaldırır.
+// Push kaydı (bkz. api/_lib/fcm.js): YALNIZCA native uygulamada yapılır ve
+// platform açıkça gönderilir. Bildirimler yalnızca Android'e gider; web
+// (Chrome) push kapalı — web istemcisi izin istemez, token kaydetmez.
+// installationId: bu kurulumu tanır; token yenilenince sunucu aynı kurulumun
+// eski token'ını kaldırır.
 function pushPlatform() {
-  return Capacitor.isNativePlatform() ? Capacitor.getPlatform() : "web";
+  return Capacitor.getPlatform();
 }
 
 function pushInstallationId() {
@@ -439,6 +439,8 @@ async function registerFcmToken(token) {
 // çıkışı engellemez; bir sonraki hesap aynı token'ı kaydettiğinde sunucu
 // sahipliği zaten taşır.
 async function unregisterPushForSignOut() {
+  // Web'de push kaydı yok (kapalı); eski web kaydı girişte temizlenir.
+  if (!Capacitor.isNativePlatform()) return;
   const installationId = pushInstallationId();
   const reg = lastPushRegistration && lastPushRegistration.uid === auth.currentUser?.uid ? lastPushRegistration : null;
   if (!installationId && !reg) return;
@@ -448,6 +450,27 @@ async function unregisterPushForSignOut() {
     new Promise((resolve) => setTimeout(resolve, 3000)),
   ]);
   lastPushRegistration = null;
+}
+
+// Web push kapatılmadan önce bu tarayıcıda kurulmuş push'u söker: tarayıcıdaki
+// aboneliği ve firebase-messaging-sw.js kaydını kaldırır, sunucudaki bu
+// kurulumun "web" kaydını bu hesaptan siler. Sunucu web kayıtlarını zaten
+// hiç hedeflemez; bu yalnızca temizlik. Yeni bir kurulum kimliği üretmez.
+async function retireWebPushForAccount(uid) {
+  await retireWebPush();
+  if (!uid) return;
+  const doneKey = `web-push-retired:${uid}`;
+  if (storageGet(doneKey)) return;
+  const existing = storageGet("push-installation-id");
+  const installationId = existing && /^[A-Za-z0-9_-]{8,64}$/.test(existing.value) ? existing.value : null;
+  try {
+    if (installationId) {
+      await authedFetch("/api/fcm-token", { method: "POST", body: { action: "unregister", installationId } });
+    }
+    storageSet(doneKey, "1");
+  } catch (e) {
+    // bir sonraki girişte yeniden denenir
+  }
 }
 
 async function sendFamilyNotification(familyId, recipeId, recipeTitle, senderName) {
@@ -979,25 +1002,24 @@ export default function TarifKutusu() {
   }, [authUser, loadFamiliesState]);
 
   useEffect(() => {
-    // Aile üyeleri arasında "canı çekti" bildirimi alabilmek için, giriş
-    // yapılınca sessizce bir push bildirim izni/token'ı almayı dener. Native
-    // Android'de (Capacitor) web push yerine native FCM kullanılıyor (bkz.
-    // nativeFcmToken) — VAPID anahtarı tanımlı değilse, tarayıcı web push
-    // desteklemiyorsa ya da izin reddedilirse sessizce hiçbir şey yapmaz.
+    // Bildirimler (tarif hazır/başarısız, aile "canı çekti") yalnızca Android
+    // uygulamasına gider: giriş yapılınca YALNIZCA native uygulamada izin
+    // istenip FCM token'ı kaydedilir (bkz. nativeFcmToken). Web'de bildirim
+    // izni istenmez, token kaydedilmez; eskiden kurulmuş web push sökülür.
     if (!authUser) return;
+    if (!Capacitor.isNativePlatform()) {
+      retireWebPushForAccount(authUser.uid).catch(() => {});
+      return;
+    }
     let cancelled = false;
     // Sahiplik doğrulama mesajı (sessiz, data-only) kayıttan ÖNCE dinlenir:
     // sunucu mesajı kayıt yanıtından önce gönderebilir.
     const removers = [];
-    if (Capacitor.isNativePlatform()) {
-      PushNotifications.addListener("pushNotificationReceived", (n) => handlePushVerifyMessage(n?.data)).then((h) =>
-        cancelled ? h.remove() : removers.push(() => h.remove())
-      );
-    } else {
-      onForegroundPushMessage(handlePushVerifyMessage).then((off) => (cancelled ? off() : removers.push(off)));
-    }
+    PushNotifications.addListener("pushNotificationReceived", (n) => handlePushVerifyMessage(n?.data)).then((h) =>
+      cancelled ? h.remove() : removers.push(() => h.remove())
+    );
     (async () => {
-      const token = Capacitor.isNativePlatform() ? await nativeFcmToken() : await requestFcmToken();
+      const token = await nativeFcmToken();
       if (token && !cancelled) {
         try {
           await registerFcmToken(token);
@@ -1067,8 +1089,9 @@ export default function TarifKutusu() {
     try {
       const params = new URLSearchParams(window.location.search);
 
-      // "Canı çekti" bildirimine tıklanınca (web push, firebase-messaging-sw.js'in
-      // notificationclick'te açtığı link) doğrudan o tarife gitmek için.
+      // ?openRecipe= : eskiden gösterilmiş bir web bildirimine tıklanınca
+      // (firebase-messaging-sw.js) doğrudan o tarife gitmek için. Web push
+      // artık kapalı; bağlantı geriye uyum için okunmaya devam ediyor.
       const openRecipeId = params.get("openRecipe");
       if (openRecipeId) {
         setPendingRecipeId(openRecipeId);
