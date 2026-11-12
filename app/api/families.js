@@ -19,6 +19,7 @@ import {
   ensureOwner,
   oldestMember,
   leaveFamily,
+  leaveAsLastMember,
   cleanName,
   familyLockedError,
   MEMBER_NAME_MAX,
@@ -345,15 +346,22 @@ async function handle(req, res, user) {
     }
     const { meta, members } = await readFamilyState(id);
     const activeOwner = meta && !isFamilyDeleting(meta) && meta.ownerUid === user.uid && members[user.uid];
-    if (activeOwner && !oldestMember(members, user.uid)) {
-      // Tek üye sahipse ayrılmak aileyi sahipsiz ve erişilemez bırakırdı.
-      throw httpError(
-        409,
-        profile.isPlus
-          ? "Ailede senden başka üye yok. Aileyi bırakmak istiyorsan silebilirsin."
-          : "Ailede senden başka üye yok. Aileyi silmek için Plus'ı açman gerekir.",
-        "sole_member"
-      );
+    const lastMember = meta && !isFamilyDeleting(meta) && members[user.uid] && !oldestMember(members, user.uid);
+    if (lastMember) {
+      // Son üye ayrılırsa aile kimsesiz ve erişilemez kalırdı: ayrılma aileyi
+      // ve ortak verisini siler. Plus gerekmez (ayrılma hakkı), ama açık onay
+      // ister; onaysız istek (ör. eski paket) hiçbir şey yapmaz.
+      if (body.confirmDeleteFamily !== true) {
+        throw httpError(
+          409,
+          "Ailede senden başka üye yok. Ayrılırsan aile ve ortak tarifleri, alışveriş listesi ve kiler kalıcı olarak silinir.",
+          "sole_member"
+        );
+      }
+      const result = await leaveAsLastMember(user.uid, id);
+      const updated = await getProfile(user.uid);
+      res.status(200).json({ ok: true, families: updated.families, familyDeleted: result === "deleted" });
+      return;
     }
     let preferred = null;
     if (activeOwner && body.newOwnerUid != null) preferred = targetMember({ memberUid: body.newOwnerUid }, user.uid, members);

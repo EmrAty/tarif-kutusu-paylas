@@ -351,8 +351,12 @@ async function joinFamily(code, memberName) {
   return authedFetch("/api/families", { method: "POST", body: { action: "join", code, memberName } });
 }
 
-async function leaveFamily(familyId, newOwnerUid) {
-  return authedFetch("/api/families", { method: "POST", body: { action: "leave", familyId, ...(newOwnerUid ? { newOwnerUid } : {}) } });
+// confirmDeleteFamily: ailenin son üyesi ayrılıyor ve aile silinecek (kullanıcı onayladı).
+async function leaveFamily(familyId, newOwnerUid, { confirmDeleteFamily = false } = {}) {
+  return authedFetch("/api/families", {
+    method: "POST",
+    body: { action: "leave", familyId, ...(newOwnerUid ? { newOwnerUid } : {}), ...(confirmDeleteFamily ? { confirmDeleteFamily: true } : {}) },
+  });
 }
 
 // Grup 4: yalnızca aile sahibi (sunucu doğrular).
@@ -6097,6 +6101,8 @@ function FamilyCard({ family: f, currentUid, busy, setBusy, onReload, importStat
   const locked = f.membership === "locked" || !!f.locked;
   const manage = isOwner && !locked;
   const others = f.members.filter((m) => m.uid !== currentUid);
+  // Ailede yalnızca bu kullanıcı var: "Aileden Ayrıl" aileyi siler (açık onayla).
+  const lastMember = others.length === 0;
   const me = f.members.find((m) => m.uid === currentUid);
   const memberLabel = (m) => m.name || (m.isAnonymous ? t("families.guestUser") : t("families.unnamedMember"));
   const legacyCode = typeof f.inviteCode === "string" && f.inviteCode.length === 6;
@@ -6160,7 +6166,7 @@ function FamilyCard({ family: f, currentUid, busy, setBusy, onReload, importStat
     if (confirm.type === "rotate") return t("families.confirmRotate");
     if (confirm.type === "remove") return t("families.confirmRemove", { name: confirm.name });
     if (confirm.type === "transfer") return t("families.confirmTransfer", { name: confirm.name });
-    if (confirm.type === "leave") return isOwner ? t("families.confirmLeaveOwner") : t("families.confirmLeave");
+    if (confirm.type === "leave") return lastMember ? t("families.confirmLeaveLast") : isOwner ? t("families.confirmLeaveOwner") : t("families.confirmLeave");
     if (confirm.type === "delete") return t("families.confirmDeleteFamily");
     return "";
   };
@@ -6168,7 +6174,9 @@ function FamilyCard({ family: f, currentUid, busy, setBusy, onReload, importStat
     rotate: { label: t("families.confirmRotateYes"), color: COLORS.forest, act: () => rotateFamilyCode(f.id) },
     remove: { label: t("families.confirmRemoveYes"), color: COLORS.danger, act: () => removeFamilyMember(f.id, confirm?.uid) },
     transfer: { label: t("families.confirmTransferYes"), color: COLORS.forest, act: () => transferFamilyOwnership(f.id, confirm?.uid) },
-    leave: { label: t("families.confirmLeaveYes"), color: COLORS.danger, act: () => leaveFamily(f.id, isOwner ? newOwner : undefined) },
+    leave: lastMember
+      ? { label: t("families.confirmLeaveLastYes"), color: COLORS.danger, act: () => leaveFamily(f.id, undefined, { confirmDeleteFamily: true }) }
+      : { label: t("families.confirmLeaveYes"), color: COLORS.danger, act: () => leaveFamily(f.id, isOwner ? newOwner : undefined) },
     delete: { label: t("families.confirmDeleteYes"), color: COLORS.danger, act: () => deleteFamily(f.id) },
   };
 
@@ -6179,7 +6187,7 @@ function FamilyCard({ family: f, currentUid, busy, setBusy, onReload, importStat
       style={{ marginTop: "12px", padding: "12px", borderRadius: "10px", background: "#F7F1E3", border: `1px solid ${COLORS.line}` }}
     >
       <p style={{ fontSize: "13px", color: COLORS.ink, margin: "0 0 10px", lineHeight: 1.45 }}>{confirmText()}</p>
-      {confirm?.type === "leave" && isOwner && (
+      {confirm?.type === "leave" && isOwner && !lastMember && (
         <select
           value={newOwner}
           onChange={(e) => setNewOwner(e.target.value)}
@@ -6312,12 +6320,9 @@ function FamilyCard({ family: f, currentUid, busy, setBusy, onReload, importStat
       )}
 
       <div style={{ display: "flex", justifyContent: manage ? "space-between" : "flex-end", alignItems: "center", gap: "8px", marginTop: "14px", paddingTop: "10px", borderTop: `1px solid ${COLORS.line}` }}>
-        {(!isOwner || others.length > 0) && (
-          <button onClick={() => ask({ type: "leave" })} disabled={busy} style={linkButton(COLORS.danger)}>
-            {t("families.leaveFamily")}
-          </button>
-        )}
-        {isOwner && others.length === 0 && <span style={{ fontSize: "12px", color: COLORS.inkSoft, flex: 1 }}>{t(locked ? "families.soleOwnerLockedHint" : "families.soleOwnerHint")}</span>}
+        <button onClick={() => ask({ type: "leave" })} disabled={busy} style={linkButton(COLORS.danger)}>
+          {t("families.leaveFamily")}
+        </button>
         {manage && (
           <button onClick={() => ask({ type: "delete" })} disabled={busy} style={{ ...linkButton(COLORS.danger), display: "inline-flex", alignItems: "center", gap: "4px" }}>
             <Trash2 size={13} /> {t("families.deleteFamily")}

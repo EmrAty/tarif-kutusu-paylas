@@ -405,15 +405,84 @@ test("Ayrıl 1: sahip ayrılınca seçtiği üye, seçmezse en eski katılan sah
   assert.equal(meta(fam.id).ownerUid, "M1");
 });
 
-test("Ayrıl 2: tek üye sahip ayrılamaz (409 sole_member); silebilir", async () => {
+const familyKeys = (id) => [...db.keys()].filter((k) => k.startsWith(`family:${id}`) || k.startsWith("invite:"));
+
+test("Ayrıl 2: son üye onaysız ayrılamaz (409, hiçbir şey değişmez); onayla ayrılınca aile ve ortak veri tamamen silinir", async () => {
   reset();
   const fam = await createFamily();
+  await post("OWNER", { action: "rotateCode", familyId: fam.id }); // meta sürüm/yedek anahtarları da oluşsun
+  const before = JSON.stringify([...db.entries()].filter(([k]) => !k.startsWith("rl:")));
   const r = await post("OWNER", { action: "leave", familyId: fam.id });
   assert.equal(r.status, 409);
   assert.equal(r.body.code, "sole_member");
-  assert.deepEqual(profileFamilies("OWNER"), [fam.id]);
-  assert.equal((await post("OWNER", { action: "delete", familyId: fam.id })).status, 200);
+  assert.match(r.body.error, /silinir/);
+  assert.equal(JSON.stringify([...db.entries()].filter(([k]) => !k.startsWith("rl:"))), before, "onaysız istek hiçbir şey yazmadı");
+  const ok = await post("OWNER", { action: "leave", familyId: fam.id, confirmDeleteFamily: true });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.familyDeleted, true);
+  assert.deepEqual(ok.body.families, []);
+  assert.deepEqual(profileFamilies("OWNER"), []);
+  assert.deepEqual(familyKeys(fam.id), []);
+  // "true" dizesi gibi gevşek değerler onay sayılmaz.
+  const fam2 = await createFamily();
+  assert.equal((await post("OWNER", { action: "leave", familyId: fam2.id, confirmDeleteFamily: "true" })).status, 409);
 });
+
+test("Ayrıl 4: onay bayrağı başka üyeler varken aileyi silmez (normal ayrılma + devir)", async () => {
+  reset();
+  const fam = await createFamily();
+  await joinAll(fam, ["M1"]);
+  const r = await post("OWNER", { action: "leave", familyId: fam.id, confirmDeleteFamily: true });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.familyDeleted, undefined);
+  assert.equal(meta(fam.id).ownerUid, "M1");
+  assert.deepEqual(memberUids(fam.id), ["M1"]);
+});
+
+test("Ayrıl 5: son üye ayrılırken biri katılırsa (üye listesi yazımı öncesi) aile silinmez, sahiplik katılana geçer", async () => {
+  reset();
+  const fam = await createFamily();
+  plus("NEW");
+  const fired = interleaveOnce((c) => c[0] === "EVAL" && c[3] === `family:${fam.id}:members`, async () => {
+    assert.equal((await join("NEW", fam.inviteCode)).status, 200);
+  });
+  const r = await post("OWNER", { action: "leave", familyId: fam.id, confirmDeleteFamily: true });
+  setRedisHook(null);
+  assert.ok(fired(), "yarış gerçekten oluştu");
+  assert.equal(r.status, 200);
+  assert.equal(r.body.familyDeleted, false);
+  assert.deepEqual(memberUids(fam.id), ["NEW"]);
+  assert.equal(meta(fam.id).ownerUid, "NEW");
+  assert.deepEqual(profileFamilies("OWNER"), []);
+  assert.equal((await readFamily("NEW", fam.id)).status, 200);
+});
+
+// Silme yolunun her adımının tam öncesinde katılma: hayalet kayıt / artık anahtar kalmaz.
+const LAST_LEAVE_STEPS = [
+  ["silme işareti", (id) => isMetaWrite(id)],
+  ["davet kodu silme", () => (c) => c[0] === "DEL" && String(c[1]).startsWith("invite:")],
+  ["veri/üye anahtarlarının silinmesi", (id) => (c) => c[0] === "DEL" && c.slice(1).includes(`family:${id}:members`)],
+  ["meta silme", (id) => (c) => c[0] === "DEL" && c[1] === `family:${id}:meta` && c.length === 2],
+];
+for (const [label, predicateFor] of LAST_LEAVE_STEPS) {
+  test(`Ayrıl 6: son üye ayrılıp aile silinirken katılma (${label} öncesi) → hayalet kayıt ve artık anahtar kalmaz`, async () => {
+    reset();
+    const fam = await createFamily();
+    plus("J");
+    let joinStatus = null;
+    const fired = interleaveOnce(predicateFor(fam.id), async () => {
+      joinStatus = (await join("J", fam.inviteCode)).status;
+    });
+    const r = await post("OWNER", { action: "leave", familyId: fam.id, confirmDeleteFamily: true });
+    setRedisHook(null);
+    assert.ok(fired(), "yarış gerçekten oluştu");
+    assert.equal(r.status, 200);
+    assert.ok(joinStatus === 404 || joinStatus === 200, String(joinStatus));
+    assert.deepEqual(profileFamilies("J"), [], "katılanın profilinde silinmiş aile kalmadı");
+    assert.deepEqual(profileFamilies("OWNER"), []);
+    assert.deepEqual(familyKeys(fam.id), []);
+  });
+}
 
 test("Ayrıl 3: eski kayıt — sahip üye listesinde yoksa aile listesi açılınca en eski üye sahip olur", async () => {
   reset();
@@ -552,7 +621,7 @@ test("Kilit 4: Plus'ı kapalı sahip yönetemez (çıkar/devret/kod/sil); Plus a
   assert.equal(meta(fam.id).ownerUid, "M2");
 });
 
-test("Kilit 5: kilitli üye ayrılabilir; sahipse güvenli devir çalışır; tek üye sahip 409 (Plus mesajıyla)", async () => {
+test("Kilit 5: kilitli üye ayrılabilir; sahipse güvenli devir; tek üye sahip onayla ayrılır (aile silinir), silme yetkisi açılmaz", async () => {
   reset();
   let fam = await familyWithRecipe();
   await plusOff("M2");
@@ -564,13 +633,32 @@ test("Kilit 5: kilitli üye ayrılabilir; sahipse güvenli devir çalışır; te
   assert.deepEqual(profileFamilies("OWNER"), []);
 
   reset();
-  fam = await createFamily();
+  fam = await familyWithRecipe();
+  // Diğer üyeler ayrılsın; sahip tek kalsın ve Plus'ı kapatsın.
+  await post("M1", { action: "leave", familyId: fam.id });
+  await post("M2", { action: "leave", familyId: fam.id });
   await plusOff("OWNER");
+  // Genel yönetim yetkisi açılmadı: silme, çıkarma, kod hâlâ kilitli.
+  assert.equal((await post("OWNER", { action: "delete", familyId: fam.id })).status, 403);
+  assert.equal((await post("OWNER", { action: "rotateCode", familyId: fam.id })).status, 403);
+  assert.equal((await getBucket("OWNER", fam.id, "recipes")).status, 403);
   const r = await post("OWNER", { action: "leave", familyId: fam.id });
   assert.equal(r.status, 409);
   assert.equal(r.body.code, "sole_member");
-  assert.match(r.body.error, /Plus/);
-  assert.equal((await post("OWNER", { action: "delete", familyId: fam.id })).status, 403);
+  const ok = await post("OWNER", { action: "leave", familyId: fam.id, confirmDeleteFamily: true });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.familyDeleted, true);
+  assert.deepEqual(profileFamilies("OWNER"), []);
+  assert.deepEqual([...db.keys()].filter((k) => k.startsWith(`family:${fam.id}`) || k.startsWith("invite:")), []);
+  // Hesap silmedeki son üye davranışıyla aynı sonuç.
+  reset();
+  const fam2 = await familyWithRecipe();
+  await post("M1", { action: "leave", familyId: fam2.id });
+  await post("M2", { action: "leave", familyId: fam2.id });
+  await plusOff("OWNER");
+  const out = await deleteAccount("OWNER");
+  assert.equal(out.families[0].result, "deleted");
+  assert.deepEqual([...db.keys()].filter((k) => k.startsWith(`family:${fam2.id}`) || k.startsWith("invite:")), []);
 });
 
 test("Kilit 6: kilitli sahip yarıda kalmış silmeyi tamamlayabilir (yalnızca temizlik)", async () => {

@@ -358,6 +358,29 @@ export async function handOffOwnership(uid, id, preferredUid = null) {
   return next;
 }
 
+// Ailenin son üyesi ayrılıyor (Grup 4 ürün kararı: Plus'sız da serbest; onay
+// istemcide). Hesap silmedeki "son üye" yoluyla aynı sıra:
+//   1) kullanıcı üye listesinden atomik çıkarılır;
+//   2) liste gerçekten boşsa aile, ortak silme yoluyla (işaret → üyeleri
+//      işaretten sonra oku → profiller → veri → meta) tamamen silinir; aynı
+//      anda katılan biri hayalet kayıtla kalmaz (katılmanın son kontrolü);
+//   3) liste boş DEĞİLSE (bu arada biri katıldı) aile silinmez: kullanıcı
+//      yalnızca ayrılır, sahiplik katılana geçer — başkasının yeni üyeliği ve
+//      ortak veri korunur.
+// Dönüş: "deleted" | "left".
+export async function leaveAsLastMember(uid, id) {
+  const { value: members } = await removeMemberFromFamily(uid, id);
+  const meta = await redisGetJSON(familyMetaKey(id), null);
+  if (Object.keys(members).length === 0 || !meta || isFamilyDeleting(meta)) {
+    if (meta) await deleteFamilyCompletely(id, { lastUid: uid });
+    await dropFamilyFromProfile(uid, id);
+    return "deleted";
+  }
+  await dropFamilyFromProfile(uid, id);
+  await ensureOwner(id);
+  return "left";
+}
+
 // Kullanıcıyı aileden çıkarır (elle ayrılma): sahiplik devri → üye listesi →
 // profil → sahip kontrolü. Plus kapanması artık kimseyi aileden çıkarmaz
 // (aile kilitlenir, bkz. assertFamilyAccess).
