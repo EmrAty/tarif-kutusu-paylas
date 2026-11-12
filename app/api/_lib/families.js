@@ -1,4 +1,4 @@
-import { redisGet, redisGetJSON, redisSetJSON, redisDel, redisCommand } from "./redis.js";
+import { redisGet, redisGetJSON, redisDel, redisCommand } from "./redis.js";
 import { getProfile, updateProfile } from "./profile.js";
 import { mutateBucket, bucketAuxKeys } from "./versionedBucket.js";
 
@@ -28,6 +28,42 @@ export function membersKeysWithAux(id) {
   return [membersKey(id), ...bucketAuxKeys(membersKey(id))];
 }
 
+// Aile kaydının (meta) yalnızca sürüm/yedek anahtarları; meta'nın kendisi
+// silmede EN SON silinir.
+export function metaAuxKeys(id) {
+  return bucketAuxKeys(familyMetaKey(id));
+}
+
+function corruptMeta() {
+  const err = new Error("Aile kaydı okunamadı.");
+  err.status = 502;
+  err.code = "family_unreadable";
+  return err;
+}
+
+// Kayıt yoksa null; bozuk kayıt hata (asla "yok" sayılmaz).
+export function parseMeta(raw) {
+  if (raw == null) return null;
+  let value;
+  try {
+    value = JSON.parse(raw);
+  } catch (e) {
+    throw corruptMeta();
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw corruptMeta();
+  return value;
+}
+
+// Aile kaydı (meta: ad, sahip, davet kodu, silme işareti) değişiklikleri
+// Grup 4'ten itibaren atomik karşılaştır-ve-yaz ile. Eskiden düz SET idi:
+// sahiplik devri / kod yenileme ile silme işareti aynı anda yazılırsa biri
+// diğerini ezebiliyordu (ör. `deleting` işareti kaybolup silinmekte olan
+// aileye yeniden katılım açılabilirdi). mutate(meta|null) yeni kaydı ya da
+// değişiklik yoksa undefined döndürür.
+export async function updateMeta(id, mutate) {
+  return mutateBucket(familyMetaKey(id), { parse: parseMeta, mutate });
+}
+
 const FAMILY_ID_RE = /^[\w-]{1,64}$/;
 
 function corruptMembers() {
@@ -55,6 +91,16 @@ export function parseMembers(raw) {
 // mutate(members) yeni nesneyi ya da değişiklik yoksa undefined döndürür.
 export async function updateMembers(familyId, mutate) {
   return mutateBucket(membersKey(familyId), { parse: parseMembers, mutate });
+}
+
+// Görünen ad / aile adı: kontrol ve yön karakterleri atılır, boşluklar
+// sadeleşir, uzunluk sınırlanır (eskiden sınırsızdı).
+export const MEMBER_NAME_MAX = 40;
+export const FAMILY_NAME_MAX = 40;
+export function cleanName(value, max) {
+  if (typeof value !== "string") return "";
+  const plain = value.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2066-\u2069]/g, "").replace(/\s+/g, " ").trim();
+  return [...plain].slice(0, max).join("").trim();
 }
 
 export async function removeMemberFromFamily(uid, familyId) {
@@ -170,22 +216,24 @@ export function familyDataKeys(id) {
   ];
 }
 
-const dropFamilyFromProfile = (uid, id) =>
+export const dropFamilyFromProfile = (uid, id) =>
   updateProfile(uid, (p) => (p.families.includes(id) ? { ...p, families: p.families.filter((f) => f !== id) } : undefined));
 
 // lastUid: profili EN SON güncellenecek üye (kurucu — yarıda kalırsa tekrar
 // deneyebilsin). skipUid: profiline hiç dokunulmayacak üye (hesabı silinen).
 export async function deleteFamilyCompletely(id, { lastUid = null, skipUid = null } = {}) {
-  const meta = await redisGetJSON(familyMetaKey(id), null);
+  // İşaret atomik (Grup 4): aynı anda yapılan kod yenileme / sahiplik devri
+  // onu ezemez; işaretten sonra kod yenilenemez (yenileme işareti görüp
+  // vazgeçer ve yazdığı yeni davet anahtarını siler).
+  const { value: meta } = await updateMeta(id, (m) => (m && !m.deleting ? { ...m, deleting: true, deletingAt: Date.now() } : undefined));
   if (!meta) return { result: "missing" };
-  if (!meta.deleting) await redisSetJSON(familyMetaKey(id), { ...meta, deleting: true, deletingAt: Date.now() });
   if (meta.inviteCode) await redisDel(inviteKey(meta.inviteCode));
   // İşaretten SONRA okunur (bozuksa silme durur; tekrar denenebilir).
   const members = parseMembers(await redisGet(membersKey(id)));
   const uids = Object.keys(members).filter((u) => u !== skipUid && u !== lastUid);
   await Promise.all(uids.map((u) => dropFamilyFromProfile(u, id)));
   if (lastUid && lastUid !== skipUid) await dropFamilyFromProfile(lastUid, id);
-  const keys = familyDataKeys(id);
+  const keys = [...familyDataKeys(id), ...metaAuxKeys(id)];
   for (let i = 0; i < keys.length; i += 50) await redisCommand(["DEL", ...keys.slice(i, i + 50)]);
   // meta en son: yarıda kalırsa aile işaretli hâlde bulunup tekrar silinebilir.
   await redisDel(familyMetaKey(id));
@@ -195,9 +243,20 @@ export async function deleteFamilyCompletely(id, { lastUid = null, skipUid = nul
 // Katılmanın son kontrolü (bkz. yukarıdaki kural). Aile yoksa ya da
 // siliniyorsa bu kullanıcının az önce yazdığı üyelik ve profil kaydı geri
 // alınır; true döner. Okuma hatası fırlar (üyelik silinmez).
-export async function undoJoinIfFamilyGone(uid, id) {
+//
+// Grup 4: katılmada kullanılan kod bu arada yenilendiyse de (`code` verilirse)
+// katılma geri alınır. Üye çıkarma önce kodu yeniler, sonra üyeyi siler; eski
+// kodla yarışan bir yeniden katılma böylece çıkarılan üyeyi geri sokamaz. Bu
+// durumda YALNIZCA bu katılmanın eklediği kayıtlar geri alınır (`added`),
+// önceden var olan üyelik (onarım) silinmez.
+export async function undoJoinIfFamilyGone(uid, id, { code = null, added = null } = {}) {
   const meta = await redisGetJSON(familyMetaKey(id), null);
-  if (meta && !isFamilyDeleting(meta)) return false;
+  if (meta && !isFamilyDeleting(meta)) {
+    if (!code || meta.inviteCode === code) return false;
+    if (added?.member) await removeMemberFromFamily(uid, id).catch(() => {});
+    if (added?.profile) await dropFamilyFromProfile(uid, id).catch(() => {});
+    return true;
+  }
   await removeMemberFromFamily(uid, id).catch(() => {});
   await dropFamilyFromProfile(uid, id).catch(() => {});
   if (!meta) {
@@ -228,4 +287,76 @@ export async function pruneDeletedFamilies(uid, familyIds) {
     return next.length === p.families.length ? undefined : { ...p, families: next };
   });
   return updated.value.families;
+}
+
+// ---------------------------------------------------------------------------
+// Sahiplik (Grup 4)
+//
+// Kural: ailede en az bir üye varken sahip daima o üyelerden biridir.
+//   - Sahip ayrılırken (elle, Plus kapanınca, hesap silinince) sahiplik ÖNCE
+//     devredilir: seçtiği üyeye, seçmediyse en eski katılana (joinedAt,
+//     eşitlikte uid).
+//   - Üye listesini küçülten her işlemden sonra `ensureOwner` çalışır: sahip
+//     artık üye değilse (eşzamanlı ayrılma, eski kayıt) sahiplik en eski üyeye
+//     geçer. "Devret ↔ hedef ayrılıyor" yarışında iki taraf da işlemden sonra
+//     kontrol ettiği için biri mutlaka görür.
+//   - Hiç üye kalmamış aile için sahip seçilemez; böyle bir aileye geçerli
+//     kodla ilk katılan, ilk aile listesi açılışında sahip olur.
+// ---------------------------------------------------------------------------
+
+export function oldestMember(members, excludeUid = null) {
+  const entries = Object.entries(members).filter(([uid]) => uid !== excludeUid);
+  if (!entries.length) return null;
+  entries.sort(([uidA, a], [uidB, b]) => (a?.joinedAt ?? Infinity) - (b?.joinedAt ?? Infinity) || uidA.localeCompare(uidB));
+  return entries[0][0];
+}
+
+// Meta + üye listesi tek MGET ile (aynı anın görüntüsü). Bozuk kayıt hata.
+export async function readFamilyState(id) {
+  const result = await redisCommand(["MGET", familyMetaKey(id), membersKey(id)]);
+  if (!Array.isArray(result) || result.length !== 2) throw corruptMeta();
+  return { meta: parseMeta(result[0] ?? null), members: parseMembers(result[1] ?? null) };
+}
+
+// Sahip üye listesinde değilse en eski üyeye devreder. Güncel sahibi (ya da
+// sahip seçilemiyorsa null) döndürür.
+export async function ensureOwner(id) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { meta, members } = await readFamilyState(id);
+    if (!meta || isFamilyDeleting(meta)) return null;
+    if (members[meta.ownerUid]) return meta.ownerUid;
+    const next = oldestMember(members);
+    if (!next) return null;
+    const result = await updateMeta(id, (m) => (m && !m.deleting && m.ownerUid === meta.ownerUid ? { ...m, ownerUid: next } : undefined));
+    if (result.changed) return next;
+    // Sahip bu arada başka bir işlemle değişti: yeniden bak.
+  }
+  return null;
+}
+
+// `uid` sahipse ve ailede başka üye varsa sahipliği devreder (tercih edilen
+// üye geçerliyse ona, değilse en eski katılana). Devredilen uid ya da null.
+export async function handOffOwnership(uid, id, preferredUid = null) {
+  const { meta, members } = await readFamilyState(id);
+  if (!meta || isFamilyDeleting(meta) || meta.ownerUid !== uid) return null;
+  const next = preferredUid && preferredUid !== uid && members[preferredUid] ? preferredUid : oldestMember(members, uid);
+  if (!next) return null;
+  await updateMeta(id, (m) => (m && !m.deleting && m.ownerUid === uid ? { ...m, ownerUid: next } : undefined));
+  return next;
+}
+
+// Kullanıcıyı aileden çıkarır (ayrılma, Plus kapanması): sahiplik devri →
+// üye listesi → profil → sahip kontrolü. keepIfAlone: ailede başka üye yoksa
+// hiçbir şey yapılmaz ("kept") — aile sahipsiz ve erişilemez veriyle kalmasın.
+// Dönüş: "left" | "kept".
+export async function leaveFamily(uid, id, { preferredOwner = null, keepIfAlone = false } = {}) {
+  if (keepIfAlone) {
+    const { meta, members } = await readFamilyState(id);
+    if (meta && !isFamilyDeleting(meta) && members[uid] && !oldestMember(members, uid)) return "kept";
+  }
+  await handOffOwnership(uid, id, preferredOwner);
+  await removeMemberFromFamily(uid, id);
+  await dropFamilyFromProfile(uid, id);
+  await ensureOwner(id);
+  return "left";
 }

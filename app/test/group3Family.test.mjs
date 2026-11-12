@@ -294,7 +294,8 @@ const deleteFam = (owner, id) => invoke(families, { uid: owner, body: { action: 
 
 // Silmenin her adımının tam öncesinde katılmayı araya sokar.
 const DELETE_STEPS = [
-  ["silme işareti (meta SET)", (id) => (c) => c[0] === "SET" && c[1] === `family:${id}:meta`],
+  // Grup 4: işaret artık atomik karşılaştır-ve-yaz (EVAL) ile yazılıyor.
+  ["silme işareti (meta yazımı)", (id) => (c) => (c[0] === "SET" && c[1] === `family:${id}:meta`) || (c[0] === "EVAL" && c[3] === `family:${id}:meta`)],
   ["davet kodu silme", () => (c) => c[0] === "DEL" && String(c[1]).startsWith("invite:")],
   ["üye profillerinin güncellenmesi", () => (c) => c[0] === "EVAL" && c[3] === "user:OWNER:profile"],
   ["veri/üye anahtarlarının silinmesi", (id) => (c) => c[0] === "DEL" && c.slice(1).includes(`family:${id}:members`)],

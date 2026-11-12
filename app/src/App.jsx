@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import {
   ChefHat, Plus, Minus, Link2, ExternalLink, Trash2, Loader2, ArrowLeft, ArrowRight, AlertCircle,
   FileText, Pencil, Check, ChevronDown, Star, Search, ShoppingCart, Clock, Gauge, Undo2, X, Package, Download,
-  Mail, LogOut, Users, Crown, Settings, UserCircle, Copy, Sparkles, LogIn, Bell, Info, Lock,
+  Mail, LogOut, Users, Crown, Settings, UserCircle, Copy, Sparkles, LogIn, Bell, Info, Lock, RefreshCw, MoreHorizontal,
 } from "lucide-react";
 import { auth, googleProvider, retireWebPush } from "./firebase.js";
 import {
@@ -351,8 +351,28 @@ async function joinFamily(code, memberName) {
   return authedFetch("/api/families", { method: "POST", body: { action: "join", code, memberName } });
 }
 
-async function leaveFamily(familyId) {
-  return authedFetch("/api/families", { method: "POST", body: { action: "leave", familyId } });
+async function leaveFamily(familyId, newOwnerUid) {
+  return authedFetch("/api/families", { method: "POST", body: { action: "leave", familyId, ...(newOwnerUid ? { newOwnerUid } : {}) } });
+}
+
+// Grup 4: yalnızca aile sahibi (sunucu doğrular).
+async function removeFamilyMember(familyId, memberUid) {
+  return authedFetch("/api/families", { method: "POST", body: { action: "remove", familyId, memberUid } });
+}
+
+async function transferFamilyOwnership(familyId, memberUid) {
+  return authedFetch("/api/families", { method: "POST", body: { action: "transfer", familyId, memberUid } });
+}
+
+async function rotateFamilyCode(familyId) {
+  return authedFetch("/api/families", { method: "POST", body: { action: "rotateCode", familyId } });
+}
+
+// Yeni kodlar 10 karakter: okunması/söylenmesi kolay olsun diye "ABCDE-FGHJK".
+// Eski 6 karakterli kodlar olduğu gibi gösterilir. Sunucu tireyi yok sayar.
+export function formatInviteCode(code) {
+  if (typeof code !== "string") return "";
+  return code.length === 10 ? `${code.slice(0, 5)}-${code.slice(5)}` : code;
 }
 
 async function deleteFamily(familyId) {
@@ -6008,6 +6028,244 @@ function FavoritesView({ recipes, familyNameById, isRecipeLocked, onSelect, onOp
   );
 }
 
+// Doğrulanmış bir aile kartı (Grup 4): davet kodu, üyeler (görünen adla,
+// e-posta yok), sahip işlemleri (çıkar / sahip yap / kodu yenile / sil) ve
+// ayrılma. Riskli her işlem satır içi onay ister; sunucu yetkiyi ayrıca
+// doğrular (arayüz yalnızca kolaylık).
+function FamilyCard({ family: f, currentUid, busy, setBusy, onReload, importState, onImport }) {
+  const { t } = useLanguage();
+  const [confirm, setConfirm] = useState(null); // { type, uid?, name? }
+  const [openMember, setOpenMember] = useState(null);
+  const [newOwner, setNewOwner] = useState("");
+  const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef(null);
+  useEffect(() => () => clearTimeout(copiedTimer.current), []);
+
+  const isOwner = f.ownerUid === currentUid;
+  const others = f.members.filter((m) => m.uid !== currentUid);
+  const me = f.members.find((m) => m.uid === currentUid);
+  const memberLabel = (m) => m.name || (m.isAnonymous ? t("families.guestUser") : t("families.unnamedMember"));
+  const legacyCode = typeof f.inviteCode === "string" && f.inviteCode.length === 6;
+
+  const run = async (action) => {
+    setError("");
+    setBusy(true);
+    try {
+      await action();
+      setConfirm(null);
+      setOpenMember(null);
+      await onReload();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const ask = (next) => {
+    setError("");
+    setConfirm(next);
+    if (next.type === "leave" && isOwner) setNewOwner(others[0]?.uid || "");
+  };
+
+  const copyCode = () => {
+    navigator.clipboard?.writeText(formatInviteCode(f.inviteCode)).then(
+      () => {
+        setCopied(true);
+        clearTimeout(copiedTimer.current);
+        copiedTimer.current = setTimeout(() => setCopied(false), 1500);
+      },
+      () => {}
+    );
+  };
+
+  const linkButton = (color) => ({
+    fontSize: "12px",
+    fontWeight: 600,
+    color,
+    background: "transparent",
+    border: "none",
+    cursor: "pointer",
+    padding: "6px 4px",
+    minHeight: "32px",
+  });
+  const solidButton = (bg, fg = "#fff") => ({
+    fontSize: "13px",
+    fontWeight: 700,
+    color: fg,
+    background: bg,
+    border: "none",
+    borderRadius: "8px",
+    padding: "8px 14px",
+    cursor: "pointer",
+    minHeight: "36px",
+  });
+
+  const confirmText = () => {
+    if (!confirm) return "";
+    if (confirm.type === "rotate") return t("families.confirmRotate");
+    if (confirm.type === "remove") return t("families.confirmRemove", { name: confirm.name });
+    if (confirm.type === "transfer") return t("families.confirmTransfer", { name: confirm.name });
+    if (confirm.type === "leave") return isOwner ? t("families.confirmLeaveOwner") : t("families.confirmLeave");
+    if (confirm.type === "delete") return t("families.confirmDeleteFamily");
+    return "";
+  };
+  const confirmYes = {
+    rotate: { label: t("families.confirmRotateYes"), color: COLORS.forest, act: () => rotateFamilyCode(f.id) },
+    remove: { label: t("families.confirmRemoveYes"), color: COLORS.danger, act: () => removeFamilyMember(f.id, confirm?.uid) },
+    transfer: { label: t("families.confirmTransferYes"), color: COLORS.forest, act: () => transferFamilyOwnership(f.id, confirm?.uid) },
+    leave: { label: t("families.confirmLeaveYes"), color: COLORS.danger, act: () => leaveFamily(f.id, isOwner ? newOwner : undefined) },
+    delete: { label: t("families.confirmDeleteYes"), color: COLORS.danger, act: () => deleteFamily(f.id) },
+  };
+
+  const confirmBox = (
+    <div
+      role="alertdialog"
+      aria-live="polite"
+      style={{ marginTop: "12px", padding: "12px", borderRadius: "10px", background: "#F7F1E3", border: `1px solid ${COLORS.line}` }}
+    >
+      <p style={{ fontSize: "13px", color: COLORS.ink, margin: "0 0 10px", lineHeight: 1.45 }}>{confirmText()}</p>
+      {confirm?.type === "leave" && isOwner && (
+        <select
+          value={newOwner}
+          onChange={(e) => setNewOwner(e.target.value)}
+          aria-label={t("families.confirmLeaveOwner")}
+          style={{ width: "100%", marginBottom: "10px", padding: "8px 10px", borderRadius: "8px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, color: COLORS.ink, fontSize: "14px" }}
+        >
+          {others.map((m) => (
+            <option key={m.uid} value={m.uid}>
+              {memberLabel(m)}
+            </option>
+          ))}
+        </select>
+      )}
+      <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end", flexWrap: "wrap" }}>
+        <button onClick={() => setConfirm(null)} disabled={busy} style={linkButton(COLORS.inkSoft)}>
+          {t("common.cancel")}
+        </button>
+        {confirm && (
+          <button onClick={() => run(confirmYes[confirm.type].act)} disabled={busy} style={{ ...solidButton(confirmYes[confirm.type].color), opacity: busy ? 0.6 : 1 }}>
+            {busy ? <Loader2 size={14} className="spin" /> : confirmYes[confirm.type].label}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "20px", boxShadow: CARD_SHADOW }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", marginBottom: "12px" }}>
+        <h3 style={{ fontFamily: SERIF, fontSize: "18px", color: COLORS.ink, margin: 0, minWidth: 0, overflowWrap: "anywhere" }}>{f.name}</h3>
+        {isOwner && (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "11px", fontWeight: 700, color: COLORS.mustardDark, background: "#F6ECD4", borderRadius: "999px", padding: "3px 8px", flexShrink: 0 }}>
+            <Crown size={12} /> {t("families.ownerBadge")}
+          </span>
+        )}
+      </div>
+
+      <div style={{ fontSize: "12px", color: COLORS.inkSoft, marginBottom: "6px" }}>{t("families.inviteCode")}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+        <code style={{ fontSize: "15px", fontWeight: 700, letterSpacing: "0.06em", color: COLORS.forestDark, background: "#EFE9D8", padding: "5px 10px", borderRadius: "6px" }}>
+          {formatInviteCode(f.inviteCode)}
+        </code>
+        <button onClick={copyCode} aria-label={t("families.copyCode")} style={{ ...linkButton(COLORS.inkSoft), display: "inline-flex", alignItems: "center", gap: "4px" }}>
+          {copied ? <Check size={14} /> : <Copy size={14} />}
+          {copied && <span>{t("families.codeCopied")}</span>}
+        </button>
+        {isOwner && (
+          <button onClick={() => ask({ type: "rotate" })} disabled={busy} style={{ ...linkButton(COLORS.forest), display: "inline-flex", alignItems: "center", gap: "4px", marginLeft: "auto" }}>
+            <RefreshCw size={13} /> {t("families.rotateCode")}
+          </button>
+        )}
+      </div>
+      {isOwner && legacyCode && <p style={{ fontSize: "12px", color: COLORS.mustardDark, margin: "6px 0 0" }}>{t("families.legacyCodeHint")}</p>}
+      {confirm?.type === "rotate" && confirmBox}
+
+      <div style={{ fontSize: "12px", fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", color: COLORS.inkSoft, margin: "18px 0 6px" }}>
+        {t("families.membersTitle", { count: f.members.length })}
+      </div>
+      <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+        {f.members.map((m) => {
+          const self = m.uid === currentUid;
+          const canManage = isOwner && !self;
+          const open = openMember === m.uid;
+          const rowConfirm = confirm && (confirm.type === "remove" || confirm.type === "transfer") && confirm.uid === m.uid;
+          return (
+            <li key={m.uid} style={{ borderTop: `1px solid ${COLORS.line}`, padding: "8px 0" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", minHeight: "32px" }}>
+                <span style={{ flex: 1, minWidth: 0, fontSize: "14px", color: m.name ? COLORS.ink : COLORS.inkSoft, overflowWrap: "anywhere" }}>
+                  {memberLabel(m)}
+                  {self && <span style={{ color: COLORS.inkSoft }}>{t("families.youSuffix")}</span>}
+                </span>
+                {m.isOwner && <Crown size={14} color={COLORS.mustard} aria-label={t("families.ownerBadge")} />}
+                {canManage && (
+                  <button
+                    onClick={() => {
+                      setOpenMember(open ? null : m.uid);
+                      if (rowConfirm) setConfirm(null);
+                    }}
+                    aria-label={t("families.memberActions")}
+                    aria-expanded={open}
+                    style={{ ...linkButton(COLORS.inkSoft), display: "flex", alignItems: "center", minWidth: "32px", justifyContent: "center" }}
+                  >
+                    <MoreHorizontal size={18} />
+                  </button>
+                )}
+              </div>
+              {canManage && open && !rowConfirm && (
+                <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end", paddingTop: "4px" }}>
+                  <button onClick={() => ask({ type: "transfer", uid: m.uid, name: memberLabel(m) })} disabled={busy} style={linkButton(COLORS.forest)}>
+                    {t("families.makeOwner")}
+                  </button>
+                  <button onClick={() => ask({ type: "remove", uid: m.uid, name: memberLabel(m) })} disabled={busy} style={linkButton(COLORS.danger)}>
+                    {t("families.removeMember")}
+                  </button>
+                </div>
+              )}
+              {rowConfirm && confirmBox}
+            </li>
+          );
+        })}
+      </ul>
+      {me && !me.name && <p style={{ fontSize: "12px", color: COLORS.inkSoft, margin: "8px 0 0" }}>{t("families.setNameHint")}</p>}
+
+      <button
+        onClick={() => onImport(f.id)}
+        disabled={importState === "checking"}
+        style={{ marginTop: "16px", fontSize: "12px", color: COLORS.forest, background: "transparent", border: `1px solid ${COLORS.forest}`, borderRadius: "8px", padding: "6px 10px", cursor: "pointer" }}
+      >
+        {importState === "checking" ? t("common.checking") : t("families.importButton")}
+      </button>
+      {importState && typeof importState === "object" && <LegacyImportResult results={importState} />}
+      {importState === "hata" && <div style={{ fontSize: "12px", color: COLORS.danger, marginTop: "6px" }}>{t("families.importFailed")}</div>}
+      {importState === "none" && <div style={{ fontSize: "12px", color: COLORS.inkSoft, marginTop: "6px" }}>{t("families.legacyNotEligible")}</div>}
+
+      <div style={{ display: "flex", justifyContent: isOwner ? "space-between" : "flex-end", alignItems: "center", gap: "8px", marginTop: "14px", paddingTop: "10px", borderTop: `1px solid ${COLORS.line}` }}>
+        {(!isOwner || others.length > 0) && (
+          <button onClick={() => ask({ type: "leave" })} disabled={busy} style={linkButton(COLORS.danger)}>
+            {t("families.leaveFamily")}
+          </button>
+        )}
+        {isOwner && others.length === 0 && <span style={{ fontSize: "12px", color: COLORS.inkSoft, flex: 1 }}>{t("families.soleOwnerHint")}</span>}
+        {isOwner && (
+          <button onClick={() => ask({ type: "delete" })} disabled={busy} style={{ ...linkButton(COLORS.danger), display: "inline-flex", alignItems: "center", gap: "4px" }}>
+            <Trash2 size={13} /> {t("families.deleteFamily")}
+          </button>
+        )}
+      </div>
+      {(confirm?.type === "leave" || confirm?.type === "delete") && confirmBox}
+
+      {error && (
+        <div style={{ display: "flex", alignItems: "flex-start", gap: "8px", fontSize: "13px", padding: "10px 12px", borderRadius: "8px", background: "#F5E4E0", color: COLORS.danger, marginTop: "12px" }}>
+          <AlertCircle size={14} style={{ marginTop: "2px", flexShrink: 0 }} />
+          <span>{error}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FamiliesView({ isPlus, families, unverifiedFamilies = [], personName, currentUid, onReload, onOpenPlus, onImportFamily }) {
   const { t } = useLanguage();
   const [nameDraft, setNameDraft] = useState("");
@@ -6149,6 +6407,14 @@ function FamiliesView({ isPlus, families, unverifiedFamilies = [], personName, c
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+      {/* Plus'sızken "Yeni Aile" paneli (hata kutusunun asıl yeri) görünmez;
+          ayrılma / onarım hataları kaybolmasın. */}
+      {error && !isPlus && (
+        <div role="alert" style={{ display: "flex", alignItems: "flex-start", gap: "8px", fontSize: "13px", padding: "10px 12px", borderRadius: "8px", background: "#F5E4E0", color: COLORS.danger }}>
+          <AlertCircle size={14} style={{ marginTop: "2px", flexShrink: 0 }} />
+          <span>{error}</span>
+        </div>
+      )}
       {unverifiedFamilies.map((f) => {
         const deleting = f.membership === "deleting";
         const canFinishDelete = deleting && f.ownerUid === currentUid;
@@ -6188,91 +6454,16 @@ function FamiliesView({ isPlus, families, unverifiedFamilies = [], personName, c
         );
       })}
       {families.map((f) => (
-        <div key={f.id} style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "10px" }}>
-            <h3 style={{ fontFamily: SERIF, fontSize: "18px", color: COLORS.ink, margin: 0 }}>{f.name}</h3>
-            {f.ownerUid === currentUid ? (
-              confirmDeleteId === f.id ? (
-                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                  <span style={{ fontSize: "12px", color: COLORS.danger }}>{t("families.confirmDelete")}</span>
-                  <button
-                    onClick={() => handleDelete(f.id)}
-                    disabled={busy}
-                    style={{ fontSize: "12px", fontWeight: 700, color: "#fff", background: COLORS.danger, border: "none", borderRadius: "6px", padding: "4px 10px", cursor: "pointer" }}
-                  >
-                    {t("families.confirmDeleteYes")}
-                  </button>
-                  <button
-                    onClick={() => setConfirmDeleteId(null)}
-                    style={{ fontSize: "12px", color: COLORS.inkSoft, background: "transparent", border: "none", cursor: "pointer" }}
-                  >
-                    {t("common.cancel")}
-                  </button>
-                </div>
-              ) : (
-                <button
-                  onClick={() => setConfirmDeleteId(f.id)}
-                  disabled={busy}
-                  style={{ fontSize: "12px", color: COLORS.danger, background: "transparent", border: "none", cursor: "pointer" }}
-                >
-                  {t("families.deleteFamily")}
-                </button>
-              )
-            ) : (
-              <button
-                onClick={() => handleLeave(f.id)}
-                disabled={busy}
-                style={{ fontSize: "12px", color: COLORS.danger, background: "transparent", border: "none", cursor: "pointer" }}
-              >
-                {t("families.leaveFamily")}
-              </button>
-            )}
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px", flexWrap: "wrap" }}>
-            <span style={{ fontSize: "12px", color: COLORS.inkSoft }}>{t("families.inviteCode")}</span>
-            <code
-              style={{
-                fontSize: "14px",
-                fontWeight: 700,
-                letterSpacing: "0.05em",
-                color: COLORS.forestDark,
-                background: "#EFE9D8",
-                padding: "3px 8px",
-                borderRadius: "6px",
-              }}
-            >
-              {f.inviteCode}
-            </code>
-            <button
-              onClick={() => navigator.clipboard?.writeText(f.inviteCode)}
-              aria-label={t("families.copyCode")}
-              style={{ background: "transparent", border: "none", cursor: "pointer", color: COLORS.inkSoft, display: "flex" }}
-            >
-              <Copy size={13} />
-            </button>
-          </div>
-          <div style={{ fontSize: "13px", color: COLORS.inkSoft, marginBottom: "12px" }}>
-            {t("families.members", { list: f.members.map((m) => m.name || m.email || (m.isAnonymous ? t("families.guestUser") : t("families.genericUser"))).join(", ") })}
-          </div>
-          <button
-            onClick={() => handleImport(f.id)}
-            disabled={importState[f.id] === "checking"}
-            style={{
-              fontSize: "12px",
-              color: COLORS.forest,
-              background: "transparent",
-              border: `1px solid ${COLORS.forest}`,
-              borderRadius: "8px",
-              padding: "6px 10px",
-              cursor: "pointer",
-            }}
-          >
-            {importState[f.id] === "checking" ? t("common.checking") : t("families.importButton")}
-          </button>
-          {importState[f.id] && typeof importState[f.id] === "object" && <LegacyImportResult results={importState[f.id]} />}
-          {importState[f.id] === "hata" && <div style={{ fontSize: "12px", color: COLORS.danger, marginTop: "6px" }}>{t("families.importFailed")}</div>}
-          {importState[f.id] === "none" && <div style={{ fontSize: "12px", color: COLORS.inkSoft, marginTop: "6px" }}>{t("families.legacyNotEligible")}</div>}
-        </div>
+        <FamilyCard
+          key={f.id}
+          family={f}
+          currentUid={currentUid}
+          busy={busy}
+          setBusy={setBusy}
+          onReload={onReload}
+          importState={importState[f.id]}
+          onImport={handleImport}
+        />
       ))}
 
       {!isPlus && (
@@ -6328,6 +6519,10 @@ function FamiliesView({ isPlus, families, unverifiedFamilies = [], personName, c
             value={codeDraft}
             onChange={(e) => setCodeDraft(e.target.value.toUpperCase())}
             placeholder={t("families.codePlaceholder")}
+            maxLength={16}
+            autoCapitalize="characters"
+            autoComplete="off"
+            spellCheck={false}
             style={inputStyle}
             disabled={atLimit}
           />

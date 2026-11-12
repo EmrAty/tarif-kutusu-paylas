@@ -1,6 +1,6 @@
-import { redisGet, redisSet, redisDel, redisGetJSON, redisSetJSON, redisCommand } from "./redis.js";
+import { redisGet, redisSet, redisDel, redisGetJSON, redisCommand } from "./redis.js";
 import { getProfile, profileKey } from "./profile.js";
-import { removeMemberFromFamily, deleteFamilyCompletely, isFamilyDeleting } from "./families.js";
+import { removeMemberFromFamily, deleteFamilyCompletely, isFamilyDeleting, handOffOwnership, ensureOwner } from "./families.js";
 import { fcmTokensKey, pushTargetsKey, releasePushOwnership } from "./fcm.js";
 import { bucketAuxKeys } from "./versionedBucket.js";
 import { getServiceAccountToken } from "./googleAuth.js";
@@ -85,17 +85,14 @@ async function deleteKeys(keys) {
   }
 }
 
-// Sahiplik devri: kalan üyelerden en eski katılan (eşitlikte uid sırası).
-function nextOwner(members) {
-  return Object.entries(members)
-    .sort(([uidA, a], [uidB, b]) => (a?.joinedAt ?? Infinity) - (b?.joinedAt ?? Infinity) || uidA.localeCompare(uidB))[0][0];
-}
-
 // Kullanıcıyı ailesinden çıkarır. Başka üye kalmadıysa aile tamamen silinir;
 // kaldıysa aile ve ortak listeler dokunulmadan kalır, sahiplik devredilir.
 async function leaveFamilyForDeletion(uid, id) {
   const meta = await redisGetJSON(familyMetaKey(id), null);
   if (!meta) return { id, result: "missing" };
+  // Sahiplik ÖNCE devredilir (en eski katılan; Grup 4: meta artık atomik
+  // yazılıyor, eskiden düz SET silme işaretini ezebiliyordu).
+  const handedTo = await handOffOwnership(uid, id);
   // Atomik: aynı anda katılan başka bir üye listeden düşmez.
   const { value: members } = await removeMemberFromFamily(uid, id);
   if (Object.keys(members).length === 0 || isFamilyDeleting(meta)) {
@@ -104,11 +101,9 @@ async function leaveFamilyForDeletion(uid, id) {
     await deleteFamilyCompletely(id, { skipUid: uid });
     return { id, result: "deleted" };
   }
-  if (meta.ownerUid === uid) {
-    meta.ownerUid = nextOwner(members);
-    await redisSetJSON(familyMetaKey(id), meta);
-    return { id, result: "ownership_transferred" };
-  }
+  // Devirden sonra yeni sahip tam bu sırada ayrıldıysa en eski üyeye geçer.
+  await ensureOwner(id);
+  if (handedTo || meta.ownerUid === uid) return { id, result: "ownership_transferred" };
   return { id, result: "left" };
 }
 

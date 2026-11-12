@@ -46,7 +46,14 @@ const parse = (raw, fallback) => {
 };
 
 export async function auditGroup3(run) {
-  const report = { families: { profilesChecked: 0, profileOnly: [], membersOnly: [], missingFamily: [], unreadable: [] }, legacy: {}, push: {} };
+  // Grup 4 ekleri (yalnızca sayım/kimlik, içerik yok): sahibi üye listesinde
+  // olmayan aile, hiç üyesi kalmamış aile, eski 6 karakterli davet kodu ve
+  // üye kayıtlarında hâlâ saklanan e-posta alanı sayısı.
+  const report = {
+    families: { profilesChecked: 0, profileOnly: [], membersOnly: [], missingFamily: [], unreadable: [], orphanOwner: [], noMembers: [], legacyInviteCodes: 0, storedMemberEmails: 0 },
+    legacy: {},
+    push: {},
+  };
 
   // 1) Aile üyeliği
   const profileKeys = (await scanAll(run, "user:*:profile")).filter((k) => /^user:[^:]+:profile$/.test(k));
@@ -79,6 +86,14 @@ export async function auditGroup3(run) {
     if (metaRaw == null) {
       if (fromProfiles.size) report.families.missingFamily.push({ familyId: id, uids: [...fromProfiles] });
       continue;
+    }
+    const meta = parse(metaRaw, null);
+    if (meta && !meta.deleting) {
+      const uids = Object.keys(members);
+      if (!uids.length) report.families.noMembers.push({ familyId: id });
+      else if (!members[meta.ownerUid]) report.families.orphanOwner.push({ familyId: id });
+      if (typeof meta.inviteCode === "string" && meta.inviteCode.length === 6) report.families.legacyInviteCodes++;
+      report.families.storedMemberEmails += Object.values(members).filter((m) => m && typeof m === "object" && m.email).length;
     }
     for (const uid of fromProfiles) if (!members[uid]) report.families.profileOnly.push({ familyId: id, uid });
     for (const uid of Object.keys(members)) if (!fromProfiles.has(uid)) report.families.membersOnly.push({ familyId: id, uid });

@@ -24,6 +24,12 @@ export const SERVER_ERROR_KEYS = {
   images_total_too_large: "errors.imagesTotalTooLarge",
   image_unsupported: "errors.imageUnsupported",
   image_invalid: "errors.imageProcessFailed",
+  // Aile (api/families.js, Grup 4)
+  invite_invalid: "families.errorInviteInvalid",
+  invite_rate_limited: "families.errorInviteRateLimited",
+  sole_member: "families.errorSoleMember",
+  not_owner: "families.errorNotOwner",
+  member_not_found: "families.errorMemberNotFound",
 };
 
 export function serverErrorKey(code) {
