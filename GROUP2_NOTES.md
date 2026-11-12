@@ -30,9 +30,17 @@ Durum (11 Kasım 2026): kod tamam, **commit/push YOK**. Değişiklikler bu workt
 - Test Redis'i tek motor: `test/helpers/memoryRedis.mjs` (gerçek Lua EVAL, MGET, DECR, sıralı küme, `/pipeline`, yanlış türde WRONGTYPE); `fakeServices.mjs` bunu kullanıyor; Grup 1 job testlerine `/pipeline` eklendi (koruma artık orada fail-open'a düşmüyor).
 - Yeni `test/integration.test.mjs` (11 test). `npm test` 205/205, `vite build` temiz.
 
+## Preview doğrulaması (12 Kasım 2026, `preview.tarifkutusu.app` → `integrate/group1-group2`)
+- Redis izolasyonu: production KV yalnız Production, test KV yalnız Preview; Preview yazımı test Redis'te var, production'da yok.
+- Gerçek Upstash: pipeline, hız/kullanıcı/genel sayaçlar ve TTL'ler doğru; loglarda "failing open" yok.
+- **Bulunan hata → `2c30ea1`:** kira yanıttan sonra bırakılıyordu (Vercel yanıttan sonraki kodu garanti etmiyor). `deferResponse` ile önce bırak, sonra yanıtla (extract, suggest, recipe-jobs). Fable: SAFE TO PRODUCTION.
+- Kill switch (yalnız Preview/branch) 503 verdi, kaldırıldı. Hız sınırı 429 + Retry-After. Job + arayüz yarışında 409 → yeniden deneme, veri kaybı yok. `client_update_required` → kapatılamaz Yenile penceresi, yazımlar duruyor. `input_too_large` → 413, mesaj doğru, pencere yok. Sosyal link doğrulaması ve görsel sıkıştırma (9,7 MB → 1176×1568, EXIF yönü doğru) geçti.
+- `a0ca9da`/`b82c6d1` boş commit: Vercel redeploy e-posta kodu istediği için push ile yeniden build.
+- `npm test` 206/206, `vite build` temiz. Test hesabı: Preview misafir `syta9…`, test Redis'te.
+
 ## Kalan işler
 1. Kullanıcı: Anthropic Console + OpenAI'da aylık harcama limiti.
 2. Telefonda doğrulama: TikTok paylaş → caption → job → bildirim; Yeni Tarif Çıkar + ekran görüntüsü.
-3. ~~Grup 1 ile entegrasyon~~ → `integrate/group1-group2` (yukarı). Sırada: Fable son denetimi, sonra kullanıcı onayıyla main'e merge + deploy.
+3. ~~Grup 1 ile entegrasyon~~ ve ~~Preview doğrulaması~~ tamam. Sırada: harcama limitleri + Upstash kotası kontrolü, sonra kullanıcı onayıyla main'e merge + production deploy, ardından telefonda 5 smoke test (TikTok kısa link, Instagram, kamera fotoğrafı, art arda 6 çıkarma, paylaşım sırasında favori/silme).
 4. Entegrasyondan sonra `CLAUDE.md` güncellenecek (çakışma olmasın diye şimdi yazılmadı).
 5. İleride değerlendirilebilir: Firebase App Check / Play Integrity (native + yeni APK gerekir).
