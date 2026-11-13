@@ -4,6 +4,7 @@ import { removeMemberFromFamily, deleteFamilyCompletely, isFamilyDeleting, handO
 import { fcmTokensKey, pushTargetsKey, releasePushOwnership } from "./fcm.js";
 import { bucketAuxKeys } from "./versionedBucket.js";
 import { getServiceAccountToken } from "./googleAuth.js";
+import { deleteMergedGuestsOf, deleteOwnMergeState } from "./guestMerge.js";
 
 // Hesap silme (DELETE /api/account). Sıra bilerek böyle:
 //   1. "silindi" işareti  -> eski ID token'la gelen istekler ve yarıda kalmış
@@ -19,7 +20,7 @@ import { getServiceAccountToken } from "./googleAuth.js";
 const DELETED_MARKER_TTL = 24 * 3600;
 const UID_RE = /^[A-Za-z0-9_-]{1,128}$/;
 
-const deletedMarkerKey = (uid) => `deleted-account:${uid}`;
+export const deletedMarkerKey = (uid) => `deleted-account:${uid}`;
 
 export async function isAccountDeleted(uid) {
   return (await redisGet(deletedMarkerKey(uid))) != null;
@@ -129,10 +130,17 @@ export async function deleteFirebaseUser(uid) {
   throw err;
 }
 
-export async function deleteAccount(uid) {
+// keepGuestMergeState: yalnızca misafir taşımasının temizlik adımı kullanır (taşıma
+// kaydı, dizine "tamamlandı" yazılana kadar dursun).
+export async function deleteAccount(uid, { keepGuestMergeState = false } = {}) {
   if (typeof uid !== "string" || !UID_RE.test(uid)) throw new Error("Geçersiz kullanıcı kimliği.");
 
   await redisSet(deletedMarkerKey(uid), String(Date.now()), DELETED_MARKER_TTL);
+
+  // Grup 5 (B2): bu hesaba taşınan (ya da taşınması süren) misafir hesapların
+  // kalıntıları ve taşıma kayıtları da silinir; misafirin kendi açık bileti de.
+  const mergedGuests = await deleteMergedGuestsOf(uid);
+  if (!keepGuestMergeState) await deleteOwnMergeState(uid);
 
   // Bozuk profil (Grup 5'te getProfile artık 502 fırlatıyor) hesap silmeyi
   // engellemez: aile üyelikleri profilden okunamaz, kalan kişisel veri yine silinir.
@@ -160,5 +168,5 @@ export async function deleteAccount(uid) {
   await redisDel(profileKey(uid));
 
   const firebase = await deleteFirebaseUser(uid);
-  return { families, firebase: firebase.result };
+  return { families, firebase: firebase.result, ...(mergedGuests.length ? { mergedGuests: mergedGuests.length } : {}) };
 }

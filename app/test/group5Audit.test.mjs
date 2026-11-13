@@ -436,7 +436,8 @@ test("Misafir 1: misafirin tarifleri, kileri ve (boşsa) alışveriş listesi me
   const again = await merge("REAL", guestToken("GUEST"));
   assert.equal(again.status, 200);
   assert.equal(readList("user:REAL:recipes").length, 4);
-  assert.ok(readList("user:GUEST:recipes").length === 3, "misafir verisi silinmez");
+  // Grup 5 B2: taşıma bitince misafir kopyası silinir (eskiden kalıyordu).
+  assert.equal(db.has("user:GUEST:recipes"), false, "taşıma bitince misafir kopyası silinir");
 });
 
 test("Misafir 2: dolu alışveriş listesi ezilmez; Free sınırına bakılmaz (veri kaybı yok)", async () => {
