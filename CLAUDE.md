@@ -2,6 +2,12 @@
 
 Bu dosyayı her oturum başında otomatik okuyorum. Buradaki bilgiler güncel tutulmalı; büyük bir değişiklik yaptığımda bu dosyayı da güncellerim.
 
+## 🚦 Test / CI / yayın düzeni (Grup 5, 13 Kasım 2026)
+- Yayın akışı, komutlar, zorunlu/elle korumalar ve geri dönüş: **`RELEASE.md`**. Grup 5 ayrıntısı: `GROUP5_NOTES.md`.
+- `cd app && npm run check` = lint + tüm testler + build (CI'ın aynısı; ağsız, anahtarsız). Her push'ta GitHub Actions `CI / check` çalışır.
+- Production'a yalnızca Preview'da test edilmiş SHA fast-forward ile çıkar: `npm run release:check -- <sha> --bypass-file …` → `git push origin <sha>:refs/heads/main` → `npm run verify:deploy -- --url https://tarifkutusu.app --commit <sha>`.
+- Testlerde sabit süre bekleme yok: `test/helpers/async.mjs` (`waitFor`, `drainBackground`).
+
 ## 📌 GÜNCEL ÖZET (10 Kasım 2026) — aşağıdaki eski bölümlerle çelişirse bu geçerlidir
 
 İşaretler: **[repo]** = repo/git ile doğrulandı, **[canlı]** = production'a istek atılarak doğrulandı, **[kullanıcı]** = Emre bildirdi, repodan doğrulanamaz.
