@@ -62,3 +62,55 @@ Mevcut kapsam veri kaybı (sürümlü kovalar), aile/Plus kilidi, FCM kayıtlar�
 3. Fable denetimi (Grup 3–4–5 birleşik + tüm uygulama).
 4. Grup 5 main'e alındıktan **hemen sonra** önerilen GitHub kuralı (RELEASE.md → "Önerilen GitHub ayarı"): main'e force-push/silme yasak + `check` zorunlu. Bu, production'a çıkışı değiştirdiği için uygulanmadı; kullanıcı onayı bekliyor.
 5. Bilinen, bu grubun dışında: Play App Signing SHA → Firebase kontrolü; ödeme entegrasyonu yok (Plus test düğmesi korunuyor).
+
+## 7. Fable denetimi ikinci tur (B1–B6) — 13 Kasım 2026
+
+Commit'ler (yalnızca `group-5-ci-release`): `a7f1339` (önceki çalışma ağacı: güvenlik başlıkları, verify-deploy, notify guard, auth yorumu + denetim testi), `3bb9a67` (B4/B5), `a81ee3d` (B3/B6), `26f12f8` (B1/B2 sunucu), `038cdf7` (B1 istemci). Testler: `test/group5Followup.test.mjs` (B3–B6), `test/group5GuestMerge.test.mjs` (B1/B2), `src/guestMergeClient.test.mjs`. `npm run check`: lint temiz, **411/411**, build temiz.
+
+### B1/B2 — dayanıklı misafir → mevcut hesap taşıma
+- **Eski sorun:** misafir ID token'ı yalnızca bileşen state'indeydi; taşıma isteği başarısız olup uygulama kapanırsa / 1 saat geçerse misafir verisi erişilemez anonim uid'de kalıyordu.
+- **Yeni akış:** (1) misafirken `POST /api/account {action:"createGuestMergeTicket"}` → rastgele bilet; cihazda `localStorage["tarif-kutusu:guest-merge-ticket"]`'a yazılıp geri okunarak doğrulanır, yazılamazsa hesaba geçilmez. (2) Hesaba geçilir (başarısızsa misafir kalır, bilet zararsız). (3) Uygulama her açılışta/oturum değişiminde bileti talep eder (`claimGuestMergeTicket`) ve `resumeGuestMerges` ile sunucudaki yarım taşımaları bitirir — başka cihazda da. Üst bantta (Hesabım dışında) durum görünür.
+- **Adımlar:** tarifler → kiler → alışveriş listesi → aile üyelikleri → temizlik (misafir Redis verisi + anonim Firebase kullanıcısı `deleteAccount` ile). Her adım tekrar çalıştırılabilir; her yazım noktasında kesinti + devam testi var (kopya yok, aile hiçbir an sahipsiz değil).
+- **Aile:** misafirin üyeliği + sahipliği hedefe geçer (kıdem `joinedAt` korunur; Plus şart değil, aile kilitli görünür). Hedef zaten üyeyse misafir çıkar, sahiplik hedefe. Hedef 2 aile sınırındaysa: başka üye varsa sahiplik o üyeye (en eski), misafir ayrılır; misafir tek üyeyse ailenin tarifleri/kileri hedefin kişisel listesine kopyalanır (alışveriş listesi kişiseldeki kuralla: hedefinki boşsa), sonra aile silinir. Her aile sonucu yanıtta `families[<id>].result`.
+- **Bağlama anında misafir dondurulur** (`deleted-account:<misafir>` TTL'siz): misafirin başka cihazdaki açık oturumu artık yazamaz (401 "Bu hesap silindi."). Temizlik bu işareti olağan 24 saatlik işaretle değiştirir.
+- **Hesap silme:** hedef silinirken bağlı/bekleyen misafirlerin kalıntıları, durum kayıtları ve bilet kayıtları da silinir; misafir kendi hesabını silerse açık bileti silinir.
+- Eski yol (`mergeGuest` + guestToken) aynı motoru kullanır (eski paketler için).
+
+**Yeni Redis anahtarları**
+| Anahtar | İçerik | TTL |
+|---|---|---|
+| `guest-merge:ticket:<sha256(bilet)>` | `{guestUid, createdAt}`; tamamlanınca `{status:"done", targetUid, report}` | açıkken YOK; tamamlanınca 30 gün |
+| `guest-merge:state:<misafir>` (+ `:version/:backups/:daily-backups`) | bağlı hedef, adım durumu, rapor | yok; taşıma bitince silinir |
+| `guest-merge:lock:<misafir>` | eşzamanlı çalıştırma kirası | 120 sn |
+| `user:<hedef>:guestMerges` (+ sürüm/yedek) | `{<misafir>: {boundAt, status, completedAt?, report?, ticketHash?}}` | yok; hesapla silinir; 90 günden eski "done" kayıtları budanır |
+| `user:<misafir>:mergedInto` | Grup 5 ilk sürümüyle uyum (artık TTL'siz) | misafir silinince gider |
+| `rl:data-write:u:<uid>:*`, `rl:data-write:ip:<hash>:*` | veri yazım hız sayaçları | pencere + 5 sn |
+
+### B3 — kova boyutu ve yazım hızı (`api/_lib/bucketLimits.js`)
+- Tarifler ≤2 MB / ≤2000 kayıt; alışveriş listesi ≤200 KB, yalnızca `selected` (id dizisi), `checked` (anahtar→bool), `servings` (id→0<n≤1000), ≤2000 giriş; kiler ≤100 KB / ≤500 öğe, her öğe boş olmayan ≤200 karakter metin. Yalnızca **büyüten** yazım reddedilir (413 `bucket_too_large`; biçim hatası 400 `invalid_bucket_value`); tavanın üstündeki eski kova küçültülebilir/aynı boyutta düzenlenebilir; değişmemiş eski alan/öğe engel olmaz.
+- Hız: hesap başına dakikada 240 / saatte 4000 (misafir 2000) yazım; misafirde ayrıca IP başına 1200/dk, 20000/sa. Redis sayaçları çalışmazsa **geçirilir** (yazımın kendisi zaten Redis'e gidiyor).
+- `recipe-jobs` aynı tarif tavanını uygular. Misafir taşıması kullanıcının kendi verisi olduğu için tavanın **2 katına** kadar büyütebilir; onu da aşarsa durur (`blocked`), misafir verisi silinmez, yer açılınca devam eder.
+
+### B4/B5/B6
+- B4: aynı-tarif beklemesi önce (reddedilirse hiçbir sayaç artmaz), sonra gönderenin sayaçları, en son aile sayacı (aşılırsa geri alınır). Eski testteki "çift dokunma da sayılır" beklentisi buna göre güncellendi.
+- B5: `GET /api/profile` bozuk profilde/Redis hatasında 502 + kod. Diğer uçlar zaten try/catch içindeydi (tarandı); `recipe-jobs` hata yanıtına kod eklendi.
+- B6: sınırın üstündeki Free hesapta önceki listede olmayan her id gerçek "geri al" olmalı (uzunluk aynı kalsa da). Aynı listede tekrar eden id 400 `invalid_recipe`; eski kayıtta zaten tekrar varsa kilitlenmez.
+
+### Geri dönüş (rollback) uyumu
+- Önceki sunucuya dönülürse: yeni anahtarlar yok sayılır (zararsız). Bağlanmış ama bitmemiş taşımada misafir donmuş kalır ve eski sunucu taşımayı sürdüremez → yeni sunucu geri gelince kaldığı yerden devam eder. Eski sunucunun `mergeGuest` yolu `user:<misafir>:mergedInto` işaretini okur (yeni kod da yazıyor), başka hedefe taşıma yapamaz.
+- Yeni istemci eski sunucuda: `createGuestMergeTicket` 400 alır → "Geçiş hazırlanamadı", misafir kalır (veri kaybı yok).
+- B3 sınırları yalnızca yeni sunucuda; eski sunucuya dönmek sınırları kaldırır, veri bozmaz.
+
+### Telefonda doğrulanacaklar (yapılmadı)
+1. Misafir → "Giriş Yap" (mevcut hesap) → onay → geçiş; üst bantta "taşınıyor/taşındı"; tarifler/kiler/aile hedefte.
+2. Onaydan sonra internet kesilip uygulama kapatılınca: tekrar açınca taşıma kendiliğinden bitiyor mu.
+3. Aynı hesapla ikinci cihazdan açılışta yarım taşımanın bitmesi.
+4. Google ile bağlanmada (native) aynı akış; giriş iptalinde misafir verisinin değişmediği.
+5. Çok hızlı işaretlemede alışveriş listesinde 429 görülmemesi.
+
+### Açık ürün kararları
+- Hedef başına 30 günde en çok 3 taşıma (`GUEST_MERGE_LIMIT`) — **ürün kararı bekliyor.**
+- Taşımada Free sınırı uygulanmıyor (sınırın üstü kilitli görünür) — varsayılan karar, onay bekliyor.
+- Kova tavanları (2 MB / 200 KB / 100 KB / 500 öğe) ve taşımanın 2 kat payı — gözden geçirilmeli.
+- CSP `script-src` (Report-Only): **eklenmedi.** Rapor toplayacak uç yok (yalnızca tarayıcı konsoluna düşerdi), Firebase Auth popup'ı `apis.google.com` ve iframe kullanıyor; değeri düşük, yanlış ayarın Enforce'a dönüşmesi riskli. Rapor ucu kurulursa yeniden değerlendirilmeli.
+- `android:allowBackup` (native): dokunulmadı, açık iş.
