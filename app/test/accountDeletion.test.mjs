@@ -7,6 +7,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { createMemoryRedis } from "./helpers/memoryRedis.mjs";
+import { waitFor, drainBackground, backgroundCount } from "./helpers/async.mjs";
 
 const KV = "https://kv.test";
 process.env.KV_REST_API_URL = KV;
@@ -137,6 +138,9 @@ const quiet = (fn) => async () => {
   console.log = () => {};
   console.error = () => {};
   try {
+    // Önceki testin arka plan job'u (bildirim gecikmesi dahil) bitmeden yeni test
+    // başlamaz; aksi hâlde geç kalan iş bu testin temiz verisine yazabiliyordu.
+    await drainBackground();
     await fn();
   } finally {
     Object.assign(console, { log, error });
@@ -336,7 +340,7 @@ async function startPersonalJob(uid) {
     },
   });
   assert.equal(r.status, 200, JSON.stringify(r.body));
-  for (let i = 0; i < 100 && claudeCalls === 0; i++) await sleep(10);
+  await waitFor(() => claudeCalls > 0, { message: "job Claude çağrısına ulaşmalı" });
   assert.equal(claudeCalls, 1, "job Claude çağrısına ulaşmalı");
 }
 
@@ -344,7 +348,7 @@ test("kontrol: hesap silinmezse paylaşım job'u tarifi kişisel listeye yazar",
   seed();
   await startPersonalJob("A");
   releaseClaude();
-  for (let i = 0; i < 100 && read("user:A:recipes")?.[0]?.title !== "Test Tarifi"; i++) await sleep(10);
+  await waitFor(() => read("user:A:recipes")?.[0]?.title === "Test Tarifi", { message: "tarif yazılmalı" });
   assert.equal(read("user:A:recipes")[0].title, "Test Tarifi");
 }));
 
@@ -352,7 +356,10 @@ test("job sürerken hesap silinirse tarif yazılmaz, job kaydı kalmaz", quiet(a
   seed();
   await startPersonalJob("A");
   assert.equal((await deleteA()).status, 200);
+  assert.ok(backgroundCount() > 0, "job arka planda hâlâ sürüyor olmalı");
   releaseClaude();
-  await sleep(300);
+  // Sabit 300 ms yerine arka plan işinin (waitUntil) gerçekten bitmesini bekle;
+  // iş bitmeden bakılırsa "yazılmadı" sonucu hiçbir şey kanıtlamaz.
+  await drainBackground();
   assert.deepEqual(ownedByA(), []);
 }));

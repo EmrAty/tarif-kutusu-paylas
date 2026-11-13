@@ -9,6 +9,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { createMemoryRedis } from "./helpers/memoryRedis.mjs";
+import { waitFor } from "./helpers/async.mjs";
 
 const KV = "https://kv.test";
 process.env.KV_REST_API_URL = KV;
@@ -330,14 +331,10 @@ test("6) İki aile üyesi aynı anda değişiklik yapar: ikisinin niyeti de koru
 });
 
 async function waitForJob(uid, jobId) {
-  for (let i = 0; i < 500; i++) {
+  return waitFor(() => {
     const job = readJSON(`job:${uid}:${jobId}`);
-    if (job?.status === "completed" || job?.status === "failed") {
-      if (job.notify) return job;
-    }
-    await sleep(10);
-  }
-  throw new Error("job bitmedi");
+    return (job?.status === "completed" || job?.status === "failed") && job.notify && job;
+  }, { message: `job bitmeli: ${jobId}` });
 }
 
 for (const [label, scope, key] of [

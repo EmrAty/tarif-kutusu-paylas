@@ -5,7 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { setRoutes, calls, invoke, resetDb, json, db, setRedisFault, setRedisHook, zsetSize } from "./helpers/fakeServices.mjs";
+import { setRoutes, calls, invoke, resetDb, json, db, setRedisFault, setRedisHook, zsetSize, waitFor, drainBackground } from "./helpers/fakeServices.mjs";
 
 process.env.RECIPE_JOB_NOTIFY_MIN_DELAY_MS = "0";
 
@@ -49,16 +49,14 @@ const jobBody = (i, extra = {}) => ({
 });
 
 async function waitForJob(uid, jobId) {
-  for (let i = 0; i < 200; i++) {
-    const job = JSON.parse(db.get(`job:${uid}:${jobId}`) || "null");
-    if (job && (job.status === "completed" || job.status === "failed")) {
-      // processRecipeJob kirayı finally'de, job kaydından sonra bırakıyor.
-      await new Promise((r) => setTimeout(r, 20));
-      return job;
-    }
-    await new Promise((r) => setTimeout(r, 10));
-  }
-  throw new Error(`job bitmedi: ${db.get(`job:${uid}:${jobId}`)}`);
+  const job = await waitFor(() => {
+    const j = JSON.parse(db.get(`job:${uid}:${jobId}`) || "null");
+    return j && (j.status === "completed" || j.status === "failed") && j;
+  }, { message: `job bitmeli: ${jobId}` });
+  // processRecipeJob kirayı finally'de, job kaydından sonra bırakıyor: sabit
+  // süre yerine arka plan işinin tamamen bitmesini bekle.
+  await drainBackground();
+  return job;
 }
 
 // Uygulamanın gerçek istemci deposu (Grup 1), doğrudan api/data.js'e bağlı.

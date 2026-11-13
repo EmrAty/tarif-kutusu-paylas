@@ -4,6 +4,7 @@
 // düşürür. Bu modül, test edilen API modüllerinden ÖNCE import edilmeli
 // (ortam değişkenlerini ayarlıyor).
 import crypto from "node:crypto";
+export { waitFor, drainBackground, backgroundCount } from "./async.mjs";
 
 export const KV = "https://kv.test";
 process.env.KV_REST_API_URL = KV;
@@ -18,19 +19,31 @@ const { publicKey, privateKey } = crypto.generateKeyPairSync("rsa", { modulusLen
 const jwk = { ...publicKey.export({ format: "jwk" }), kid: "test-kid", alg: "RS256", use: "sig" };
 
 export function idToken(uid, { anonymous = false } = {}) {
+  return signedToken({ sub: uid, firebase: { sign_in_provider: anonymous ? "anonymous" : "password" } });
+}
+
+// Yetki sözleşmesi testleri için: istenen alanları değiştirilmiş (süresi geçmiş,
+// başka proje, başka anahtarla imzalanmış…) token üretir. `claims` içindeki
+// undefined değerler payload'dan çıkarılır.
+const { privateKey: foreignKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
+export function signedToken(claims = {}, { kid = "test-kid", alg = "RS256", foreign = false } = {}) {
   const enc = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
   const now = Math.floor(Date.now() / 1000);
-  const header = enc({ alg: "RS256", kid: "test-kid", typ: "JWT" });
-  const payload = enc({
+  const payload = {
     iss: "https://securetoken.google.com/tarif-kutusu",
     aud: "tarif-kutusu",
-    sub: uid,
+    sub: "U1",
     iat: now,
     exp: now + 3600,
-    firebase: { sign_in_provider: anonymous ? "anonymous" : "password" },
-  });
-  const sig = crypto.sign("RSA-SHA256", Buffer.from(`${header}.${payload}`), privateKey).toString("base64url");
-  return `${header}.${payload}.${sig}`;
+    firebase: { sign_in_provider: "password" },
+    ...claims,
+  };
+  for (const k of Object.keys(payload)) if (payload[k] === undefined) delete payload[k];
+  const header = enc({ alg, kid, typ: "JWT" });
+  const body = enc(payload);
+  if (alg === "none") return `${header}.${body}.`;
+  const sig = crypto.sign("RSA-SHA256", Buffer.from(`${header}.${body}`), foreign ? foreignKey : privateKey).toString("base64url");
+  return `${header}.${body}.${sig}`;
 }
 
 // ---------- bellek içi Redis ----------
@@ -128,9 +141,10 @@ globalThis.fetch = async (input, init = {}) => {
 // ---------- handler çağırıcı ----------
 // onRespond(out): yanıt yazıldığı AN çağrılır. Vercel'de yanıttan sonraki kod
 // garanti olmadığı için "yanıt anında kira bırakılmış mı" testleri bunu kullanır.
-export async function invoke(handler, { method = "POST", uid = "U1", anonymous = false, token, body, query = {}, ip = "203.0.113.7", onRespond } = {}) {
+export async function invoke(handler, { method = "POST", uid = "U1", anonymous = false, token, authorization, body, query = {}, ip = "203.0.113.7", onRespond } = {}) {
   const headers = { "x-real-ip": ip };
-  if (token !== null) headers.authorization = `Bearer ${token || idToken(uid, { anonymous })}`;
+  if (authorization !== undefined) headers.authorization = authorization;
+  else if (token !== null) headers.authorization = `Bearer ${token || idToken(uid, { anonymous })}`;
   const out = { status: 200, body: undefined, headers: {} };
   const res = {
     status(code) {

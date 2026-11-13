@@ -6,6 +6,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { createMemoryRedis } from "./helpers/memoryRedis.mjs";
+import { waitFor } from "./helpers/async.mjs";
 
 const KV = "https://kv.test";
 process.env.KV_REST_API_URL = KV;
@@ -184,12 +185,10 @@ function seed() {
 }
 
 async function waitForJob(jobId, { waitForNotification = false } = {}) {
-  for (let i = 0; i < 300; i++) {
+  return waitFor(() => {
     const job = read(`job:A:${jobId}`);
-    if (job?.status === "failed" || (job?.status === "completed" && (!waitForNotification || job.notify))) return job;
-    await sleep(10);
-  }
-  throw new Error("job bitmedi");
+    return (job?.status === "failed" || (job?.status === "completed" && (!waitForNotification || job.notify))) && job;
+  }, { message: `job bitmeli: ${jobId}` });
 }
 
 const { default: handler } = await import("../api/recipe-jobs.js");

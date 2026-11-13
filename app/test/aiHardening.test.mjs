@@ -4,7 +4,7 @@
 // Anthropic hep taklit; gerçek çağrı/para yok.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { setRoutes, calls, invoke, resetDb, json, db, setRedisFault, zsetSize } from "./helpers/fakeServices.mjs";
+import { setRoutes, calls, invoke, resetDb, json, db, setRedisFault, zsetSize, waitFor, drainBackground } from "./helpers/fakeServices.mjs";
 
 process.env.RECIPE_JOB_NOTIFY_MIN_DELAY_MS = "0";
 
@@ -52,7 +52,10 @@ function anthropic(url, init) {
 }
 const anthropicCalls = () => calls.filter((c) => c.url === ANTHROPIC);
 
-function reset(route = anthropic) {
+// Her test önceki testin arka plan işlerinin (recipe-jobs waitUntil) bitmesini
+// bekleyerek başlar; böylece bir testin geç kalan işi diğerinin sayacına yazamaz.
+async function reset(route = anthropic) {
+  await drainBackground();
   resetDb();
   setRoutes([[ANTHROPIC, route]]);
   now = FIXED_NOW;
@@ -67,7 +70,6 @@ function counter(prefix) {
 const globalHour = () => counter("rl:global:ai:3600:");
 const anyCostCounter = () => [...db.keys()].some((k) => k.startsWith("rl:global:") || k.startsWith("rl:user-ai:"));
 const inflight = (uid) => zsetSize(`ai:inflight:heavy:${uid}`);
-const settle = (ms = 150) => new Promise((r) => setTimeout(r, ms));
 
 const normalBody = { link: "https://www.tiktok.com/@sef/video/1", caption: "1 su bardağı mercimek, 1 soğan", notes: "", language: "tr" };
 
@@ -87,7 +89,7 @@ const translateOne = (uid, recipeId) => invoke(translate, { uid, body: { recipeI
 // ============ 1. Çeviri girdi bütçesi ============
 
 test("çeviri: normal tarif çevrilir (Claude'a bir kez gidilir, sayaçlar bir artar)", async () => {
-  reset();
+  await reset();
   storeRecipes("TR1", [trRecipe("r1")]);
   const r = await translateOne("TR1", "r1");
   assert.equal(r.status, 200);
@@ -102,7 +104,7 @@ test("çeviri: normal tarif çevrilir (Claude'a bir kez gidilir, sayaçlar bir a
 });
 
 test("çeviri: aşırı büyük tarif Claude'dan, hız ve maliyet sayaçlarından ÖNCE 413 input_too_large", async () => {
-  reset();
+  await reset();
   const huge = trRecipe("big", { instructions: Array.from({ length: 20 }, () => "a".repeat(2_000)) });
   storeRecipes("ATK", [huge]);
   const r = await translateOne("ATK", "big");
@@ -114,7 +116,7 @@ test("çeviri: aşırı büyük tarif Claude'dan, hız ve maliyet sayaçlarında
 });
 
 test("çeviri: tek alan ve dizi sınırları (başlık, adım sayısı) da Claude'dan önce uygulanır", async () => {
-  reset();
+  await reset();
   storeRecipes("ATK2", [
     trRecipe("longTitle", { title: "B".repeat(TITLE_MAX_CHARS + 1) }),
     trRecipe("manySteps", { instructions: Array.from({ length: TRANSLATE_INPUT_LIMITS.arrays.instructions + 1 }, (_, i) => `Adım ${i}`) }),
@@ -134,13 +136,13 @@ test("çeviri: tam sınırda geçer, bir karakter fazlası reddedilir", async ()
     const used = textChars(translationPayload(base, "en"));
     return { ...base, instructions: ["x".repeat(TRANSLATE_INPUT_LIMITS.maxTotalChars - used + extraChar)] };
   };
-  reset();
+  await reset();
   const ok = atLimit(0);
   assert.equal(textChars(translationPayload(ok, "en")), TRANSLATE_INPUT_LIMITS.maxTotalChars);
   storeRecipes("EDGE", [ok]);
   assert.equal((await translateOne("EDGE", "edge")).status, 200);
 
-  reset();
+  await reset();
   storeRecipes("EDGE", [atLimit(1)]);
   const over = await translateOne("EDGE", "edge");
   assert.equal(over.status, 413);
@@ -148,7 +150,7 @@ test("çeviri: tam sınırda geçer, bir karakter fazlası reddedilir", async ()
 });
 
 test("çeviri (başlık listesi): aşırı uzun başlık Claude'a hiç gönderilmez, normal başlıklar çevrilir", async () => {
-  reset();
+  await reset();
   const giant = "Ç".repeat(5_000);
   storeRecipes("TTL", [trRecipe("a", { title: giant }), trRecipe("b", { title: "Menemen" })]);
   const r = await invoke(translate, { uid: "TTL", body: { mode: "titles", target: "en" } });
@@ -160,7 +162,7 @@ test("çeviri (başlık listesi): aşırı uzun başlık Claude'a hiç gönderil
   assert.ok(!sent.includes(giant.slice(0, 400)), "dev başlık isteğe girmemeli");
 
   // Yalnızca dev başlık varsa Claude'a hiç gidilmez, sayaç tüketilmez.
-  reset();
+  await reset();
   storeRecipes("TTL2", [trRecipe("a", { title: giant })]);
   const only = await invoke(translate, { uid: "TTL2", body: { mode: "titles", target: "en" } });
   assert.equal(only.status, 200);
@@ -180,22 +182,30 @@ test("checkInputBudget: genel yardımcı alan/dizi/toplam sınırlarını ayrı 
 // ============ 2. Maliyet sayacı yalnızca sağlayıcıya giden işleri sayar ============
 
 test("maliyet sayacı: eşzamanlılık reddi global sayacı artırmaz", async () => {
+  // Kapı açılana kadar sahte Anthropic yanıt vermez; kapı açılınca bekleyenler ve
+  // sonradan gelenler hemen yanıt alır (test düşse bile asılı istek kalmaz).
   const pending = [];
-  reset(() => new Promise((resolve) => pending.push(() => resolve(okClaude()))));
+  let open = false;
+  await reset(() => (open ? okClaude() : new Promise((resolve) => pending.push(() => resolve(okClaude())))));
   const running = [];
-  for (let i = 0; i < 5; i++) running.push(invoke(extract, { uid: "PAR", body: normalBody }));
-  await settle(50);
-  assert.equal(globalHour(), 5);
-  const sixth = await invoke(extract, { uid: "PAR", body: normalBody });
-  assert.equal(sixth.body.code, "too_many_in_flight");
-  assert.equal(globalHour(), 5, "AI'a gitmeyen istek sayılmamalı");
-  assert.equal(counter("rl:user-ai:PAR:3600:"), 5);
-  pending.splice(0).forEach((done) => done());
-  await Promise.all(running);
+  try {
+    for (let i = 0; i < 5; i++) running.push(invoke(extract, { uid: "PAR", body: normalBody }));
+    // Sabit süre değil: beş istek de sahte Anthropic'e ulaşana kadar bekle.
+    await waitFor(() => pending.length === 5, { message: "5 istek Anthropic'e ulaşmalı" });
+    assert.equal(globalHour(), 5);
+    const sixth = await invoke(extract, { uid: "PAR", body: normalBody });
+    assert.equal(sixth.body.code, "too_many_in_flight");
+    assert.equal(globalHour(), 5, "AI'a gitmeyen istek sayılmamalı");
+    assert.equal(counter("rl:user-ai:PAR:3600:"), 5);
+  } finally {
+    open = true;
+    pending.splice(0).forEach((done) => done());
+    await Promise.allSettled(running);
+  }
 });
 
 test("maliyet sayacı: doğrulama, eski istemci, giriş ve hız sınırı redleri sayılmaz", async () => {
-  reset();
+  await reset();
   await invoke(extract, { body: { link: "x" } }); // missing_input
   await invoke(extract, { body: { system: "x", messages: [] } }); // client_update_required
   await invoke(extract, { body: { ...normalBody, images: [{ mediaType: "image/png", data: "<script>" }] } }); // image_invalid
@@ -209,7 +219,7 @@ test("maliyet sayacı: doğrulama, eski istemci, giriş ve hız sınırı redler
 });
 
 test("maliyet sayacı: gerçek sağlayıcı isteği sayılır; aynı videonun tekrar paylaşımı sayılmaz", async () => {
-  reset();
+  await reset();
   assert.equal((await invoke(extract, { uid: "ONE", body: normalBody })).status, 200);
   assert.equal(globalHour(), 1);
 
@@ -225,11 +235,12 @@ test("maliyet sayacı: gerçek sağlayıcı isteği sayılır; aynı videonun te
   const again = await invoke(recipeJobs, { uid: "SHARE", body: body("req-second-2") });
   assert.equal(again.body.duplicate, true);
   assert.equal(globalHour(), 2, "tekrar paylaşım yeni iş açmadığı için sayılmamalı");
-  await settle();
+  await drainBackground();
+  assert.equal(globalHour(), 2, "arka plan işi bitince de sayaç artmamalı");
 });
 
 test("maliyet sayacı: global tavan reddi de sayaçta kalmaz (geri alınır)", async () => {
-  reset();
+  await reset();
   process.env.AI_GLOBAL_HOURLY_LIMIT = "3";
   try {
     const statuses = [];
@@ -276,13 +287,13 @@ test("UID toplam tavanı: değerler global tavanın küçük bir kısmı; uç s�
 });
 
 test("UID toplam tavanı: normal yoğun kullanım (saatte 90 karışık AI çağrısı) hiç engellenmez", async () => {
-  reset();
+  await reset();
   const statuses = await mixedUsage("POWER", 90);
   assert.ok(statuses.every((s) => s === 200), JSON.stringify(statuses.filter((s) => s !== 200)));
 });
 
 test("UID toplam tavanı: farklı uçlardan yüksek kullanım tek hesapta tavana takılır; yeni UID etkilenmez", async () => {
-  reset();
+  await reset();
   const limit = userAiLimits(false).hourly;
   const statuses = await mixedUsage("HOG", limit + 15);
   assert.equal(statuses.filter((s) => s === 200).length, limit);
@@ -296,7 +307,7 @@ test("UID toplam tavanı: farklı uçlardan yüksek kullanım tek hesapta tavana
 test("UID toplam tavanı: env ile ayarlanabilir; global tavan düşürülürse kullanıcı tavanı da düşer", async () => {
   process.env.AI_USER_HOURLY_LIMIT = "2";
   try {
-    reset();
+    await reset();
     await reserveAiBudget({ uid: "ENV", isAnonymous: false });
     await reserveAiBudget({ uid: "ENV", isAnonymous: false });
     await assert.rejects(reserveAiBudget({ uid: "ENV", isAnonymous: false }), (e) => e instanceof GuardError && e.code === "rate_limited");
@@ -321,7 +332,7 @@ const jobBody = (i) => ({
 });
 
 test("kira: kira alındıktan sonra Redis hatası (URL kilidi) → kira bırakılır", async () => {
-  reset();
+  await reset();
   db.set("user:LK:profile", JSON.stringify({ isPlus: true, families: [] }));
   setRedisFault((c) => c[0] === "SET" && c.includes("NX"));
   const r = await invoke(recipeJobs, { uid: "LK", body: jobBody(1) });
@@ -332,7 +343,7 @@ test("kira: kira alındıktan sonra Redis hatası (URL kilidi) → kira bırakı
 });
 
 test("kira: job kaydı yazılırken Redis hatası → kira bırakılır", async () => {
-  reset();
+  await reset();
   db.set("user:LK2:profile", JSON.stringify({ isPlus: true, families: [] }));
   setRedisFault((c) => c[0] === "SET" && String(c[1]).startsWith("job:"));
   const r = await invoke(recipeJobs, { uid: "LK2", body: jobBody(2) });
@@ -342,26 +353,26 @@ test("kira: job kaydı yazılırken Redis hatası → kira bırakılır", async 
 });
 
 test("kira: sağlayıcı hatası → job failed, kira bırakılır", async () => {
-  reset(() => json(500, { error: { message: "boom" } }));
+  await reset(() => json(500, { error: { message: "boom" } }));
   db.set("user:LK3:profile", JSON.stringify({ isPlus: true, families: [] }));
   const r = await invoke(recipeJobs, { uid: "LK3", body: jobBody(3) });
   assert.equal(r.status, 200);
-  await settle();
+  await drainBackground();
   assert.equal(JSON.parse(db.get(`job:LK3:${r.body.jobId}`)).status, "failed");
   assert.equal(inflight("LK3"), 0);
 });
 
 test("kira: başarılı job → kira bırakılır", async () => {
-  reset();
+  await reset();
   db.set("user:LK4:profile", JSON.stringify({ isPlus: true, families: [] }));
   const r = await invoke(recipeJobs, { uid: "LK4", body: jobBody(4) });
-  await settle();
+  await drainBackground();
   assert.equal(JSON.parse(db.get(`job:LK4:${r.body.jobId}`)).status, "completed");
   assert.equal(inflight("LK4"), 0);
 });
 
 test("kira: alınamayan kira başka kiraları bırakmaz; iki kez release güvenli", async () => {
-  reset();
+  await reset();
   const releases = [];
   for (let i = 0; i < 5; i++) releases.push(await acquireSlot({ pool: "heavy", uid: "LK5", isAnonymous: false }));
   await assert.rejects(acquireSlot({ pool: "heavy", uid: "LK5", isAnonymous: false }), (e) => e.code === "too_many_in_flight");
@@ -372,15 +383,20 @@ test("kira: alınamayan kira başka kiraları bırakmaz; iki kez release güvenl
 
   // recipe-jobs yolunda da: 6. job reddedilir, çalışan 5 kira yerinde kalır.
   const pending = [];
-  reset(() => new Promise((resolve) => pending.push(() => resolve(okClaude()))));
+  let open = false;
+  await reset(() => (open ? okClaude() : new Promise((resolve) => pending.push(() => resolve(okClaude())))));
   db.set("user:LK6:profile", JSON.stringify({ isPlus: true, families: [] }));
-  for (let i = 0; i < 5; i++) assert.equal((await invoke(recipeJobs, { uid: "LK6", body: jobBody(10 + i) })).status, 200);
-  await settle(50);
-  const sixth = await invoke(recipeJobs, { uid: "LK6", body: jobBody(20) });
-  assert.equal(sixth.body.code, "too_many_in_flight");
-  assert.equal(inflight("LK6"), 5);
-  pending.splice(0).forEach((done) => done());
-  await settle();
+  try {
+    for (let i = 0; i < 5; i++) assert.equal((await invoke(recipeJobs, { uid: "LK6", body: jobBody(10 + i) })).status, 200);
+    await waitFor(() => pending.length === 5, { message: "5 job Anthropic'e ulaşmalı" });
+    const sixth = await invoke(recipeJobs, { uid: "LK6", body: jobBody(20) });
+    assert.equal(sixth.body.code, "too_many_in_flight");
+    assert.equal(inflight("LK6"), 5);
+  } finally {
+    open = true;
+    pending.splice(0).forEach((done) => done());
+    await drainBackground();
+  }
   assert.equal(inflight("LK6"), 0);
 });
 

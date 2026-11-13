@@ -8,7 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { setRoutes, invoke, resetDb, json, db, setRedisFault } from "./helpers/fakeServices.mjs";
+import { setRoutes, invoke, resetDb, json, db, setRedisFault, waitFor } from "./helpers/fakeServices.mjs";
 
 process.env.RECIPE_JOB_NOTIFY_MIN_DELAY_MS = "0";
 {
@@ -88,12 +88,10 @@ async function deviceEchoes(uid, token) {
 }
 
 async function waitForJob(uid, jobId) {
-  for (let i = 0; i < 300; i++) {
+  return waitFor(() => {
     const job = JSON.parse(db.get(`job:${uid}:${jobId}`) || "null");
-    if (job && (job.status === "completed" || job.status === "failed") && job.notify) return job;
-    await new Promise((r) => setTimeout(r, 10));
-  }
-  throw new Error("job bitmedi");
+    return job && (job.status === "completed" || job.status === "failed") && job.notify && job;
+  }, { message: `job bitmeli: ${jobId}` });
 }
 
 async function runJob(uid, i = 1) {

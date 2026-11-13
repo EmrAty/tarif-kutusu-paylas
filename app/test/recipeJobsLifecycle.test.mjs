@@ -7,6 +7,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { createMemoryRedis } from "./helpers/memoryRedis.mjs";
+import { waitFor } from "./helpers/async.mjs";
 
 const KV = "https://kv.test";
 const NOTIFY_DELAY = 300;
@@ -171,12 +172,10 @@ function seed() {
 
 // Job terminal duruma geçip bildirim sonucu kayda yazılana kadar bekler.
 async function waitForSettledJob(jobId) {
-  for (let i = 0; i < 500; i++) {
+  return waitFor(() => {
     const job = read(`job:A:${jobId}`);
-    if ((job?.status === "failed" || job?.status === "completed") && job.notify) return job;
-    await sleep(10);
-  }
-  throw new Error(`job bitmedi: ${JSON.stringify(read(`job:A:${jobId}`))}`);
+    return (job?.status === "failed" || job?.status === "completed") && job.notify && job;
+  }, { message: `job bitmeli: ${jobId}` });
 }
 
 const { default: handler } = await import("../api/recipe-jobs.js");
@@ -212,16 +211,21 @@ test(
     claudeMode = "401";
     const r = await post(body());
     assert.equal(r.status, 200);
-    const started = Date.now();
-    // 401 anında düşüyor; bildirim yine de hemen gitmemeli.
-    await sleep(NOTIFY_DELAY / 3);
-    assert.equal(read(`job:A:${r.body.jobId}`).status, "failed");
-    assert.equal(fcmMessages.length, 0, "panel açıkken bildirim gönderilmemeli");
+    // 401 anında düşüyor; bildirim yine de panel kapanma süresi dolmadan gitmemeli.
+    // Ölçüm job'un kendi başlangıcına (startedAt) göre yapılır: yanıtın teste
+    // dönüş anı yüklü makinede geç kalabildiği için referans olarak kullanılmaz.
+    const failed = await waitFor(() => {
+      const j = read(`job:A:${r.body.jobId}`);
+      return j?.status === "failed" && j;
+    }, { message: "job failed olmalı" });
+    if (Date.now() - failed.startedAt < NOTIFY_DELAY - 20) {
+      assert.equal(fcmMessages.length, 0, "panel açıkken bildirim gönderilmemeli");
+    }
     const job = await waitForSettledJob(r.body.jobId);
     assert.match(job.error, /401/);
     assert.equal(fcmMessages.length, 1);
     assert.equal(fcmMessages[0].data.type, "recipe_failed");
-    assert.ok(fcmMessages[0].at - started >= NOTIFY_DELAY - 50, "bildirim gecikmeli gitti");
+    assert.ok(fcmMessages[0].at - job.startedAt >= NOTIFY_DELAY - 2, `bildirim gecikmeli gitti (${fcmMessages[0].at - job.startedAt} ms)`);
     assert.deepEqual(job.notify, { sent: 1, attempted: 1, error: null });
     assert.deepEqual(read("user:A:recipes"), []);
   })
