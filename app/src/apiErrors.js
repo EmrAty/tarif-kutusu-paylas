@@ -31,6 +31,11 @@ export const SERVER_ERROR_KEYS = {
   not_owner: "families.errorNotOwner",
   member_not_found: "families.errorMemberNotFound",
   family_locked: "families.errorLocked",
+  // Grup 5
+  notify_rate_limited: "notify.rateLimited",
+  recipe_not_found: "notify.recipeNotFound",
+  recipe_too_large: "errors.recipeTooLarge",
+  invalid_recipe: "errors.invalidRecipe",
 };
 
 export function serverErrorKey(code) {

@@ -208,7 +208,8 @@ const deleteA = (extra = {}) => call(account, { method: "DELETE", uid: "A", ...e
 test("yalnızca kimliği doğrulanmış DELETE kabul edilir", quiet(async () => {
   seed();
   assert.equal((await call(account, { method: "GET", uid: "A" })).status, 405);
-  assert.equal((await call(account, { method: "POST", uid: "A" })).status, 405);
+  // Grup 5: POST yalnızca misafir verisi taşıma içindir; geçersiz gövde 400, veri silmez.
+  assert.equal((await call(account, { method: "POST", uid: "A" })).status, 400);
   assert.equal((await call(account, { method: "DELETE" })).status, 401);
   assert.ok(db.has("user:A:profile"));
   assert.deepEqual(firebaseDeleted, []);

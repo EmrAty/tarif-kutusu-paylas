@@ -55,6 +55,7 @@ function personalKeys(uid) {
     pushTargetsKey(uid),
     `user:${uid}:pendingJobRecipes`,
     `user:${uid}:recentlyRemovedRecipes`,
+    `user:${uid}:recentlyRemovedRecipes:v2`,
   ];
 }
 
@@ -133,7 +134,13 @@ export async function deleteAccount(uid) {
 
   await redisSet(deletedMarkerKey(uid), String(Date.now()), DELETED_MARKER_TTL);
 
-  const profile = await getProfile(uid);
+  // Bozuk profil (Grup 5'te getProfile artık 502 fırlatıyor) hesap silmeyi
+  // engellemez: aile üyelikleri profilden okunamaz, kalan kişisel veri yine silinir.
+  const profile = await getProfile(uid).catch((e) => {
+    if (e.code !== "profile_unreadable") throw e;
+    console.warn(JSON.stringify({ tag: "account-delete", warning: "profile unreadable; family memberships skipped" }));
+    return { families: [] };
+  });
   const familyIds = Array.isArray(profile.families) ? profile.families : [];
   const families = [];
   for (const id of familyIds) {

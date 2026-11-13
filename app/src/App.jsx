@@ -39,6 +39,8 @@ import { serverErrorKey, readErrorBody, classifyErrorResponse } from "./apiError
 import { contentLangOf, translationPayload } from "../shared/recipeLocales.js";
 import { localizeRecipe, displayIngredient, contentFingerprint, localizeAmount } from "./recipeLocale.js";
 import { servingsUnitOf } from "../shared/portionEstimate.js";
+import { safeRecipeLink } from "../shared/safeLink.js";
+import { saveRecipeToTargets, extractionSignature } from "./saveTargets.js";
 import { useLanguage, LANGUAGES, translate } from "./i18n.jsx";
 
 // ShareReceiver/NativeSplash sadece Android tarafında yazılmış özel native plugin'ler
@@ -115,10 +117,14 @@ async function nativeFcmToken() {
 
 // Bu Google hesabı daha önce (misafirden bağımsız) gerçek bir hesap olarak
 // kullanılmışsa, Firebase "credential-already-in-use" hatasıyla bağlamayı
-// reddediyor - bu durumda amaç zaten "bu Google hesabıyla devam et" olduğu
-// için, bağlamak yerine doğrudan o mevcut hesaba geçiş yapıyoruz (misafirin
-// üzerindeki veri, gerçek hesaba otomatik taşınmıyor - Firebase'in birleştirme
-// desteği yok).
+// reddediyor. Grup 5: artık o hesaba SESSİZCE geçilmiyor (misafir verisi
+// erişilemez kalıyordu). `account_exists` hatası, onay sonrası çağrılacak
+// `signIn` ile fırlatılır; AccountView kullanıcıya ne olacağını anlatır ve
+// onaylarsa misafir verisini sunucuda yeni hesaba taşır (POST /api/account).
+function accountExistsError(signIn) {
+  return Object.assign(new Error("account_exists"), { code: "account_exists", signIn });
+}
+
 async function googleLink(user) {
   if (Capacitor.isNativePlatform()) {
     const credential = await nativeGoogleCredential();
@@ -126,7 +132,7 @@ async function googleLink(user) {
       return await linkWithCredential(user, credential);
     } catch (e) {
       if (e.code === "auth/credential-already-in-use") {
-        return signInWithCredential(auth, credential);
+        throw accountExistsError(() => signInWithCredential(auth, credential));
       }
       throw e;
     }
@@ -136,10 +142,14 @@ async function googleLink(user) {
   } catch (e) {
     if (e.code === "auth/credential-already-in-use") {
       const credential = GoogleAuthProvider.credentialFromError(e);
-      if (credential) return signInWithCredential(auth, credential);
+      if (credential) throw accountExistsError(() => signInWithCredential(auth, credential));
     }
     throw e;
   }
+}
+
+async function mergeGuestData(guestToken) {
+  return authedFetch("/api/account", { method: "POST", body: { action: "mergeGuest", guestToken } });
 }
 
 export const COLORS = {
@@ -336,6 +346,8 @@ function saveErrorMessage(e, t) {
   if (e?.code === NOT_LOADED) return t("errors.dataNotLoaded");
   if (e?.code === CONFLICT_EXHAUSTED) return t("errors.saveConflict");
   if (e?.code === CLIENT_OUTDATED) return t("errors.clientOutdated");
+  const key = serverErrorKey(e?.code);
+  if (key) return t(key);
   return t("errors.saveFailed");
 }
 
@@ -1573,16 +1585,38 @@ export default function TarifKutusu() {
 
   // Yeni tarifi seçilen yerlere yazar. Kişisel liste önce: Free sınırına
   // takılırsa tarif ailelere de yazılmamış olur.
+  // Her hedef ayrı denenir (bkz. saveTargets.js). Hiçbir yere yazılamadıysa ilk
+  // hata fırlatılır (form açık kalır); bazı yerlere yazıldıysa kalanlar için
+  // "Tekrar dene" bandı açılır ve true döner (çağıran tarif ekranına geçer).
+  const [partialSave, setPartialSave] = useState(null); // { recipe, failed: [scopeKey], limit }
   const saveNewRecipe = useCallback(
     async (recipe, targets) => {
-      const addRecipe = (list) => (list.some((r) => r.id === recipe.id) ? list : [recipe, ...list]);
-      if (targets.includes(PERSONAL)) {
-        await mutateRecipes(PERSONAL, addRecipe);
+      const { saved, failed } = await saveRecipeToTargets(recipe, targets, mutateRecipes, PERSONAL);
+      if (!failed.length) {
+        setPartialSave(null);
+        return;
       }
-      await Promise.all(targets.filter((scopeKey) => scopeKey !== PERSONAL).map((scopeKey) => mutateRecipes(scopeKey, addRecipe)));
+      if (!saved.length) throw failed[0].error;
+      const limit = failed.some((f) => f.error?.code === FREE_LIMIT_ERROR_CODE);
+      if (limit) setLimitModalOpen(true);
+      setPartialSave({ recipe, failed: failed.map((f) => f.scopeKey), limit });
     },
     [mutateRecipes]
   );
+
+  const retryPartialSave = async () => {
+    if (!partialSave) return;
+    const { recipe, failed } = partialSave;
+    setPartialSave({ ...partialSave, retrying: true });
+    const result = await saveRecipeToTargets(recipe, failed, mutateRecipes, PERSONAL);
+    if (!result.failed.length) {
+      setPartialSave(null);
+      return;
+    }
+    const limit = result.failed.some((f) => f.error?.code === FREE_LIMIT_ERROR_CODE);
+    if (limit) setLimitModalOpen(true);
+    setPartialSave({ recipe, failed: result.failed.map((f) => f.scopeKey), limit });
+  };
 
   // Kayıt hatası: Free sınırıysa uyarı penceresi (true döner), değilse genel
   // "kaydedilemedi" hatası fırlatır.
@@ -1614,6 +1648,7 @@ export default function TarifKutusu() {
     [recipes, mutateRecipes]
   );
 
+  const lastExtractionRef = useRef(null);
   const handleExtract = async () => {
     setError("");
     if (!caption.trim() && !notes.trim() && images.length === 0) {
@@ -1630,21 +1665,29 @@ export default function TarifKutusu() {
     }
     setBusy(true);
     try {
-      const parsed = await extractRecipe({ link, caption, notes, images, language });
-      const recipe = {
-        id: uid(),
-        createdAt: Date.now(),
-        link: link.trim(),
-        category,
-        isFavorite: false,
-        addedBy: personName || "",
-        ...parsed,
-      };
+      // Kayıt başarısız olup aynı girdilerle tekrar denenirse AI'a yeniden
+      // gidilmez: ilk çıkarılan tarif (aynı id) yeniden kaydedilir.
+      const signature = extractionSignature({ link, caption, notes, images, category, language });
+      let recipe = lastExtractionRef.current?.signature === signature ? lastExtractionRef.current.recipe : null;
+      if (!recipe) {
+        const parsed = await extractRecipe({ link, caption, notes, images, language });
+        recipe = {
+          id: uid(),
+          createdAt: Date.now(),
+          category,
+          isFavorite: false,
+          addedBy: personName || "",
+          ...parsed,
+          link: safeRecipeLink(link),
+        };
+        lastExtractionRef.current = { signature, recipe };
+      }
       try {
         await saveNewRecipe(recipe, saveTargets);
       } catch (e) {
         if (handleSaveFailure(e)) return;
       }
+      lastExtractionRef.current = null;
       setLink("");
       setCaption("");
       setNotes("");
@@ -2246,6 +2289,13 @@ export default function TarifKutusu() {
             personName={personName}
             onSignOut={handleSignOut}
             onImportPersonal={() => loadRecipeBucket(PERSONAL)}
+            onGuestMerged={() =>
+              Promise.all([
+                loadRecipeBucket(PERSONAL),
+                dataStore.refresh("shopping-list", PERSONAL),
+                dataStore.refresh("pantry-items", PERSONAL),
+              ]).catch(() => {})
+            }
             onAccountDeleted={handleAccountDeleted}
           />
         </ModalSheet>
@@ -2361,6 +2411,55 @@ export default function TarifKutusu() {
         >
           <AlertCircle size={16} style={{ flexShrink: 0 }} />
           <span>{saveErrorToast}</span>
+        </div>
+      )}
+
+      {partialSave && !undoState && (
+        <div
+          role="alert"
+          style={{
+            position: "fixed",
+            left: "50%",
+            bottom: "20px",
+            transform: "translateX(-50%)",
+            display: "flex",
+            alignItems: "center",
+            flexWrap: "wrap",
+            gap: "10px",
+            maxWidth: "calc(100vw - 32px)",
+            background: COLORS.forestDark,
+            color: "#F3EFE6",
+            padding: "12px 16px",
+            borderRadius: "10px",
+            boxShadow: "0 6px 20px rgba(0,0,0,0.25)",
+            zIndex: 51,
+            fontSize: "14px",
+          }}
+        >
+          <AlertCircle size={16} style={{ flexShrink: 0 }} />
+          <span>
+            {t("save.partialFailed", {
+              places: partialSave.failed.map((k) => (k === PERSONAL ? t("saveTarget.personal") : familyNameById[k] || t("common.family"))).join(", "),
+            })}
+          </span>
+          {!partialSave.limit && (
+            <button
+              type="button"
+              onClick={retryPartialSave}
+              disabled={partialSave.retrying}
+              style={{ background: "transparent", border: `1px solid ${COLORS.mustard}`, color: COLORS.mustard, borderRadius: "8px", padding: "4px 10px", fontWeight: 700, cursor: "pointer" }}
+            >
+              {t("common.retry")}
+            </button>
+          )}
+          <button
+            type="button"
+            aria-label={t("common.close")}
+            onClick={() => setPartialSave(null)}
+            style={{ background: "transparent", border: "none", color: "#F3EFE6", cursor: "pointer", padding: "4px" }}
+          >
+            <X size={16} />
+          </button>
         </div>
       )}
 
@@ -4057,7 +4156,10 @@ function TranslationStatus({ status, onRetry }) {
 
 function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavorite, onChangeCategory, onEdit, onAddToShopping, onSendNotification, onStartCooking, onRetryTranslation }) {
   const { t, language, categoryLabel, difficultyLabel } = useLanguage();
-  const { title, servings, category, prep_time_minutes, difficulty, ingredients = [], instructions = [], nutrition = {}, assumptions, servings_note, link, isFavorite, addedBy } = recipe;
+  const { title, servings, category, prep_time_minutes, difficulty, ingredients = [], instructions = [], nutrition = {}, assumptions, servings_note, isFavorite, addedBy } = recipe;
+  // Yalnızca güvenli http(s) link href olur (eski/başka üyenin kaydındaki
+  // "javascript:" vb. hiç bağlantıya dönüşmez; buton gizlenir).
+  const link = safeRecipeLink(recipe.link);
   const servingsEstimated = isEstimatedServings(recipe);
   const [editing, setEditing] = useState(false);
   // Ad düzenleme asıl (kayıtlı) başlık üzerinde; çeviri gösteriliyorsa bile kayda çeviri yazılmaz.
@@ -5180,8 +5282,8 @@ function CookMode({ recipe, onFinish }) {
           )}
         </div>
 
-        {stage !== "done" && recipe.link && (
-          <a href={recipe.link} target="_blank" rel="noopener noreferrer" style={{ ...videoButtonStyle, marginTop: "10px" }}>
+        {stage !== "done" && safeRecipeLink(recipe.link) && (
+          <a href={safeRecipeLink(recipe.link)} target="_blank" rel="noopener noreferrer" style={{ ...videoButtonStyle, marginTop: "10px" }}>
             <ExternalLink size={16} />
             {t("detail.watchVideo")}
           </a>
@@ -5361,6 +5463,10 @@ function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setS
       setError(t("editor.errorNeedCategory"));
       return;
     }
+    if (link.trim() && !safeRecipeLink(link)) {
+      setError(t("editor.errorInvalidLink"));
+      return;
+    }
     if (isNew && saveTargets.includes(PERSONAL) && !isPlus && personalCount >= FREE_RECIPE_LIMIT) {
       if (onFreeLimit) onFreeLimit();
       else setError(t("errors.freeLimit", { limit: FREE_RECIPE_LIMIT }));
@@ -5388,7 +5494,7 @@ function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setS
       servings: nextServings,
       prep_time_minutes: prepTime.trim() ? Number(prepTime) : undefined,
       difficulty: difficulty || undefined,
-      link: link.trim(),
+      link: safeRecipeLink(link),
       ingredients: cleanIngredients,
       instructions: cleanInstructions,
       nutrition: {
@@ -7297,7 +7403,7 @@ function PlusModal({ closing, onClose, isPlus, onToggleTest }) {
   );
 }
 
-function AccountView({ authUser, personName, onSignOut, onImportPersonal, onAccountDeleted }) {
+function AccountView({ authUser, personName, onSignOut, onImportPersonal, onGuestMerged, onAccountDeleted }) {
   const { t } = useLanguage();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [linking, setLinking] = useState(false);
@@ -7308,6 +7414,42 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal, onAcco
   const [password, setPassword] = useState("");
   const [emailBusy, setEmailBusy] = useState(false);
   const [emailError, setEmailError] = useState("");
+  // Grup 5: misafirden mevcut hesaba geçiş. switchPrompt: onay bekleyen geçiş
+  // ({ signIn }); merge: taşıma durumu ({ status, guestToken, result, error }).
+  const [switchPrompt, setSwitchPrompt] = useState(null);
+  const [merge, setMerge] = useState(null);
+
+  const runMerge = async (guestToken) => {
+    setMerge({ status: "merging", guestToken });
+    try {
+      const result = await mergeGuestData(guestToken);
+      setMerge({ status: "done", result });
+      await onGuestMerged?.();
+    } catch (e) {
+      setMerge({ status: "failed", guestToken, error: e.message || t("account.mergeFailed") });
+    }
+  };
+
+  // Onaydan sonra: misafir token'ı ALINIR (hesap değişince alınamaz), hesaba
+  // geçilir, sonra veriler taşınır. Taşıma başarısızsa token ~1 saat geçerli;
+  // "Tekrar dene" aynı token'la yeniden ister (sunucu tekrarı güvenle karşılar).
+  const confirmSwitch = async () => {
+    const prompt = switchPrompt;
+    if (!prompt) return;
+    setSwitchPrompt({ ...prompt, busy: true });
+    let guestToken;
+    try {
+      guestToken = await authUser.getIdToken(true);
+      await prompt.signIn();
+    } catch (e) {
+      setSwitchPrompt(null);
+      setLinkError(mapAuthError(e.code, t) || e.message || t("account.linkFailed"));
+      return;
+    }
+    setSwitchPrompt(null);
+    setEmailMode(null);
+    await runMerge(guestToken);
+  };
 
   const handleLinkGoogle = async () => {
     setLinkError("");
@@ -7315,7 +7457,8 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal, onAcco
     try {
       await googleLink(authUser);
     } catch (e) {
-      setLinkError(e.message || mapAuthError(e.code, t) || t("account.linkFailed"));
+      if (e.code === "account_exists") setSwitchPrompt({ signIn: e.signIn });
+      else setLinkError(e.message || mapAuthError(e.code, t) || t("account.linkFailed"));
     } finally {
       setLinking(false);
     }
@@ -7337,23 +7480,24 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal, onAcco
     setEmailError("");
     setEmailBusy(true);
     try {
+      const addr = email.trim();
       if (emailMode === "create") {
         // Misafirin uid'i korunuyor (linkWithCredential) - tüm tarifleri kalıyor.
         try {
-          await linkWithCredential(authUser, EmailAuthProvider.credential(email.trim(), password));
+          await linkWithCredential(authUser, EmailAuthProvider.credential(addr, password));
+          setEmailMode(null);
         } catch (e2) {
           if (e2.code === "auth/email-already-in-use") {
-            // Bu e-posta zaten başka bir hesapta - bağlamak yerine o hesaba geç.
-            await signInWithEmailAndPassword(auth, email.trim(), password);
+            // Bu e-posta zaten başka bir hesapta: sessizce geçilmez, önce sorulur.
+            setSwitchPrompt({ signIn: () => signInWithEmailAndPassword(auth, addr, password) });
           } else {
             throw e2;
           }
         }
       } else {
-        // Giriş Yap: mevcut bir hesaba geçiliyor, misafir verisi otomatik taşınmıyor.
-        await signInWithEmailAndPassword(auth, email.trim(), password);
+        // Giriş Yap: mevcut bir hesaba geçiş — misafir verisi için önce sorulur.
+        setSwitchPrompt({ signIn: () => signInWithEmailAndPassword(auth, addr, password) });
       }
-      setEmailMode(null);
     } catch (e2) {
       setEmailError(mapAuthError(e2.code, t) || e2.message);
     } finally {
@@ -7383,6 +7527,35 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal, onAcco
           {authUser?.isAnonymous ? t("families.guestUser") : authUser?.email || t("account.accountFallback")}
         </p>
         {personName && <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: "0 0 16px" }}>{t("account.displayName", { name: personName })}</p>}
+
+        {merge && (
+          <div role="status" style={{ padding: "12px 14px", borderRadius: "10px", background: "#EFE9D8", marginBottom: "16px", fontSize: "13px", color: COLORS.ink }}>
+            {merge.status === "merging" && (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                <Loader2 size={14} className="animate-spin" /> {t("account.merging")}
+              </span>
+            )}
+            {merge.status === "done" && (
+              <span>
+                {t("account.mergeDone", { recipes: merge.result?.recipes ?? 0, pantry: merge.result?.pantry ?? 0 })}
+                {merge.result?.shoppingList === "kept_existing" && ` ${t("account.mergeShoppingKept")}`}
+                {merge.result?.skippedRecipes > 0 && ` ${t("account.mergeSkipped", { count: merge.result.skippedRecipes })}`}
+              </span>
+            )}
+            {merge.status === "failed" && (
+              <span style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px", color: COLORS.danger }}>
+                {t("account.mergeFailedWith", { reason: merge.error })}
+                <button
+                  type="button"
+                  onClick={() => runMerge(merge.guestToken)}
+                  style={{ padding: "4px 10px", borderRadius: "8px", border: `1px solid ${COLORS.forest}`, background: COLORS.panel, color: COLORS.ink, fontWeight: 700, cursor: "pointer" }}
+                >
+                  {t("common.retry")}
+                </button>
+              </span>
+            )}
+          </div>
+        )}
 
         {authUser?.isAnonymous && (
           <div style={{ padding: "14px", borderRadius: "10px", background: "#EFE9D8", marginBottom: "16px" }}>
@@ -7445,6 +7618,31 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal, onAcco
               </button>
             </div>
             {linkError && <div style={{ fontSize: "12px", color: COLORS.danger, marginTop: "8px" }}>{linkError}</div>}
+
+            {switchPrompt && (
+              <div role="alertdialog" aria-label={t("account.switchTitle")} style={{ marginTop: "12px", padding: "12px", borderRadius: "10px", border: `1px solid ${COLORS.forest}`, background: COLORS.panel }}>
+                <p style={{ fontSize: "13px", fontWeight: 700, color: COLORS.ink, margin: "0 0 6px" }}>{t("account.switchTitle")}</p>
+                <p style={{ fontSize: "12px", color: COLORS.ink, margin: "0 0 10px" }}>{t("account.switchBody")}</p>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                  <button
+                    type="button"
+                    onClick={confirmSwitch}
+                    disabled={switchPrompt.busy}
+                    style={{ padding: "8px 14px", borderRadius: "8px", fontWeight: 700, fontSize: "13px", background: COLORS.forest, color: "#F3EFE6", border: "none", cursor: "pointer", opacity: switchPrompt.busy ? 0.6 : 1 }}
+                  >
+                    {t("account.switchConfirm")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSwitchPrompt(null)}
+                    disabled={switchPrompt.busy}
+                    style={{ padding: "8px 14px", borderRadius: "8px", fontWeight: 600, fontSize: "13px", background: "transparent", color: COLORS.inkSoft, border: `1px solid ${COLORS.line}`, cursor: "pointer" }}
+                  >
+                    {t("account.switchCancel")}
+                  </button>
+                </div>
+              </div>
+            )}
 
             {emailMode && (
               <form onSubmit={handleEmailSubmit} style={{ marginTop: "12px" }}>

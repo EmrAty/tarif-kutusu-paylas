@@ -12,7 +12,7 @@ import fs from "node:fs";
 import { invoke, resetDb, setRoutes, calls, redisLog, db, idToken, signedToken } from "./helpers/fakeServices.mjs";
 
 const ENDPOINTS = {
-  account: ["DELETE"],
+  account: ["DELETE", "POST"],
   data: ["GET", "POST"],
   extract: ["POST"],
   families: ["GET", "POST"],
@@ -116,7 +116,7 @@ test("401: silinmiş hesabın geçerli token'ı her yerde reddedilir, yalnızca 
       db.set("deleted-account:GONE", String(Date.now()));
       const before = new Map(db);
       const r = await invoke(handlers[name], { method, uid: "GONE", query: sampleRequest.query, body: method === "GET" ? undefined : sampleRequest.body });
-      if (name === "account") {
+      if (name === "account" && method === "DELETE") {
         assert.notEqual(r.status, 401, "hesap silme silinmiş hesapta da çağrılabilmeli (idempotent)");
         continue;
       }

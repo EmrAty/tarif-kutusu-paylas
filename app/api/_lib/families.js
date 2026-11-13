@@ -1,6 +1,7 @@
 import { redisGet, redisGetJSON, redisDel, redisCommand } from "./redis.js";
 import { getProfile, updateProfile } from "./profile.js";
 import { mutateBucket, bucketAuxKeys } from "./versionedBucket.js";
+import { CONTENT_LANGUAGES } from "../../shared/recipeLocales.js";
 
 export function familyMetaKey(id) {
   return `family:${id}:meta`;
@@ -225,6 +226,8 @@ export function familyDataKeys(id) {
       return [key, ...bucketAuxKeys(key)];
     }),
     `family:${id}:pendingJobRecipes`, // eski sürümden kalmış olabilecek işaretçi
+    // Grup 5: ailenin çeviri önbelleği (translate-recipe.js, dil başına bir HASH)
+    ...Object.keys(CONTENT_LANGUAGES).map((l) => `family:${id}:translations:${l}`),
     ...membersKeysWithAux(id),
   ];
 }

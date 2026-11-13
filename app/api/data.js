@@ -1,8 +1,10 @@
+import crypto from "node:crypto";
 import { requireUser } from "./_lib/auth.js";
 import { redisGetJSON, redisSetJSON } from "./_lib/redis.js";
 import { getProfile, FREE_RECIPE_LIMIT, FREE_LIMIT_ERROR_CODE, FREE_LIMIT_MESSAGE } from "./_lib/profile.js";
 import { readBucket, compareAndSet, isValidBaseVersion } from "./_lib/versionedBucket.js";
 import { assertFamilyAccess } from "./_lib/families.js";
+import { checkRecipeList } from "./_lib/recipeInput.js";
 
 const ALLOWED_BUCKETS = new Set(["recipes", "shopping-list", "pantry-items"]);
 
@@ -11,7 +13,17 @@ const ALLOWED_BUCKETS = new Set(["recipes", "shopping-list", "pantry-items"]);
 // kullanıcıda bu yazım yeni tarif sayılıp reddedilirse silinen tarif kaybolurdu.
 const RECENTLY_REMOVED_TTL = 120;
 const MAX_RECENTLY_REMOVED = 30;
-const recentlyRemovedKey = (uid) => `user:${uid}:recentlyRemovedRecipes`;
+// Grup 5: "geri al" istisnasının yeni biçimi. Eski anahtar (`…:recentlyRemovedRecipes`,
+// yalnızca id dizisi) bilerek KULLANILMIYOR: eski sunucuya geri dönülürse eski kod
+// yeni biçimi okuyup hata vermesin diye ayrı anahtar.
+//   { ceiling: <silmeden önceki en yüksek tarif sayısı>, items: [{ id, h: <içerik özeti> }] }
+const recentlyRemovedKey = (uid) => `user:${uid}:recentlyRemovedRecipes:v2`;
+const recipeDigest = (r) => crypto.createHash("sha256").update(JSON.stringify(r)).digest("hex").slice(0, 32);
+function readRecentlyRemoved(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ceiling: 0, items: [] };
+  const items = Array.isArray(value.items) ? value.items.filter((x) => x && x.id != null && typeof x.h === "string") : [];
+  return { ceiling: Number.isFinite(value.ceiling) ? value.ceiling : 0, items };
+}
 
 export const VERSION_CONFLICT_CODE = "version_conflict";
 export const CLIENT_OUTDATED_CODE = "client_outdated";
@@ -158,7 +170,7 @@ export default async function handler(req, res) {
       res.status(400).json({ error: "Geçersiz istek." });
       return;
     }
-    const next = parseIncoming(bucket, value);
+    let next = parseIncoming(bucket, value);
     if (next === null) {
       res.status(400).json({ error: "Geçersiz veri." });
       return;
@@ -171,26 +183,53 @@ export default async function handler(req, res) {
     }
 
     const isPersonalRecipes = bucket === "recipes" && scope === "personal";
-    const previous = isPersonalRecipes ? parseStoredList(current.raw) : null;
+    const previous = bucket === "recipes" ? parseStoredList(current.raw) : null;
+
+    // Grup 5: yeni/değişen tariflerde link, kimlik ve boyut denetimi (kişisel ve aile).
+    let raw = value;
+    let sanitized = 0;
+    if (bucket === "recipes") {
+      let checked;
+      try {
+        checked = checkRecipeList(next, previous);
+      } catch (e) {
+        if (e.code) {
+          res.status(e.status).json({ error: e.message, code: e.code });
+          return;
+        }
+        throw e;
+      }
+      sanitized = checked.sanitized;
+      if (sanitized) {
+        next = checked.list;
+        raw = JSON.stringify(next);
+      }
+    }
 
     if (isPersonalRecipes) {
       const profile = await getProfile(user.uid);
       if (!profile.isPlus && next.length > FREE_RECIPE_LIMIT && next.length > previous.length) {
-        // Yalnızca gerçekten yeni tarif engelleniyor; az önce silinip geri
-        // alınan tarif yeni sayılmıyor. Düzenleme/silme uzunluğu artırmıyor.
+        // Sınırın üstünde büyüme yalnızca GERÇEK bir "geri al" ise kabul edilir:
+        //  - eklenen her tarif son 2 dakikada silinmiş olmalı ve içeriği silinen
+        //    hâliyle birebir aynı olmalı (id'yi yeniden kullanıp yeni tarif eklenemez);
+        //  - liste, silmeden önceki sayıyı (ceiling) aşamaz. Böylece "sil → yeni
+        //    ekle → geri al" ile sınır aşılamaz; sınırın üstündeki eski hesaplar
+        //    (fazla tarifler silinmez, kilitlenir) kendi tariflerini geri alabilir.
         // `previous`, karşılaştır-ve-yaz'ın beklediği sürümle aynı anın verisi:
         // kontrol ile yazım arasında liste değişirse yazım çakışmayla reddedilir.
         const previousIds = idsOf(previous);
-        const recentlyRemoved = new Set(await redisGetJSON(recentlyRemovedKey(user.uid), []));
-        const hasNew = next.some((r) => !previousIds.has(r.id) && !recentlyRemoved.has(r.id));
-        if (hasNew) {
+        const recent = readRecentlyRemoved(await redisGetJSON(recentlyRemovedKey(user.uid), null));
+        const restorable = new Map(recent.items.map((x) => [x.id, x.h]));
+        const added = next.filter((r) => !previousIds.has(r.id));
+        const genuineUndo = added.every((r) => restorable.get(r.id) === recipeDigest(r)) && next.length <= recent.ceiling;
+        if (!genuineUndo) {
           res.status(403).json({ error: FREE_LIMIT_MESSAGE, code: FREE_LIMIT_ERROR_CODE });
           return;
         }
       }
     }
 
-    const result = await compareAndSet(key, baseVersion, value);
+    const result = await compareAndSet(key, baseVersion, raw);
     if (!result.ok) {
       // Okuma ile yazım arasında başka biri yazdı: hiçbir şey yazılmadı.
       conflict(res, await readBucket(key));
@@ -200,18 +239,22 @@ export default async function handler(req, res) {
     if (isPersonalRecipes) {
       try {
         const nextIds = idsOf(next);
-        const removed = [...idsOf(previous)].filter((id) => !nextIds.has(id));
+        const removed = previous.filter((r) => r && r.id != null && !nextIds.has(r.id));
         if (removed.length) {
-          const recent = await redisGetJSON(recentlyRemovedKey(user.uid), []);
-          const merged = [...(Array.isArray(recent) ? recent : []), ...removed].slice(-MAX_RECENTLY_REMOVED);
-          await redisSetJSON(recentlyRemovedKey(user.uid), merged, RECENTLY_REMOVED_TTL);
+          const recent = readRecentlyRemoved(await redisGetJSON(recentlyRemovedKey(user.uid), null));
+          const items = [...recent.items, ...removed.map((r) => ({ id: r.id, h: recipeDigest(r) }))].slice(-MAX_RECENTLY_REMOVED);
+          await redisSetJSON(
+            recentlyRemovedKey(user.uid),
+            { ceiling: Math.max(recent.ceiling, previous.length), items },
+            RECENTLY_REMOVED_TTL
+          );
         }
       } catch (e) {
         // kayıt tutulamazsa yalnızca geri alma istisnası çalışmaz
       }
     }
 
-    res.status(200).json({ ok: true, version: result.version });
+    res.status(200).json({ ok: true, version: result.version, ...(sanitized ? { sanitizedLinks: sanitized } : {}) });
   } catch (e) {
     res.status(e.status || 502).json({ error: e.status ? e.message : "Veritabanına erişilemedi." });
   }

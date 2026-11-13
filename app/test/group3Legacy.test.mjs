@@ -213,10 +213,10 @@ test("Legacy 10: misafir/hesap geçişi başka kullanıcının verisini çekemez
 test("Legacy 11: aile bildirimi ve çeviri de gerçek üyelik ister (Anthropic'e gidilmeden)", async () => {
   reset();
   seedFamily();
-  const n = await invoke(notify, { uid: "X", body: { familyId: "F1", recipeTitle: "Menemen" } });
+  const n = await invoke(notify, { uid: "X", body: { familyId: "F1", recipeId: "f1", recipeTitle: "Menemen" } });
   assert.equal(n.status, 403);
   db.set("user:GHOST:profile", JSON.stringify({ isPlus: true, families: ["F1"] }));
-  const n2 = await invoke(notify, { uid: "GHOST", body: { familyId: "F1", recipeTitle: "Menemen" } });
+  const n2 = await invoke(notify, { uid: "GHOST", body: { familyId: "F1", recipeId: "f1", recipeTitle: "Menemen" } });
   assert.equal(n2.status, 403);
 
   const t = await invoke(translate, { uid: "GHOST", body: { recipeId: "f1", scope: "F1", target: "en" } });

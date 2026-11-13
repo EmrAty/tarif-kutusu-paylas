@@ -14,20 +14,15 @@ const JWKS = createRemoteJWKSet(new URL(JWKS_URL));
 // fonksiyon hem GET hem POST endpoint'lerinde aynı şekilde çalışabiliyor.
 // Silinmiş hesabın hâlâ geçerli (en fazla 1 saatlik) ID token'ı reddediliyor,
 // yoksa açık kalan bir cihaz silinen veriyi yeniden yazabilirdi.
-export async function requireUser(req, { allowDeleted = false } = {}) {
-  const header = req.headers.authorization || req.headers.Authorization || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-  if (!token) {
-    const err = new Error("Giriş yapmanız gerekiyor.");
-    err.status = 401;
-    throw err;
-  }
-
-  let user;
+// Firebase ID token'ını doğrular; { uid, email, isAnonymous } ya da 401 hatası.
+// Grup 5: misafir verisi taşımada (POST /api/account) gövdedeki misafir token'ı
+// da aynı kuralla doğrulanır.
+export async function verifyIdToken(token) {
   try {
+    if (typeof token !== "string" || !token) throw new Error("token yok");
     const { payload } = await jwtVerify(token, JWKS, { issuer: ISSUER, audience: PROJECT_ID });
     if (!payload.sub) throw new Error("Token içinde kullanıcı kimliği yok.");
-    user = {
+    return {
       uid: payload.sub,
       email: payload.email || null,
       isAnonymous: payload.firebase?.sign_in_provider === "anonymous",
@@ -37,6 +32,18 @@ export async function requireUser(req, { allowDeleted = false } = {}) {
     err.status = 401;
     throw err;
   }
+}
+
+export async function requireUser(req, { allowDeleted = false } = {}) {
+  const header = req.headers.authorization || req.headers.Authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+  if (!token) {
+    const err = new Error("Giriş yapmanız gerekiyor.");
+    err.status = 401;
+    throw err;
+  }
+
+  const user = await verifyIdToken(token);
 
   if (!allowDeleted) {
     let deleted = false;

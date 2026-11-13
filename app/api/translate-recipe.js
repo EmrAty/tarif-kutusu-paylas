@@ -1,17 +1,22 @@
 // Tarif içeriğinin (başlık, malzeme adları/miktar yazılışı, adımlar, notlar) başka bir
-// dilde GÖSTERİMİ için çeviri. Asıl tarif hiç değişmez; çeviri içerik-hash'li ayrı bir
-// Redis anahtarında önbelleğe alınır:
-//   rt:v1:<hedef dil>:<sha256(çevrilecek alanlar)>  (tam tarif)
-//   rt-titles:v1:<hedef dil>  HASH  sha1(kaynak dil + başlık) -> başlık  (liste başlıkları)
-// Tarif düzenlenince hash değişir, eski çeviri kendiliğinden kullanılmaz olur; aynı
-// içerik (ör. aileyle paylaşılan tarif) aynı önbelleği kullanır, Claude'a bir kez gider.
+// dilde GÖSTERİMİ için çeviri. Asıl tarif hiç değişmez; çeviri içerik-hash'li olarak
+// TARİFİN SAHİBİNE ait bir HASH'te önbelleğe alınır (Grup 5):
+//   user:<uid>:translations:<hedef dil>     (kişisel tarifler)
+//   family:<id>:translations:<hedef dil>    (aile tarifleri)
+//     r:<sürüm>:<sha256(çevrilecek alanlar)> -> tam tarif çevirisi (JSON)
+//     t:<sürüm>:<sha1(kaynak dil + başlık)>  -> başlık çevirisi
+// Eskiden önbellek tüm kullanıcılar için ortaktı (rt:v1:*, rt-titles:v1:*): bir
+// kullanıcının isteğiyle üretilen model çıktısı aynı başlığa/içeriğe sahip BAŞKA bir
+// kullanıcıya gösterilebiliyordu. Artık çıktı yalnızca o tarife erişebilenlerle
+// (kendisi ya da aynı aile) paylaşılır. Eski ortak anahtarlar okunmaz; TTL ile silinir.
+// Hesap silmede user:<uid>:* taramasıyla, aile silmede sabit listeyle temizlenir.
 //
 // Güvenlik: tarif istemciden ALINMAZ — sunucu kullanıcının kendi listesinden ya da üyesi
 // olduğu ailenin listesinden okur. Hedef dil beyaz listeden. Claude'a yalnızca çevrilecek
 // metin alanları gider (id, link, besin değerleri, porsiyon sayıları gitmez).
 import crypto from "node:crypto";
 import { requireUser } from "./_lib/auth.js";
-import { redisGetJSON, redisSet, redisCommand } from "./_lib/redis.js";
+import { redisGetJSON, redisCommand } from "./_lib/redis.js";
 import { assertFamilyAccess, verifiedFamilyIds } from "./_lib/families.js";
 import { checkRateLimit, reserveAiBudget, assertKillSwitchOff, clientIp, sendGuardError } from "./_lib/aiGuard.js";
 import { checkInputBudget, textChars, INPUT_TOO_LARGE_CODE } from "./_lib/aiInputBudget.js";
@@ -44,9 +49,21 @@ export const TITLES_BATCH_MAX_CHARS = 8_000;
 const TOO_LARGE_MESSAGE = "Bu tarif otomatik çeviri için çok uzun; orijinal hali gösteriliyor.";
 
 const sha = (algo, text) => crypto.createHash(algo).update(text).digest("hex");
-const recipeCacheKey = (target, payload) => `rt:${PROMPT_VERSION}:${target}:${sha("sha256", JSON.stringify(payload))}`;
-const titlesKey = (target) => `rt-titles:${PROMPT_VERSION}:${target}`;
-const titleField = (sourceLang, title) => sha("sha1", `${sourceLang}\n${title}`);
+// owner: "user:<uid>" ya da "family:<id>" (tarifin bulunduğu liste).
+export const translationsKey = (owner, target) => `${owner}:translations:${target}`;
+const recipeField = (payload) => `r:${PROMPT_VERSION}:${sha("sha256", JSON.stringify(payload))}`;
+const titleField = (sourceLang, title) => `t:${PROMPT_VERSION}:${sha("sha1", `${sourceLang}\n${title}`)}`;
+
+async function cacheGet(owner, target, field) {
+  const [v] = (await redisCommand(["HMGET", translationsKey(owner, target), field])) || [];
+  return typeof v === "string" ? v : null;
+}
+async function cacheSet(owner, target, pairs) {
+  if (!pairs.length) return;
+  const key = translationsKey(owner, target);
+  await redisCommand(["HSET", key, ...pairs]);
+  await redisCommand(["EXPIRE", key, String(CACHE_TTL)]);
+}
 
 function systemPrompt(target) {
   const lang = CONTENT_LANGUAGES[target].name;
@@ -172,22 +189,28 @@ async function guardTranslation(guard) {
 
 async function translateOne(uid, { recipeId, scope, target }, guard) {
   if (typeof recipeId !== "string" || !recipeId) throw Object.assign(new Error("Geçersiz istek."), { status: 400 });
-  let key;
+  let owner;
   if (scope === "personal") {
-    key = `user:${uid}:recipes`;
+    owner = `user:${uid}`;
   } else {
     if (typeof scope !== "string") throw Object.assign(new Error("Bu ailenin üyesi değilsin."), { status: 403 });
     await assertFamilyAccess(uid, scope);
-    key = `family:${scope}:recipes`;
+    owner = `family:${scope}`;
   }
-  const recipe = (await readRecipes(key)).find((r) => r && r.id === recipeId);
+  const recipe = (await readRecipes(`${owner}:recipes`)).find((r) => r && r.id === recipeId);
   if (!recipe) throw Object.assign(new Error("Tarif bulunamadı."), { status: 404 });
 
   const payload = translationPayload(recipe, target);
   if (!payload) return { translation: null, cached: true };
-  const cacheKey = recipeCacheKey(target, payload);
-  const hit = await redisGetJSON(cacheKey, null);
-  if (hit) return { translation: hit, cached: true };
+  const field = recipeField(payload);
+  const hitRaw = await cacheGet(owner, target, field);
+  if (hitRaw) {
+    try {
+      return { translation: JSON.parse(hitRaw), cached: true };
+    } catch {
+      // bozuk önbellek kaydı: yeniden çevrilir
+    }
+  }
 
   const overBudget = checkInputBudget(payload, TRANSLATE_INPUT_LIMITS);
   if (overBudget) {
@@ -203,10 +226,9 @@ async function translateOne(uid, { recipeId, scope, target }, guard) {
   });
   const translation = validateTranslation(payload, json);
   if (!translation) throw Object.assign(new Error("Çeviri doğrulanamadı."), { status: 502 });
-  await redisSet(cacheKey, JSON.stringify(translation), CACHE_TTL);
-  if (payload.title && translation.title) {
-    await redisCommand(["HSET", titlesKey(target), titleField(contentLangOf(recipe), payload.title), translation.title]).catch(() => {});
-  }
+  const pairs = [field, JSON.stringify(translation)];
+  if (payload.title && translation.title) pairs.push(titleField(contentLangOf(recipe), payload.title), translation.title);
+  await cacheSet(owner, target, pairs);
   console.log(JSON.stringify({ tag: "translate-recipe", target, cached: false, usage }));
   // usage: yalnızca token sayıları (teşhis/maliyet ölçümü için), içerik yok.
   return { translation, cached: false, usage };
@@ -215,57 +237,72 @@ async function translateOne(uid, { recipeId, scope, target }, guard) {
 // Liste ekranı için: kullanıcının erişebildiği tüm tariflerin başlıkları tek istekte.
 async function translateTitles(uid, target, guard) {
   const families = await verifiedFamilyIds(uid);
-  const buckets = await Promise.all([`user:${uid}:recipes`, ...families.map((f) => `family:${f}:recipes`)].map(readRecipes));
-  const wanted = new Map(); // alan -> { title, lang }
+  const owners = [`user:${uid}`, ...families.map((f) => `family:${f}`)];
+  const buckets = await Promise.all(owners.map((o) => readRecipes(`${o}:recipes`)));
+  // Önbellek sahibe göre: aynı başlık iki farklı sahipte ayrı saklanır.
+  const wanted = new Map(); // "<sahip>|<alan>" -> { owner, field, title }
   let skipped = 0;
-  for (const r of buckets.flat()) {
-    if (!r || typeof r.title !== "string" || !r.title.trim()) continue;
-    const lang = contentLangOf(r);
-    if (lang === target) continue;
-    // Aşırı uzun "başlık" Claude'a hiç gönderilmez; listede asıl hâliyle kalır.
-    if (r.title.length > TITLE_MAX_CHARS) {
-      skipped++;
-      continue;
+  buckets.forEach((list, i) => {
+    for (const r of list) {
+      if (!r || typeof r.title !== "string" || !r.title.trim()) continue;
+      const lang = contentLangOf(r);
+      if (lang === target) continue;
+      // Aşırı uzun "başlık" Claude'a hiç gönderilmez; listede asıl hâliyle kalır.
+      if (r.title.length > TITLE_MAX_CHARS) {
+        skipped++;
+        continue;
+      }
+      const field = titleField(lang, r.title);
+      wanted.set(`${owners[i]}|${field}`, { owner: owners[i], field, title: r.title });
     }
-    wanted.set(titleField(lang, r.title), { title: r.title, lang });
-  }
-  const fields = [...wanted.keys()];
-  const result = {};
-  if (!fields.length) return { titles: result, translated: 0, skipped };
-  const cached = (await redisCommand(["HMGET", titlesKey(target), ...fields])) || [];
-  const missing = [];
-  fields.forEach((f, i) => {
-    if (cached[i]) result[wanted.get(f).title] = cached[i];
-    else missing.push(f);
   });
+  const result = {};
+  if (!wanted.size) return { titles: result, translated: 0, skipped };
+  const missing = [];
+  for (const owner of owners) {
+    const entries = [...wanted.values()].filter((w) => w.owner === owner);
+    if (!entries.length) continue;
+    const cached = (await redisCommand(["HMGET", translationsKey(owner, target), ...entries.map((w) => w.field)])) || [];
+    entries.forEach((w, i) => {
+      if (cached[i]) result[w.title] = cached[i];
+      else missing.push(w);
+    });
+  }
+  // Yanıt başlık metnine göre: aynı başlık kullanıcının erişebildiği bir sahipte
+  // zaten çevrilmişse yeniden istenmez.
+  const pending = missing.filter((w) => !(w.title in result));
   // Tek çağrı hem başlık sayısı hem toplam karakterle sınırlı; kalanlar sonraki istekte.
   const batch = [];
   let batchChars = 0;
-  for (const f of missing) {
+  for (const w of pending) {
+    if (batch.includes(w.title)) continue;
     if (batch.length >= MAX_TITLES_PER_CALL) break;
-    const chars = textChars(wanted.get(f).title);
+    const chars = textChars(w.title);
     if (batchChars + chars > TITLES_BATCH_MAX_CHARS) break;
-    batch.push(f);
+    batch.push(w.title);
     batchChars += chars;
   }
   if (batch.length) {
     await guardTranslation(guard);
-    const titles = batch.map((f) => wanted.get(f).title);
     const { json } = await callClaude({
       system: `${systemPrompt(target)}\n- The input is a list of recipe titles; return the same number of titles in the same order.`,
-      userText: `<recipe>\n${JSON.stringify({ titles })}\n</recipe>`,
+      userText: `<recipe>\n${JSON.stringify({ titles: batch })}\n</recipe>`,
       schema: TITLES_SCHEMA,
     });
     const out = Array.isArray(json && json.titles) ? json.titles : [];
-    if (out.length === titles.length) {
-      const hset = [];
-      titles.forEach((src, i) => {
+    if (out.length === batch.length) {
+      const byOwner = new Map();
+      batch.forEach((src, i) => {
         const tr = typeof out[i] === "string" && out[i].trim() ? out[i].trim() : null;
         if (!tr) return;
         result[src] = tr;
-        hset.push(batch[i], tr);
+        for (const w of pending) {
+          if (w.title !== src) continue;
+          if (!byOwner.has(w.owner)) byOwner.set(w.owner, []);
+          byOwner.get(w.owner).push(w.field, tr);
+        }
       });
-      if (hset.length) await redisCommand(["HSET", titlesKey(target), ...hset]).catch(() => {});
+      for (const [owner, pairs] of byOwner) await cacheSet(owner, target, pairs).catch(() => {});
     }
   }
   return { titles: result, translated: batch.length, skipped };

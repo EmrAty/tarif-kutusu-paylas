@@ -398,6 +398,8 @@ const familyOf = (members) => {
   for (const uid of members) db.set(`user:${uid}:profile`, JSON.stringify({ isPlus: true, families: ["F1"] }));
   db.set("family:F1:meta", JSON.stringify({ name: "Ev", ownerUid: members[0], inviteCode: "ABCDEF" }));
   db.set("family:F1:members", JSON.stringify(Object.fromEntries(members.map((uid, i) => [uid, { joinedAt: i + 1 }]))));
+  // Grup 5: bildirim başlığı ailenin kayıtlı tarifinden gelir.
+  db.set("family:F1:recipes", JSON.stringify([{ id: "r1", title: "Menemen" }]));
 };
 const crave = (uid) => invoke(notify, { uid, body: { familyId: "F1", recipeId: "r1", recipeTitle: "Menemen" } });
 const webTarget = (installationId) => JSON.stringify({ platform: "web", installationId, updatedAt: 1 });
