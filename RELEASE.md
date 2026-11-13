@@ -64,14 +64,17 @@ TEST APK `preview.tarifkutusu.app`'i canlı yükler; web/sunucu değişikliği i
 2. Tarif listesi yükleniyor; ekle / düzenle / favori / sil; iki cihazda aynı anda değişiklik kaybolmuyor
 3. TikTok / Instagram paylaşımı → panel → "Tarife Ekle" → "Tarifin hazır" bildirimi → dokununca tarif açılıyor
 4. Aile: liste, "Canım çekti" bildirimi diğer cihaza geliyor; Plus kapat/aç (test düğmesi) → aile kilitlenip açılıyor
-5. Değişikliğin kendi özel senaryoları
+5. Değişikliğin kendi özel senaryoları (Grup 5: `GROUP5_NOTES.md` §9 — misafir → hesap taşıma listesi)
+
+Şu an `preview.tarifkutusu.app` → `group-5-ci-release` (13 Kasım 2026). Başka bir dalı test etmeden önce Vercel → Domains'ten yeniden bağla ve `verify:deploy --commit` ile doğrula.
 
 ## Geri dönüş (rollback)
 
 1. **Önce raporla, kör geri dönme.** Sunucu kodu Redis veri biçimini değiştirdiyse (ör. Grup 1 sürümlü kovalar, Grup 3 push kayıtları, Grup 4 aile meta) eski kod yeni veriyi yanlış yorumlayabilir. Her grubun notunda (`GROUPn_NOTES.md`) geri dönüş uyumu yazılı olmalı.
 2. Uyumluysa en hızlısı: Vercel → Deployments → önceki Production derlemesi → **Instant Rollback** (yeniden derleme yok, saniyeler; Hobby planda yalnızca bir önceki production derlemesine). Sonra `verify:deploy` ile eski commit'in yayında olduğunu doğrula.
 3. Kalıcı düzeltme: dalda `git revert` (ya da düzeltme) → normal akış. Instant Rollback sonrası Vercel otomatik production atamasını durdurur; yeni main derlemesini Vercel'de "Promote" ile yeniden açmak gerekir.
-4. Native (APK) değişikliği geri alınamaz: Play'de yeni sürüm gerekir. Native değişiklik içeren yayınlar web/sunucu ile geriye uyumlu olmalı.
+4. Grup 5: veri biçimi geriye uyumlu, yeni anahtarlar eski sunucuda yok sayılır. Taşıması bağlanmış ama bitmemiş misafir eski sunucuda donuk kalır (veri kaybolmaz), yeni sunucu dönünce devam eder. Ayrıntı: `GROUP5_NOTES.md` §7 "Geri dönüş uyumu" ve §9.
+5. Native (APK) değişikliği geri alınamaz: Play'de yeni sürüm gerekir. Native değişiklik içeren yayınlar web/sunucu ile geriye uyumlu olmalı.
 
 ## Testler hakkında
 

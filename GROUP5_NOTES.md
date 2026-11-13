@@ -55,8 +55,8 @@ Mevcut kapsam veri kaybı (sürümlü kovalar), aile/Plus kilidi, FCM kayıtlar�
 - Vercel Preview derlemesi (`ab5f413`): GitHub deployment 7759356121 → `success` ("Deployment has completed", `tarif-kutusu-paylas-qvhqkmu7m-emre-c391.vercel.app`). `*.vercel.app` bu makineden erişilemediği için (TLS/fetch failed, eskiden bilinen engel) içerik doğrudan kontrol edilemedi.
 - `preview.tarifkutusu.app` **Grup 5 dalına bağlanmadı**: Chrome eklentisi bağlı değildi ve Vercel CLI/gh kurulu değil. Adres hâlâ `group-4-family`'yi yayınlıyor; test APK'sı ve erişim anahtarı etkilenmedi.
 
-## 6. Kalan işler
-1. **Vercel → Domains:** `preview.tarifkutusu.app`'i `group-5-ci-release` dalına bağla (ya da Grup 3+4+5 birleşik dalına). Sonra:
+## 6. Kalan işler (ilk sürüm; güncel liste §9'da)
+1. ~~**Vercel → Domains:** `preview.tarifkutusu.app`'i `group-5-ci-release` dalına bağla~~ (13 Kasım'da kullanıcı bağladı, §9) (ya da Grup 3+4+5 birleşik dalına). Sonra:
    `cd app && npm run verify:deploy -- --url https://preview.tarifkutusu.app --commit <sha> --bypass-file C:\Users\emrea\tk-clone-group3-apk\app\android\local.properties`
 2. Telefonla kısa duman testi (RELEASE.md listesi) — Grup 5 uygulama davranışını değiştirmiyor; yalnızca `version.json`'a alan eklendi.
 3. Fable denetimi (Grup 3–4–5 birleşik + tüm uygulama).
@@ -109,7 +109,7 @@ Commit'ler (yalnızca `group-5-ci-release`): `a7f1339` (önceki çalışma ağac
 5. Çok hızlı işaretlemede alışveriş listesinde 429 görülmemesi.
 
 ### Açık ürün kararları
-- Hedef başına 30 günde en çok 3 taşıma (`GUEST_MERGE_LIMIT`) — **ürün kararı bekliyor.**
+- ~~Hedef başına 30 günde en çok 3 taşıma~~ → **karar: 5** (§9).
 - Taşımada Free sınırı uygulanmıyor (sınırın üstü kilitli görünür) — varsayılan karar, onay bekliyor.
 - Kova tavanları (2 MB / 200 KB / 100 KB / 500 öğe) ve taşımanın 2 kat payı — gözden geçirilmeli.
 - CSP `script-src` (Report-Only): **eklenmedi.** Rapor toplayacak uç yok (yalnızca tarayıcı konsoluna düşerdi), Firebase Auth popup'ı `apis.google.com` ve iframe kullanıyor; değeri düşük, yanlış ayarın Enforce'a dönüşmesi riskli. Rapor ucu kurulursa yeniden değerlendirilmeli.
@@ -126,3 +126,51 @@ Commit'ler: `2eef55a` (sunucu), `59a99db` (istemci). `npm run check`: lint temiz
 - Yeni anahtar yok; `user:<hedef>:guestMerges` kayıtlarına `startedAt` alanı ve `"deferred"` durumu eklendi. Geri dönüşte eski sunucu `deferred` kaydı tanımaz: misafir donuk kalır, veri kaybolmaz, yeni sunucu geri gelince devam eder.
 - **Telefonda doğrulanacak (ek):** sıraya alınmış taşıma bandı ve tarih biçimi; iki misafir hesabından art arda geçiş.
 - **Ürün kararı (ek):** ertelenmiş üst sınırı 10.
+
+## 9. Telefon testi öncesi hazırlık — 13 Kasım 2026
+
+Bir kod commit'i (kod + test) ve bu not. `npm run check`: lint temiz, **424/424**, build temiz.
+
+### Karar: taşıma sınırı 5
+- Aynı hedef hesaba son 30 günde taşıması **başlayan** farklı misafir hesabı sayısı en çok **5** (`GUEST_MERGE_LIMIT`, `api/_lib/guestMerge.js`). Kişisel tarif sınırından (Free 15) ayrı bir kural. Aynı misafirin tekrar talebi ikinci kez sayılmaz (dizin misafir uid'ine göre). 6. misafir silinmez, bağlanır ve sıraya girer (K1); sırada en çok 10 kayıt (`GUEST_MERGE_DEFERRED_MAX`, değişmedi).
+- Metinler (TR/EN) kuralı açıkça söylüyor: `guestMerge.deferred`, `guestMerge.limit` (`src/i18n.jsx`) ve 429 yanıtı. Sabit değişirse bu metinler de değişmeli (koddaki yorumda yazıyor).
+
+### Taşıma denetimi — bulunan ve düzeltilen veri riskleri
+1. **Paylaşım job'u taşıma sırasında biterse tarif atılıyordu.** Misafirken başlatılan job (≤300 sn) bitmeden kullanıcı mevcut hesabına geçerse misafir dondurulur (silindi işareti); job bunu hesap silme sanıp tarifi atıyordu — sessiz kayıp. Şimdi bağlanan misafir için `guest-merge:moved:<misafir>` = hedef yazılır (taşıma sürerken süresiz, bitince 7 gün; hedef silinince silinir). Job tarifini hedefin kişisel listesine yazar (taşımadaki gibi Free sınırı uygulanmaz) ve bildirimi hedefin cihazlarına gönderir; misafirin job kaydı yeniden oluşturulmaz. Dondurma tam kayıttan sonra gelirse tarif hedefe de yazılır (id ile tekil). Aile hedefli job'da üyelik hedef adına doğrulanır; başarısızsa kişisel listeye düşmez (eski kural). Gerçekten silinen hesapta davranış aynı (tarif yazılmaz).
+2. **Donmuş misafir eski oturumundan kendini silebiliyordu.** `DELETE /api/account` silindi işaretine rağmen izinli olduğu için, taşıması süren ya da sırada bekleyen misafir başka cihazdaki eski oturumdan "Hesabı sil" derse taşınacak veri siliniyordu. Artık bağlı misafir için 409 `guest_merge_in_progress`. Veri hedefindir; hedef hesap silinince misafir kalıntısı da silinir (Play taahhüdü korunur). Bağlanmamış misafir (açık bileti olsa bile) eskisi gibi silinebilir.
+3. **Temizlik yarıda kalınca dondurma 24 saate düşüyordu.** Temizlikteki hesap silme işareti 24 saatlik; Firebase silme başarısız olursa misafir 24 saat sonra çözülüp yeniden yazabiliyor, sonraki temizlik bunu sessizce siliyordu. Şimdi misafir silinemezse dondurma süresiz geri yazılır; her sürdürmede de (yalnızca aile adımından önce değil) yeniden garanti edilir.
+4. İstemci: misafir aynı uid ile hesaba bağlandıysa (linkWithCredential) cihazdaki bilet silinir (zararsızdı, birikmesin).
+
+Kontrol edilip sağlam bulunanlar (testli): her yazım adımında kesinti + devam (kopya yok, aile sahipsiz kalmaz), biletsiz başka cihazdan devam, ertelenmiş taşımanın pencere açılınca sırayla başlaması, aile devri (üyelik + sahiplik + kıdem; hedef sınırdaysa diğer üyeye devir ya da tek üyeli ailenin kişisel listeye kopyalanıp silinmesi), okunamayan misafir profilinde misafirin silinmemesi, kapasite aşımında `blocked` ve verinin yerinde kalması, hedef silinince misafir kalıntılarının ve biletlerin silinmesi.
+
+**Bilerek bırakılanlar (veri kaybı değil, gecikme / çok dar pencere):**
+- Sıraya alınan (6.+) misafirin verisi taşıma başlayana kadar (en geç pencerenin ilk taşıması + 30 gün) görünmez; silinmez, hedef uygulamayı açınca kendiliğinden taşınır. Sınırın doğrudan sonucu.
+- `blocked` (hedef tavanın 2 katını aşıyor ya da misafir profili okunamıyor): misafir verisi yerinde ve donuk kalır, yer açılınca / profil düzelince devam eder; kullanıcıya bantta söylenir.
+- Aile hedefli job + misafir tek üyeli ailenin sahibi + hedef 2 aile sınırında + job tam aile adımı sırasında kaydediyor: aile kişisel listeye kopyalanıp silinirken o tek tarif kaçabilir. Çok dar pencere; ele alınmadı.
+
+### Yeni anahtar
+| Anahtar | İçerik | TTL |
+|---|---|---|
+| `guest-merge:moved:<misafir>` | hedef uid (job yönlendirmesi) | taşıma sürerken yok; bitince 7 gün; hedef silinince silinir |
+
+### Geri dönüş uyumu
+- Bir önceki Grup 5 sunucusuna (`3093e7a`) dönülürse: `guest-merge:moved:*` yok sayılır (taşıma sırasında biten job tarifi yine atılır — eski davranış); sınır 3'e döner, başlamış taşımalar etkilenmez (yalnızca yeni başlatmalar sayılır). Veri biçimi değişmedi.
+- Grup 5 öncesi sunucuya (main `52e04fd`) dönüş: §7'deki uyum notu geçerli.
+- Yeni istemci eski sunucuda: yalnızca metindeki sayı (5) eski sunucunun sınırıyla (3) uyuşmaz.
+
+### Android `allowBackup` ve CSP `script-src` — değerlendirme (değişiklik yok, karar bekliyor)
+- `android:allowBackup="true"`. WebView verisi (Firebase oturumu, `localStorage` dahil taşıma biletleri) Google yedeğine girer ve yeni kurulumda geri gelir. Artısı: yeniden kurulumda misafir hesabı geri bulunabilir. Eksisi: yedekten gelen anonim oturum aynı misafiri iki cihazda açabilir (bağlıysa donuk, zararsız); bilet kullanıcının kendi yedeğinde durur ve yalnızca giriş yapmış bir hesapça talep edilebilir. Öneri: şimdilik **true kalsın**. `false` ya da `dataExtractionRules` ile hariç tutma yeni AAB ister ve misafir veri kurtarma yolunu kapatır — ürün kararı.
+- CSP `script-src`: eklenmedi (§7: rapor ucu yok, Firebase popup/iframe, yanlış ayarın girişi bozma riski). Mevcut başlıklar (`object-src 'none'`, `base-uri`, `frame-ancestors`, `form-action`) yerinde. Öneri: rapor ucu kurulmadan eklenmesin.
+
+### Telefonda doğrulanacaklar (güncel; hiçbiri yapılmadı)
+Tarif TEST APK, `preview.tarifkutusu.app` (Grup 5 dalı). Gerçek Upstash/Firebase üzerinde taşıma hiç denenmedi; bu liste onu da kapsar.
+1. Misafir → Giriş Yap (mevcut hesap; e-posta ve Google) → onay → üst bantta "taşınıyor/taşındı"; tarifler, kiler, alışveriş listesi (birleşmiş), aile hedefte.
+2. Onaydan hemen sonra interneti kes + uygulamayı kapat → tekrar aç: taşıma kendiliğinden bitiyor.
+3. Aynı hedef hesapla ikinci cihazdan açılış: yarım taşıma orada bitiyor (biletsiz).
+4. Aile sahibi misafirle geçiş: sahiplik hedefte, diğer üye aileyi ve tarifleri görüyor, davet kodu hedefte yenilenebiliyor.
+5. Misafirken TikTok paylaş → panel kapanınca hemen mevcut hesaba geç: tarif hedef hesapta, "Tarifin hazır" bildirimi geliyor (yeni düzeltme).
+6. Google girişini iptal et: misafir verisi değişmedi, misafir olarak devam.
+7. Eski cihazdaki donmuş misafir oturumunda "Hesabı sil" reddediliyor (şimdilik genel hata metniyle), veri hedefte.
+8. İki misafir hesabından art arda geçiş; mümkünse 6. misafirde sıraya alınma bandı ve tarih biçimi (TR/EN).
+9. Alışveriş listesinde hızlı işaretlemede 429 görülmemesi.
+10. RELEASE.md duman testi (giriş, liste, paylaşım, aile "Canım çekti", Plus test düğmesi).

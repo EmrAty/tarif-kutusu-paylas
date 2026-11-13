@@ -104,15 +104,17 @@ Kullanıcı TikTok/Instagram/YouTube yemek videosunun linkini/açıklamasını v
 - Kilitli kart örtüsü (`LockedOverlay`) ve yeni `PlusModal` (alt sheet, sürükleyerek kapatma) main'de (`c733130` … `f7b6646`). Ayrıntı: `docs/history/01-…`.
 
 **Dallar (Grup çalışması)** **[repo]**
-- main `52e04fd` = Grup 1 (sürümlü veri) + Grup 2 (AI güvenlikleri). Grup 3 (`group-3-legacy-fcm`), Grup 4 (`group-4-family`, canlı aile yenileme `071fec2`) ve Grup 5 (`group-5-ci-release`: testler, CI, yayın araçları, misafir→hesap taşıma, kova boyut/hız sınırları) main'de **değil**; Preview + telefon testi bekliyor. Ayrıntı: `GROUP5_NOTES.md`, `RELEASE.md`.
+- main `52e04fd` = Grup 1 (sürümlü veri) + Grup 2 (AI güvenlikleri). Grup 3 (`group-3-legacy-fcm`), Grup 4 (`group-4-family`, canlı aile yenileme `071fec2`) ve Grup 5 (`group-5-ci-release`: testler, CI, yayın araçları, dayanıklı misafir→hesap taşıma, kova boyut/hız sınırları; Fable denetim turları B1–B6, K1–K3 ve telefon öncesi hazırlık) main'de **değil**. Grup 5 dalı Grup 4'ün üstünde ve Grup 3'ü de içeriyor.
+- `preview.tarifkutusu.app` → `group-5-ci-release` (13 Kasım). Sıradaki: kullanıcının telefon testi (`GROUP5_NOTES.md` §9 listesi), bağımsız Fable denetimi, sonra `RELEASE.md` akışı. Main'e push/merge yapılmadı.
+- Misafir→hesap taşıma: aynı hedefe 30 günde en çok **5** farklı misafirin taşıması başlar (`GUEST_MERGE_LIMIT`; fazlası silinmez, sıraya girer, sırada en çok 10). Bağlanan misafir donar; misafirken başlamış paylaşım job'unun tarifi hedefe yazılır (`guest-merge:moved:`); bağlı misafir kendini silemez (409). Ayrıntı ve geri dönüş: `GROUP5_NOTES.md` §7–§9, `RELEASE.md`.
 
 **iOS:** Tamamlanmadı. Proje + `GoogleService-Info.plist` repoda; Apple Developer, Xcode imzalama, Push capability, Google URL scheme, APNs↔FCM, Share Extension, TestFlight yapılacak. Ayrıntı: `docs/history/03-ios.md`.
 
 ## Açık işler — öncelik sırası
-0. Grup 3–5 dallarını Preview'da ve telefonda test et (Grup 5 "Telefonda doğrulanacaklar" listesi), sonra `RELEASE.md` akışıyla main'e al.
+0. Grup 5 dalını (Grup 3–4 dahil) Preview'da telefonla test et (`GROUP5_NOTES.md` §9), bağımsız Fable denetimi, sonra `RELEASE.md` akışıyla main'e al.
 1. Telefonda Plus modalı: görünüm, tutamaçla sürükleyerek kapatma, Android geri tuşu, alt güvenli alan, test CTA ile Plus aç/kapat → kilitler açılıp kapanıyor mu.
 2. Telefonda TikTok → Paylaş → Tarif Kutusu: başarı ve (hatalı linkle) hata bildirimi görünüyor mu; job kaydındaki `notify` alanıyla karşılaştır.
 3. ⚠️ **Play App Signing SHA-1/SHA-256'sını Firebase Android app'ine ekle** (upload SHA'sıyla karıştırma; debug SHA `12:A0:B0…` ayrı), yeni `google-services.json`'ı `app/android/app/`'e koy, Play sürümünde Google Sign-In'i dene. Yapılmadı.
 4. Kapalı test opt-in takibi (12 × 14 gün).
 5. Telefonda henüz doğrulanmayanlar: Share Panel aile seçimi, porsiyon gösterimi, İngilizce çeviri (gerçek hesapla uçtan uca hiç denenmedi), TikTok ses yolunun konuşmalı bir videoyla happy-path'i.
-6. Ürün kararları bekleyenler: gerçek ödeme altyapısı, iPhone paylaşımı (iOS Share Extension), misafir→hesap taşıma sınırı (Grup 5).
+6. Ürün kararları bekleyenler: gerçek ödeme altyapısı, iPhone paylaşımı (iOS Share Extension), Android `allowBackup` (öneri: true kalsın; değişirse yeni AAB), CSP `script-src` (öneri: rapor ucu olmadan ekleme), taşımada Free sınırının uygulanmaması ve kova tavanları (varsayılanlar onay bekliyor). Taşıma sınırı kararlaştırıldı: 5.
