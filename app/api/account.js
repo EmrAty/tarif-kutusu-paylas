@@ -13,10 +13,10 @@ import { createTicket, claimTicket, resumeMerges, mergeGuestInto } from "./_lib/
 //   { action: "claimGuestMergeTicket", ticket }      hedef hesapla → taşıma sonucu
 //   { action: "resumeGuestMerges" }                  hedef hesapla → { merges: [...] }
 //   { action: "mergeGuest", guestToken }             eski yol (geriye uyum)
-// Taşıma sonucu: { ok, status: "done"|"in_progress"|"blocked", recipes,
+// Taşıma sonucu: { ok, status: "done"|"in_progress"|"blocked"|"deferred", startAfter?, recipes,
 //   skippedRecipes, pantry, shoppingList, families, cleanupPending?, code? }
 function sendResult(res, result) {
-  res.status(200).json({ ok: true, status: result.status, ...result.report, ...(result.cleanupPending ? { cleanupPending: true } : {}), ...(result.code ? { code: result.code, error: result.error } : {}) });
+  res.status(200).json({ ok: true, status: result.status, ...result.report, ...(result.cleanupPending ? { cleanupPending: true } : {}), ...(result.startAfter ? { startAfter: result.startAfter } : {}), ...(result.code ? { code: result.code, error: result.error } : {}) });
 }
 
 function sendFailure(res, e, fallback = "Veriler taşınamadı.") {
@@ -56,7 +56,7 @@ export default async function handler(req, res) {
         const merges = await resumeMerges(user);
         res.status(200).json({
           ok: true,
-          merges: merges.map((m) => ({ status: m.status, ...(m.report || {}), ...(m.cleanupPending ? { cleanupPending: true } : {}), ...(m.code ? { code: m.code, error: m.error } : {}) })),
+          merges: merges.map((m) => ({ status: m.status, ...(m.report || {}), ...(m.cleanupPending ? { cleanupPending: true } : {}), ...(m.startAfter ? { startAfter: m.startAfter } : {}), ...(m.code ? { code: m.code, error: m.error } : {}) })),
         });
         return;
       }

@@ -280,23 +280,167 @@ test("B2: misafir kendi hesabını silerse açık bileti ve durum kaydı da sili
   assert.equal((await claim("REAL", ticket)).status, 404);
 });
 
-test("B2: hedef başına 30 günde en çok N taşıma; sınırda bilet bağlanmaz, misafir silinmez/dondurulmaz, bilet geçerli kalır", async () => {
+// ---- K1: sınırda ertelenmiş (deferred) bağlama ----
+
+const DAY = 24 * 3600 * 1000;
+async function fillWindow(target = "REAL", start = Date.now()) {
+  __setGuestMergeClockForTests(() => start);
+  for (let i = 0; i < GUEST_MERGE_LIMIT; i++) {
+    db.set(`user:D${i}:recipes`, JSON.stringify([recipe(`d${i}`)]));
+    assert.equal((await claim(target, (await createTicket(`D${i}`)).body.ticket)).body.status, "done");
+  }
+}
+
+test("K1: sınırda claim misafiri kalıcı bağlar (deferred + donuk), adımlar çalışmaz; biletsiz başka cihazdan resume pencere açılınca bitirir", async () => {
   reset();
   seedTarget("REAL");
-  const tickets = [];
-  for (let i = 0; i <= GUEST_MERGE_LIMIT; i++) {
-    db.set(`user:G${i}:recipes`, JSON.stringify([recipe(`x${i}`)]));
-    tickets.push((await createTicket(`G${i}`)).body.ticket);
+  const t0 = Date.now();
+  await fillWindow("REAL", t0);
+  seedGuest("G");
+  const { ticket } = (await createTicket("G")).body;
+  __setGuestMergeClockForTests(() => t0 + DAY);
+  const c = await claim("REAL", ticket);
+  assert.equal(c.status, 200, JSON.stringify(c.body));
+  assert.equal(c.body.status, "deferred");
+  assert.equal(c.body.startAfter, t0 + 30 * DAY, "en erken tarih: pencerenin ilk taşıması + 30 gün");
+  assert.equal(index("REAL").G.status, "deferred");
+  assert.ok(db.has("deleted-account:G"), "misafir donuk");
+  assert.equal(stored("user:G:recipes").length, 3, "adımlar çalışmadı");
+  assert.deepEqual(ids("user:REAL:recipes"), ["d0", "d1", "d2", "shared", "t1"]);
+  // Pencere açılmadan başlamaz (biletsiz, başka cihaz).
+  __setGuestMergeClockForTests(() => t0 + 29 * DAY);
+  const early = await resume("REAL");
+  assert.equal(early.body.merges[0].status, "deferred");
+  assert.equal(stored("user:G:recipes").length, 3);
+  // Pencere açılınca kendiliğinden biter.
+  __setGuestMergeClockForTests(() => t0 + 30 * DAY + 1000);
+  const r = await resume("REAL");
+  assert.equal(r.body.merges[0].status, "done", JSON.stringify(r.body));
+  assert.deepEqual(ids("user:REAL:recipes"), ["d0", "d1", "d2", "g1", "g2", "shared", "t1"]);
+  assert.deepEqual(guestKeys("G"), []);
+  assert.equal(index("REAL").G.status, "done");
+});
+
+test("K1: ertelenmişler pencereye sayılmaz ama sırayla başlar; üst sınırda bağlanmaz, misafir donmaz, bilet geçerli kalır", async () => {
+  reset();
+  seedTarget("REAL");
+  const t0 = Date.now();
+  await fillWindow("REAL", t0);
+  const { GUEST_MERGE_DEFERRED_MAX } = await import("../api/_lib/guestMerge.js");
+  for (let i = 0; i < GUEST_MERGE_DEFERRED_MAX; i++) {
+    __setGuestMergeClockForTests(() => t0 + DAY + i * 1000);
+    db.set(`user:Q${i}:recipes`, JSON.stringify([recipe(`q${i}`)]));
+    assert.equal((await claim("REAL", (await createTicket(`Q${i}`)).body.ticket)).body.status, "deferred");
   }
-  for (let i = 0; i < GUEST_MERGE_LIMIT; i++) assert.equal((await claim("REAL", tickets[i])).body.status, "done");
-  const over = await claim("REAL", tickets[GUEST_MERGE_LIMIT]);
+  db.set("user:OVER:recipes", JSON.stringify([recipe("over")]));
+  const overTicket = (await createTicket("OVER")).body.ticket;
+  const over = await claim("REAL", overTicket);
   assert.equal(over.status, 429);
   assert.equal(over.body.code, "guest_merge_limit");
-  assert.equal(stored(`user:G${GUEST_MERGE_LIMIT}:recipes`).length, 1, "misafir verisi duruyor");
-  assert.equal(db.has(`deleted-account:G${GUEST_MERGE_LIMIT}`), false, "misafir dondurulmadı");
-  __setGuestMergeClockForTests(() => Date.now() + 31 * 24 * 3600 * 1000);
-  const later = await claim("REAL", tickets[GUEST_MERGE_LIMIT]);
-  assert.equal(later.body.status, "done", JSON.stringify(later.body));
+  assert.equal(db.has("deleted-account:OVER"), false);
+  assert.equal(index("REAL").OVER, undefined);
+  assert.ok(db.has(ticketKey(hashTicket(overTicket))), "bilet geçerli");
+  // Pencere açılınca yalnızca GUEST_MERGE_LIMIT kadarı, ERTELENME SIRASIYLA başlar.
+  __setGuestMergeClockForTests(() => t0 + 30 * DAY + 5000);
+  const r = await resume("REAL");
+  assert.equal(r.body.merges.filter((m) => m.status === "done").length, GUEST_MERGE_LIMIT);
+  const done = Object.entries(index("REAL")).filter(([g, e]) => g.startsWith("Q") && e.status === "done").map(([g]) => g).sort();
+  assert.deepEqual(done, ["Q0", "Q1", "Q2"]);
+  // Yer açıldı: aşan bilet artık sıraya girer.
+  assert.equal((await claim("REAL", overTicket)).body.status, "deferred");
+});
+
+test("K1: hedef silinince ertelenmiş misafirlerden de iz kalmaz", async () => {
+  reset();
+  seedTarget("REAL");
+  await fillWindow("REAL");
+  seedGuest("G");
+  const { ticket } = (await createTicket("G")).body;
+  assert.equal((await claim("REAL", ticket)).body.status, "deferred");
+  assert.equal((await invoke(account, { method: "DELETE", uid: "REAL" })).status, 200);
+  const left = [...db.keys()].filter((k) => !k.startsWith("deleted-account:") && !k.startsWith("rl:"));
+  assert.deepEqual(left, []);
+  assert.ok(firebaseDeleted.includes("G"));
+});
+
+// ---- K2: alışveriş listesi birleştirme ----
+
+test("K2: hedefin listesi doluyken misafir listesi birleştirilir (selected birleşim, hedef değerleri korunur); tekrar çalıştırmada aynı", async () => {
+  const { mergeShoppingLists } = await import("../api/_lib/guestMerge.js");
+  reset();
+  seedTarget("REAL");
+  db.set("user:REAL:shopping-list", JSON.stringify({ selected: ["t1"], checked: { a: true }, servings: { t1: 2 }, eski: "hedef" }));
+  seedGuest("G");
+  db.set("user:G:shopping-list", JSON.stringify({ selected: ["g1", "t1"], checked: { a: false, b: true }, servings: { t1: 5, g1: 3 }, eski: "misafir", yalnizMisafir: 1 }));
+  const c = await claim("REAL", (await createTicket("G")).body.ticket);
+  assert.equal(c.body.shoppingList, "merged");
+  const expected = { selected: ["t1", "g1"], checked: { a: true, b: true }, servings: { t1: 2, g1: 3 }, eski: "hedef", yalnizMisafir: 1 };
+  assert.deepEqual(stored("user:REAL:shopping-list"), expected);
+  const guestList = { selected: ["g1", "t1"], checked: { a: false, b: true }, servings: { t1: 5, g1: 3 }, eski: "misafir", yalnizMisafir: 1 };
+  assert.deepEqual(mergeShoppingLists(expected, guestList), expected, "idempotent");
+});
+
+test("K2: dağıtılan tek üyeli ailenin alışveriş listesi de hedefinkiyle birleşir (kaybolmaz)", async () => {
+  reset();
+  db.set("user:G:profile", JSON.stringify({ isPlus: true, families: ["F9"] }));
+  db.set("family:F9:meta", JSON.stringify({ name: "Tek", ownerUid: "G", inviteCode: "ZZZZZZZZZZ" }));
+  db.set("family:F9:members", JSON.stringify({ G: { name: "Misafir", joinedAt: 1 } }));
+  db.set("family:F9:recipes", JSON.stringify([recipe("f1")]));
+  db.set("family:F9:shopping-list", JSON.stringify({ selected: ["f1"] }));
+  seedFullTarget("REAL");
+  db.set("user:REAL:shopping-list", JSON.stringify({ selected: ["t1"] }));
+  const c = await claim("REAL", (await createTicket("G")).body.ticket);
+  assert.equal(c.body.families.F9.result, "dissolved_into_personal");
+  assert.equal(c.body.families.F9.shoppingList, "merged");
+  assert.deepEqual(stored("user:REAL:shopping-list").selected, ["t1", "f1"]);
+  assert.equal(db.has("family:F9:meta"), false);
+});
+
+// ---- K3: dondurma garanti ----
+
+test("K3: bağlamada dondurma yazımı düşse de resume ilk adımdan ÖNCE misafiri dondurur", async () => {
+  reset();
+  seedGuest("G");
+  seedTarget("REAL");
+  const { ticket } = (await createTicket("G")).body;
+  let failed = false;
+  setRedisFault((cmd) => {
+    if (!failed && cmd[0] === "SET" && cmd[1] === "deleted-account:G") return (failed = true);
+    return false;
+  });
+  const c = await claim("REAL", ticket);
+  setRedisFault(null);
+  assert.ok(failed && c.status >= 500, JSON.stringify(c.body));
+  assert.equal(db.has("deleted-account:G"), false);
+  assert.equal(index("REAL").G.status, "pending", "bağlama kaydı duruyor");
+  const { setRedisHook } = await import("./helpers/fakeServices.mjs");
+  let guestWrite = null;
+  setRedisHook(async (cmd) => {
+    if (guestWrite === null && cmd[0] === "EVAL" && cmd.includes("user:REAL:recipes")) {
+      setRedisHook(null);
+      guestWrite = await invoke(dataHandler, { method: "POST", uid: "G", anonymous: true, body: { bucket: "pantry-items", scope: "personal", value: JSON.stringify(["un", "şeker", "geç kalan"]), baseVersion: 1 } });
+    }
+  });
+  const r = await resume("REAL"); // biletsiz
+  setRedisHook(null);
+  assert.equal(guestWrite?.status, 401, "ilk adımdan önce misafir yazımı reddedilir");
+  assert.equal(r.body.merges[0].status, "done");
+  assertMergedOutcome();
+});
+
+test("Küçük: misafir profili okunamıyorsa taşıma 'blocked' kalır, misafir silinmez (aile öksüz kalmaz)", async () => {
+  reset();
+  seedGuest("G");
+  seedTarget("REAL");
+  db.set("user:G:profile", "{bozuk");
+  const c = await claim("REAL", (await createTicket("G")).body.ticket);
+  assert.equal(c.body.status, "blocked");
+  assert.equal(c.body.code, "guest_profile_unreadable");
+  assert.ok(db.has("user:G:recipes"), "misafir silinmedi");
+  assert.equal(firebaseDeleted.includes("G"), false);
+  assert.equal(index("REAL").G.status, "pending");
+  db.set("user:G:profile", JSON.stringify({ isPlus: false, families: [] }));
+  assert.equal((await resume("REAL")).body.merges[0].status, "done");
 });
 
 test("B1: misafir (anonim) hedefe taşıma yok; geçersiz/bilinmeyen bilet 400/404; kayıtlı hesap bilet üretemez", async () => {
@@ -395,7 +539,8 @@ test("B1 aile: hedef sınırda ve misafir tek üyeyse içerik hedefin kişisel l
   assert.equal(f.result, "dissolved_into_personal");
   assert.equal(f.recipes, 2);
   assert.equal(f.pantry, 1);
-  assert.equal(f.shoppingList, "not_copied_target_list_not_empty");
+  assert.equal(f.shoppingList, "merged");
+  assert.deepEqual(stored("user:REAL:shopping-list").selected, ["g1", "fam1"], "aile listesi kaybolmaz (K2)");
   const titles = stored("user:REAL:recipes").map((r) => r.title);
   for (const t of ["Tarif fam1", "aynı id farklı içerik", "Tarif t1"]) assert.ok(titles.includes(t), `${t} kaybolmaz`);
   assert.ok(stored("user:REAL:pantry-items").includes("pirinç"));

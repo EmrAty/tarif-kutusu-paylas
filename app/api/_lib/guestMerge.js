@@ -64,6 +64,8 @@ import {
 import { deleteAccount, isAccountDeleted, accountDeletedError, deletedMarkerKey } from "./accountDeletion.js";
 
 export const GUEST_MERGE_LIMIT = 3;
+// Sınırdayken bağlanıp sıraya alınan (ertelenmiş) taşımaların hedef başına üst sınırı.
+export const GUEST_MERGE_DEFERRED_MAX = 10;
 export const GUEST_MERGE_WINDOW_MS = 30 * 24 * 3600 * 1000;
 const DONE_TICKET_TTL = 30 * 24 * 3600;
 const HISTORY_KEEP_MS = 90 * 24 * 3600 * 1000;
@@ -158,19 +160,71 @@ export async function createTicket(guest) {
 // 2. Bağlama
 // ---------------------------------------------------------------------------
 
-// Hedefin dizinine bekleyen kaydı ekler (sınır kontrolü burada, atomik).
+// Dizin kaydı durumları: "pending" (başlatıldı; pencereye sayılır), "done"
+// (tamamlandı; pencereye sayılır), "deferred" (denetim K1: hedef sınırdayken
+// bağlandı, adımlar çalışmadı; pencereye SAYILMAZ, pencere açılınca sırayla
+// başlatılır). Pencereye sayılan an: startedAt (eski kayıtlarda boundAt).
+const startedAtOf = (e) => Number(e?.startedAt ?? e?.boundAt) || 0;
+const countsTowardWindow = (e, now) => !!e && (e.status === "pending" || e.status === "done") && startedAtOf(e) > now - GUEST_MERGE_WINDOW_MS;
+
+function limitError() {
+  return httpError(429, "guest_merge_limit", "Bu hesaba bekleyen çok fazla misafir taşıması var. Misafir verilerin silinmedi; daha sonra tekrar dene.");
+}
+
+// Hedefin dizinine kayıt ekler (sınır kontrolü burada, atomik). Pencere doluysa
+// kayıt "deferred" olur; ertelenmiş kayıt sayısı da doluysa bağlanmaz (429).
 async function reserveIndexEntry(targetUid, guestUid, ticketHash) {
   const now = clock();
   await updateIndex(targetUid, (index) => {
     const existing = index[guestUid];
     if (existing) return existing.ticketHash || !ticketHash ? undefined : { ...index, [guestUid]: { ...existing, ticketHash } };
-    const recent = Object.values(index).filter((e) => e && Number(e.boundAt) > now - GUEST_MERGE_WINDOW_MS).length;
-    if (recent >= GUEST_MERGE_LIMIT) {
-      throw httpError(429, "guest_merge_limit", "Bu hesaba son 30 günde çok fazla misafir verisi taşındı. Misafir verilerin silinmedi; daha sonra tekrar dene.");
-    }
     const pruned = Object.fromEntries(Object.entries(index).filter(([, e]) => !(e && e.status === "done" && Number(e.completedAt) < now - HISTORY_KEEP_MS)));
-    return { ...pruned, [guestUid]: { boundAt: now, status: "pending", ...(ticketHash ? { ticketHash } : {}) } };
+    const started = Object.values(pruned).filter((e) => countsTowardWindow(e, now)).length;
+    const deferredCount = Object.values(pruned).filter((e) => e && e.status === "deferred").length;
+    const hasQueue = deferredCount > 0; // sıra korunur: önce bekleyenler
+    let entry;
+    if (started < GUEST_MERGE_LIMIT && !hasQueue) entry = { boundAt: now, startedAt: now, status: "pending" };
+    else if (deferredCount < GUEST_MERGE_DEFERRED_MAX) entry = { boundAt: now, status: "deferred" };
+    else throw limitError();
+    return { ...pruned, [guestUid]: { ...entry, ...(ticketHash ? { ticketHash } : {}) } };
   });
+}
+
+// Ertelenmiş kaydı, pencere izin veriyorsa ve sırası geldiyse başlatır.
+// Dönüş: güncel dizin kaydı.
+async function promoteIfAllowed(targetUid, guestUid) {
+  const now = clock();
+  const { value } = await updateIndex(targetUid, (index) => {
+    const entry = index[guestUid];
+    if (!entry || entry.status !== "deferred") return undefined;
+    const started = Object.values(index).filter((e) => countsTowardWindow(e, now)).length;
+    if (started >= GUEST_MERGE_LIMIT) return undefined;
+    // Sıra: daha önce ertelenen başka bir kayıt varsa önce o başlar.
+    const earlier = Object.entries(index).some(([g, e]) => g !== guestUid && e && e.status === "deferred" && (Number(e.boundAt) < Number(entry.boundAt) || (Number(e.boundAt) === Number(entry.boundAt) && g < guestUid)));
+    if (earlier) return undefined;
+    return { ...index, [guestUid]: { ...entry, status: "pending", startedAt: now } };
+  });
+  return { entry: value[guestUid] || null, index: value };
+}
+
+// Ertelenmiş kaydın sıradaki yerine göre tahmini başlama zamanı.
+function deferredStartAfter(index, guestUid, now) {
+  const queue = Object.entries(index)
+    .filter(([, e]) => e && e.status === "deferred")
+    .sort(([ga, a], [gb, b]) => Number(a.boundAt) - Number(b.boundAt) || (ga < gb ? -1 : 1))
+    .map(([g]) => g);
+  const position = Math.max(0, queue.indexOf(guestUid));
+  const started = Object.values(index)
+    .filter((e) => countsTowardWindow(e, now))
+    .map(startedAtOf)
+    .sort((a, b) => a - b);
+  // Her pencere açıldığında bir sıradaki başlar: position. sıradaki, (position+1). boşluğu bekler.
+  const freeNow = Math.max(0, GUEST_MERGE_LIMIT - started.length);
+  if (position < freeNow) return now;
+  const k = started.length - GUEST_MERGE_LIMIT + (position - freeNow);
+  // Sıranın gerisindekiler için bilinen en erken an (önlerindekiler de pencereyi dolduracak).
+  if (k < started.length) return started[k] + GUEST_MERGE_WINDOW_MS;
+  return started.length ? started[started.length - 1] + GUEST_MERGE_WINDOW_MS : now;
 }
 
 async function dropIndexEntry(targetUid, guestUid) {
@@ -216,8 +270,13 @@ async function bindGuest({ guestUid, targetUid, ticketHash, fromIndex = false })
     await dropIndexEntry(targetUid, guestUid);
     throw httpError(409, "guest_already_merged", "Bu misafir verisi başka bir hesaba taşındı.");
   }
-  // Misafiri dondur (TTL'siz): artık misafir oturumu yazamaz. Temizlikteki hesap
-  // silme bu işareti 24 saatlik olağan işaretle değiştirir.
+  await ensureFrozen(guestUid, targetUid);
+}
+
+// Misafiri dondur (TTL'siz): artık misafir oturumu yazamaz. Temizlikteki hesap
+// silme bu işareti 24 saatlik olağan işaretle değiştirir. Denetim K3: bağlamadaki
+// yazım düşse bile her başlatma/sürdürmede (adımlardan ÖNCE) yeniden garanti edilir.
+async function ensureFrozen(guestUid, targetUid) {
   await redisSet(deletedMarkerKey(guestUid), String(clock()));
   await redisSet(legacyMergedKey(guestUid), targetUid);
 }
@@ -238,7 +297,7 @@ function assertMergeCapacity(bucket, nextRaw, previousRaw, nextCount, previousCo
   const limits = BUCKET_LIMITS[bucket];
   const nextBytes = byteSize(nextRaw);
   if (nextBytes > limits.maxBytes * MERGE_HEADROOM && nextBytes > byteSize(previousRaw)) throw capacityError();
-  if (limits.maxItems && nextCount > limits.maxItems * MERGE_HEADROOM && nextCount > previousCount) throw capacityError();
+  if (limits.maxItems && nextCount != null && nextCount > limits.maxItems * MERGE_HEADROOM && nextCount > previousCount) throw capacityError();
 }
 
 const recipeFingerprint = (r) => crypto.createHash("sha256").update(JSON.stringify(r)).digest("hex").slice(0, 8);
@@ -317,19 +376,41 @@ async function mergePantryInto(targetUid, incoming) {
   return added;
 }
 
-// "copied" | "kept_existing" | "none"
+// Alışveriş listesi birleştirme (denetim K2). selected = birleşim (önce hedefinkiler,
+// sonra yeni kimlikler); checked/servings: hedefin değerleri korunur, yalnızca
+// misafirde olan anahtarlar eklenir; bilinmeyen eski alanlarda çakışmada hedefinki
+// korunur, yalnızca misafirde olan alan eklenir. Saf ve idempotent.
+export function mergeShoppingLists(target, incoming) {
+  if (isEmptyShoppingList(incoming)) return target;
+  if (isEmptyShoppingList(target)) return incoming;
+  const out = { ...incoming, ...target };
+  const tSel = Array.isArray(target.selected) ? target.selected : [];
+  const iSel = Array.isArray(incoming.selected) ? incoming.selected : [];
+  if (Array.isArray(target.selected) || Array.isArray(incoming.selected)) {
+    const seen = new Set(tSel.map((x) => JSON.stringify(x)));
+    out.selected = [...tSel, ...iSel.filter((x) => !seen.has(JSON.stringify(x)) && seen.add(JSON.stringify(x)))];
+  }
+  for (const key of ["checked", "servings"]) {
+    const t = isPlainObject(target[key]) ? target[key] : null;
+    const i = isPlainObject(incoming[key]) ? incoming[key] : null;
+    if (t && i) out[key] = { ...i, ...t };
+  }
+  return out;
+}
+
+// "copied" | "merged" | "none"
 async function mergeShoppingInto(targetUid, incoming) {
+  const key = `user:${targetUid}:shopping-list`;
   if (isEmptyShoppingList(incoming)) return "none";
-  let result = "kept_existing";
-  await mutateBucket(`user:${targetUid}:shopping-list`, {
+  let result = "merged";
+  await mutateBucket(key, {
     parse: parseShopping,
     mutate: (current) => {
-      if (!isEmptyShoppingList(current)) {
-        result = "kept_existing";
-        return undefined;
-      }
-      result = "copied";
-      return incoming;
+      result = isEmptyShoppingList(current) ? "copied" : "merged";
+      const next = mergeShoppingLists(current, incoming);
+      if (JSON.stringify(next) === JSON.stringify(current)) return undefined;
+      assertMergeCapacity("shopping-list", JSON.stringify(next), current == null ? null : JSON.stringify(current), null, null);
+      return next;
     },
   });
   return result;
@@ -424,7 +505,7 @@ async function transferFamilyTargetFull(guestUid, targetUid, id) {
     recipes: r.added,
     skippedRecipes: r.skipped,
     pantry: pantryAdded,
-    shoppingList: shoppingResult === "kept_existing" ? "not_copied_target_list_not_empty" : shoppingResult,
+    shoppingList: shoppingResult,
   };
 }
 
@@ -472,8 +553,12 @@ async function runSteps(guestUid, targetUid) {
     await refresh();
   }
   if (!steps().families) {
+    // Profil okunamıyorsa aile üyelikleri bilinemez: adım tamamlanmaz, temizlik
+    // (misafiri silme) yapılmaz — misafir hiçbir ailede öksüz kalmasın.
     const guestProfile = await getProfile(guestUid).catch((e) => {
-      if (e.code === "profile_unreadable") return { families: [] };
+      if (e.code === "profile_unreadable") {
+        throw httpError(502, "guest_profile_unreadable", "Misafir hesabın aile bilgisi okunamadı; taşıma tamamlanmadı. Verilerin silinmedi.");
+      }
       throw e;
     });
     for (const id of guestProfile.families) {
@@ -515,9 +600,13 @@ async function runMerge(guestUid, targetUid) {
   try {
     let state;
     try {
+      const current = await readState(guestUid);
+      if (current && current.targetUid === targetUid && !(current.steps && current.steps.families)) {
+        await ensureFrozen(guestUid, targetUid);
+      }
       state = await runSteps(guestUid, targetUid);
     } catch (e) {
-      if (e.code === "guest_merge_capacity") {
+      if (e.code === "guest_merge_capacity" || e.code === "guest_profile_unreadable") {
         const s = await readState(guestUid).catch(() => null);
         return { status: "blocked", code: e.code, error: e.message, report: publicReport(s?.report) };
       }
@@ -541,6 +630,23 @@ async function runMerge(guestUid, targetUid) {
 // Uç noktaların kullandığı işlemler
 // ---------------------------------------------------------------------------
 
+// Bağlı taşımayı dizin durumuna göre başlatır ya da "deferred" döndürür.
+async function startOrDefer(guestUid, targetUid) {
+  let { entry, index } = await promoteIfAllowed(targetUid, guestUid);
+  if (!entry) {
+    index = parseIndex(await redisGet(indexKey(targetUid)));
+    entry = index[guestUid] || null;
+  }
+  if (entry && entry.status === "deferred") {
+    // Ertelenmişken de misafir donuk kalır (K3).
+    const state = await readState(guestUid);
+    if (state && state.targetUid === targetUid) await ensureFrozen(guestUid, targetUid);
+    return { status: "deferred", startAfter: deferredStartAfter(index, guestUid, clock()), report: publicReport(null) };
+  }
+  if (entry && entry.status === "done") return { status: "done", report: publicReport(entry.report) };
+  return runMerge(guestUid, targetUid);
+}
+
 function assertTarget(target) {
   if (target.isAnonymous) throw httpError(400, "target_is_guest", "Misafir verisi yalnızca kayıtlı bir hesaba taşınabilir.");
 }
@@ -556,7 +662,7 @@ export async function claimTicket({ ticket, target }) {
     return { status: "done", report: publicReport(record.report) };
   }
   await bindGuest({ guestUid: record.guestUid, targetUid: target.uid, ticketHash: hash });
-  return runMerge(record.guestUid, target.uid);
+  return startOrDefer(record.guestUid, target.uid);
 }
 
 // Eski yol: misafir ID token'ı ile (bilet yok).
@@ -572,7 +678,7 @@ export async function mergeGuestInto({ guest, targetUid, targetIsAnonymous = fal
     if (!state && (await isAccountDeleted(guest.uid))) throw httpError(409, "guest_already_merged", "Bu misafir verisi zaten taşındı.");
   }
   await bindGuest({ guestUid: guest.uid, targetUid, ticketHash: null });
-  return runMerge(guest.uid, targetUid);
+  return startOrDefer(guest.uid, targetUid);
 }
 
 // Hedef hesabın yarım kalan taşımalarını bitirir (her açılışta, her cihazda).
@@ -588,7 +694,10 @@ export async function resumeMerges(target) {
       await redisCommand(["DEL", stateKey(guestUid), ...bucketAuxKeys(stateKey(guestUid))]).catch(() => {});
     }
   }
-  const pending = Object.entries(index).filter(([, e]) => e && e.status !== "done");
+  const rank = (e) => (e.status === "deferred" ? 1 : 0);
+  const pending = Object.entries(index)
+    .filter(([, e]) => e && e.status !== "done")
+    .sort(([ga, a], [gb, b]) => rank(a) - rank(b) || Number(a.boundAt) - Number(b.boundAt) || (ga < gb ? -1 : 1));
   const results = [];
   for (const [guestUid, entry] of pending) {
     try {
@@ -601,7 +710,7 @@ export async function resumeMerges(target) {
         await dropIndexEntry(target.uid, guestUid);
         continue;
       }
-      results.push(await runMerge(guestUid, target.uid));
+      results.push(await startOrDefer(guestUid, target.uid));
     } catch (e) {
       if (e.code === "guest_already_merged") {
         await dropIndexEntry(target.uid, guestUid);

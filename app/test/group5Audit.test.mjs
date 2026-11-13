@@ -440,7 +440,7 @@ test("Misafir 1: misafirin tarifleri, kileri ve (boşsa) alışveriş listesi me
   assert.equal(db.has("user:GUEST:recipes"), false, "taşıma bitince misafir kopyası silinir");
 });
 
-test("Misafir 2: dolu alışveriş listesi ezilmez; Free sınırına bakılmaz (veri kaybı yok)", async () => {
+test("Misafir 2: dolu alışveriş listesi ezilmez (birleştirilir); Free sınırına bakılmaz (veri kaybı yok)", async () => {
   reset();
   db.set("user:REAL:profile", JSON.stringify({ isPlus: false, families: [] }));
   db.set("user:REAL:recipes", JSON.stringify(Array.from({ length: FREE_RECIPE_LIMIT }, (_, i) => recipe(`r${i}`))));
@@ -449,7 +449,8 @@ test("Misafir 2: dolu alışveriş listesi ezilmez; Free sınırına bakılmaz (
   db.set("user:GUEST:shopping-list", JSON.stringify({ items: ["süt"] }));
   const r = await merge("REAL", guestToken("GUEST"));
   assert.equal(r.status, 200);
-  assert.equal(r.body.shoppingList, "kept_existing");
+  // Grup 5 K2: listeler birleştirilir; bilinmeyen eski alanda çakışmada hedefinki korunur.
+  assert.equal(r.body.shoppingList, "merged");
   assert.deepEqual(readList("user:REAL:shopping-list"), { items: ["ekmek"] });
   assert.equal(readList("user:REAL:recipes").length, FREE_RECIPE_LIMIT + 1);
 });
