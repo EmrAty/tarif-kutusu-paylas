@@ -174,11 +174,15 @@ function guestMergeText(m, t) {
   if (m.status === "done") {
     let text = t("account.mergeDone", { recipes: m.recipes ?? 0, pantry: m.pantry ?? 0 });
     if (m.families > 0) text += ` ${t("guestMerge.doneFamilies", { count: m.families })}`;
-    if (m.shoppingKept) text += ` ${t("account.mergeShoppingKept")}`;
+    if (m.shoppingMerged) text += ` ${t("guestMerge.shoppingMerged")}`;
     if (m.skippedRecipes > 0) text += ` ${t("account.mergeSkipped", { count: m.skippedRecipes })}`;
     return text;
   }
-  if (m.status === "blocked") return t("guestMerge.blocked");
+  if (m.status === "deferred") {
+    const date = Number.isFinite(m.startAfter) ? new Date(m.startAfter).toLocaleDateString() : "";
+    return t("guestMerge.deferred", { date });
+  }
+  if (m.status === "blocked") return t(m.code === "guest_profile_unreadable" ? "guestMerge.profileUnreadable" : "guestMerge.blocked");
   if (m.status === "limit") return t("guestMerge.limit");
   if (m.code === "guest_already_merged") return t("guestMerge.alreadyMerged");
   return t("account.mergeFailedWith", { reason: m.error || t("account.mergeFailed") });
@@ -188,7 +192,7 @@ function GuestMergeBanner({ state, onRetry, onDismiss }) {
   const { t } = useLanguage();
   const busy = state.status === "merging";
   const canRetry = state.status === "failed" || state.status === "blocked";
-  const tone = state.status === "done" || busy ? COLORS.forest : COLORS.danger;
+  const tone = state.status === "done" || state.status === "deferred" || busy ? COLORS.forest : COLORS.danger;
   return (
     <div
       role="status"
@@ -7556,8 +7560,9 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal, guestM
     setSwitchPrompt({ ...prompt, busy: true });
     const guestUid = authUser.uid;
     const storage = safeLocalStorage();
+    let ticket;
     try {
-      const { ticket } = await guestMergeCall({ action: "createGuestMergeTicket" });
+      ({ ticket } = await guestMergeCall({ action: "createGuestMergeTicket" }));
       saveGuestMergeTicket(storage, { ticket, guestUid });
     } catch (e) {
       setSwitchPrompt(null);
@@ -7568,7 +7573,7 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal, guestM
       await prompt.signIn();
     } catch (e) {
       // Hâlâ aynı misafirsek hiçbir şey değişmedi: bilet gereksiz.
-      if (auth.currentUser?.uid === guestUid) clearGuestMergeTicket(storage);
+      if (auth.currentUser?.uid === guestUid) clearGuestMergeTicket(storage, ticket);
       setSwitchPrompt(null);
       setLinkError(mapAuthError(e.code, t) || e.message || t("account.linkFailed"));
       return;
@@ -7661,8 +7666,8 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal, guestM
                 <Loader2 size={14} className="animate-spin" /> {t("account.merging")}
               </span>
             )}
-            {merge.status === "done" && <span>{guestMergeText(merge, t)}</span>}
-            {merge.status !== "merging" && merge.status !== "done" && (
+            {(merge.status === "done" || merge.status === "deferred") && <span>{guestMergeText(merge, t)}</span>}
+            {merge.status !== "merging" && merge.status !== "done" && merge.status !== "deferred" && (
               <span style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px", color: COLORS.danger }}>
                 {guestMergeText(merge, t)}
                 <button

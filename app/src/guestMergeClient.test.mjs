@@ -87,3 +87,39 @@ test("bilet yokken de (başka cihaz) sunucudaki yarım taşıma sürdürülür v
   assert.equal(summarize([{ status: "blocked", code: "guest_merge_capacity", error: "sığmadı" }]).status, "blocked");
   assert.equal(summarize([]), null);
 });
+
+test("K1: bağlanmamış bilet dururken yeni geçiş onu ezmez; sync ikisini de sırayla talep eder, bağlananları siler", async () => {
+  const { loadTickets } = await import("./guestMergeClient.js");
+  const s = memoryStorage();
+  saveTicket(s, { ticket: "t1", guestUid: "G1" });
+  saveTicket(s, { ticket: "t2", guestUid: "G2" });
+  saveTicket(s, { ticket: "t2b", guestUid: "G2" }); // aynı misafirin yeni bileti eskisinin yerine
+  assert.deepEqual(loadTickets(s).map((t) => t.ticket), ["t1", "t2b"]);
+  const claimed = [];
+  const out = await syncGuestMerge({
+    user: { uid: "R" },
+    storage: s,
+    call: async (b) => {
+      if (b.action === "claimGuestMergeTicket") {
+        claimed.push(b.ticket);
+        if (b.ticket === "t1") return { status: "deferred", startAfter: 2000 };
+        throw err(undefined, "ağ");
+      }
+      return { merges: [{ status: "deferred", startAfter: 1000 }] };
+    },
+  });
+  assert.deepEqual(claimed, ["t1", "t2b"]);
+  assert.deepEqual(loadTickets(s).map((t) => t.ticket), ["t2b"], "ertelenmiş ama bağlanmış bilet silinir; geçici hatalı kalır");
+  assert.equal(out.status, "failed");
+  // Eski tek-nesne biçimi de okunur.
+  const old = memoryStorage();
+  old.map.set(TICKET_STORAGE_KEY, JSON.stringify({ ticket: "x", guestUid: "G" }));
+  assert.equal(loadTicket(old).ticket, "x");
+});
+
+test("K1/K2: özet ertelenmiş taşımanın en erken tarihini ve birleştirilen alışveriş listesini taşır", () => {
+  const d = summarize([{ status: "deferred", startAfter: 5000 }, { status: "deferred", startAfter: 3000 }]);
+  assert.deepEqual({ status: d.status, startAfter: d.startAfter }, { status: "deferred", startAfter: 3000 });
+  assert.equal(summarize([{ status: "done", shoppingList: "merged" }]).shoppingMerged, true);
+  assert.equal(summarize([{ status: "done", families: { F: { result: "dissolved_into_personal", shoppingList: "merged" } } }]).shoppingMerged, true);
+});
