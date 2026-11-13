@@ -95,7 +95,11 @@ export async function syncGuestMerge({ user, storage, call }) {
   if (!user || user.isAnonymous) return null;
   const results = [];
   for (const stored of loadTickets(storage)) {
-    if (stored.guestUid === user.uid) continue;
+    if (stored.guestUid === user.uid) {
+      // Misafir aynı uid ile hesaba bağlandı (linkWithCredential): taşınacak bir şey yok.
+      clearTicket(storage, stored.ticket);
+      continue;
+    }
     try {
       const res = await call({ action: "claimGuestMergeTicket", ticket: stored.ticket });
       // Sunucuda bağlandı: bundan sonra sunucu sürdürür, bilete gerek yok.

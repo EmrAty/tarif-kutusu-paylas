@@ -53,6 +53,7 @@ const RECIPE = { title: "Tenekede Tavuk", ingredients: [{ name: "tavuk", amount:
 
 let claudeMode = "ok"; // ok | 401 | parse | network | slow
 let claudeCalls = 0;
+let claudeGate = null; // { promise, open } — Claude yanıtını testin istediği ana kadar tutar
 let fcmMode = "ok"; // ok | fail
 let fcmMessages = [];
 
@@ -84,6 +85,7 @@ globalThis.fetch = async (input, init = {}) => {
     if (claudeMode === "401") return json(401, { error: { message: "invalid x-api-key" } });
     if (claudeMode === "network") throw new TypeError("fetch failed");
     if (claudeMode === "parse") return json(200, { stop_reason: "end_turn", content: [{ type: "text", text: "{bozuk" }] });
+    if (claudeGate) await claudeGate.promise;
     if (claudeMode === "slow") {
       // Sinyale uyan, hiç bitmeyen istek: zaman aşımı yolunu sınar.
       return new Promise((_, reject) => {
@@ -349,5 +351,59 @@ test(
     assert.equal(read("user:A:recipes").length, 1);
     assert.equal(claudeCalls, 1);
     assert.equal(fcmMessages.length, 1);
+  })
+);
+
+function makeGate() {
+  let open;
+  const promise = new Promise((r) => (open = r));
+  return { promise, open };
+}
+
+test(
+  "Misafir job sürerken başka bir hesaba taşınırsa (donuk) tarif atılmaz, taşındığı hesaba yazılır ve oraya bildirim gider",
+  quiet(async () => {
+    seed();
+    claudeGate = makeGate();
+    try {
+      const r = await post(body());
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      await waitFor(() => claudeCalls === 1, { message: "Claude çağrısı başlamalı" });
+      // Taşıma bağlandı: misafir (A) donuk, veri REAL'e gidiyor.
+      db.set("deleted-account:A", String(Date.now()));
+      db.set("guest-merge:moved:A", "REAL");
+      db.set("user:REAL:profile", JSON.stringify({ isPlus: false, families: [] }));
+      db.set("user:REAL:recipes", JSON.stringify([]));
+      db.set("user:REAL:pushTargets", { type: "hash", map: new Map([["device-R", JSON.stringify({ platform: "android", installationId: "install-device-R", updatedAt: 1 })]]) });
+      claudeGate.open();
+      await waitFor(() => fcmMessages.length === 1, { message: "bildirim gitmeli" });
+      const real = read("user:REAL:recipes");
+      assert.equal(real.length, 1);
+      assert.equal(real[0].title, "Tenekede Tavuk");
+      assert.deepEqual(read("user:A:recipes"), [], "donuk misafire yazılmadı");
+      assert.equal(fcmMessages[0].token, "device-R");
+      assert.equal(db.has(`job:A:${r.body.jobId}`), false, "misafirin job kaydı yeniden oluşmadı");
+    } finally {
+      claudeGate = null;
+    }
+  })
+);
+
+test(
+  "Silinen (taşınmayan) hesabın job'u tarif yazmaz",
+  quiet(async () => {
+    seed();
+    claudeGate = makeGate();
+    try {
+      const r = await post(body());
+      await waitFor(() => claudeCalls === 1, { message: "Claude çağrısı başlamalı" });
+      db.set("deleted-account:A", String(Date.now()));
+      claudeGate.open();
+      await waitFor(() => !db.has(`job:A:${r.body.jobId}`), { message: "job atılmalı" });
+      assert.deepEqual(read("user:A:recipes"), []);
+      assert.equal(fcmMessages.length, 0);
+    } finally {
+      claudeGate = null;
+    }
   })
 );

@@ -1,6 +1,6 @@
 import { requireUser, verifyIdToken } from "./_lib/auth.js";
 import { deleteAccount } from "./_lib/accountDeletion.js";
-import { createTicket, claimTicket, resumeMerges, mergeGuestInto } from "./_lib/guestMerge.js";
+import { createTicket, claimTicket, resumeMerges, mergeGuestInto, isGuestBound } from "./_lib/guestMerge.js";
 
 // DELETE /api/account — giriş yapmış kullanıcının KENDİ hesabını siler. uid
 // yalnızca doğrulanmış ID token'dan geliyor; istemciden hiçbir kimlik
@@ -75,6 +75,26 @@ export default async function handler(req, res) {
     }
     res.status(400).json({ error: "Geçersiz istek." });
     return;
+  }
+
+  // Taşıması süren (ya da sırada bekleyen) misafir kendi eski oturumundan
+  // silinemez: veri artık bağlandığı hesabın; silinirse taşınmadan kaybolurdu.
+  // O hesap silinince bu misafirin verisi de silinir (deleteMergedGuestsOf).
+  if (user.isAnonymous) {
+    let bound;
+    try {
+      bound = await isGuestBound(user.uid);
+    } catch (e) {
+      res.status(502).json({ error: "Hesap silinemedi. Lütfen tekrar dene.", code: "account_delete_failed" });
+      return;
+    }
+    if (bound) {
+      res.status(409).json({
+        error: "Bu misafir hesabının verileri giriş yaptığın hesaba taşınıyor. Silmek için o hesapla giriş yapıp oradan sil.",
+        code: "guest_merge_in_progress",
+      });
+      return;
+    }
   }
 
   try {

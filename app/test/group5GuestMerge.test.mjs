@@ -306,7 +306,8 @@ test("K1: sınırda claim misafiri kalıcı bağlar (deferred + donuk), adımlar
   assert.equal(index("REAL").G.status, "deferred");
   assert.ok(db.has("deleted-account:G"), "misafir donuk");
   assert.equal(stored("user:G:recipes").length, 3, "adımlar çalışmadı");
-  assert.deepEqual(ids("user:REAL:recipes"), ["d0", "d1", "d2", "shared", "t1"]);
+  const filled = Array.from({ length: GUEST_MERGE_LIMIT }, (_, i) => `d${i}`);
+  assert.deepEqual(ids("user:REAL:recipes"), [...filled, "shared", "t1"]);
   // Pencere açılmadan başlamaz (biletsiz, başka cihaz).
   __setGuestMergeClockForTests(() => t0 + 29 * DAY);
   const early = await resume("REAL");
@@ -316,7 +317,7 @@ test("K1: sınırda claim misafiri kalıcı bağlar (deferred + donuk), adımlar
   __setGuestMergeClockForTests(() => t0 + 30 * DAY + 1000);
   const r = await resume("REAL");
   assert.equal(r.body.merges[0].status, "done", JSON.stringify(r.body));
-  assert.deepEqual(ids("user:REAL:recipes"), ["d0", "d1", "d2", "g1", "g2", "shared", "t1"]);
+  assert.deepEqual(ids("user:REAL:recipes"), [...filled, "g1", "g2", "shared", "t1"]);
   assert.deepEqual(guestKeys("G"), []);
   assert.equal(index("REAL").G.status, "done");
 });
@@ -345,7 +346,7 @@ test("K1: ertelenmişler pencereye sayılmaz ama sırayla başlar; üst sınırd
   const r = await resume("REAL");
   assert.equal(r.body.merges.filter((m) => m.status === "done").length, GUEST_MERGE_LIMIT);
   const done = Object.entries(index("REAL")).filter(([g, e]) => g.startsWith("Q") && e.status === "done").map(([g]) => g).sort();
-  assert.deepEqual(done, ["Q0", "Q1", "Q2"]);
+  assert.deepEqual(done, Array.from({ length: GUEST_MERGE_LIMIT }, (_, i) => `Q${i}`).sort());
   // Yer açıldı: aşan bilet artık sıraya girer.
   assert.equal((await claim("REAL", overTicket)).body.status, "deferred");
 });
@@ -561,4 +562,81 @@ test("B1 eski yol: mergeGuest (guestToken) aynı dayanıklı motoru kullanır; t
   assert.equal(again.status, 200);
   assert.equal(again.body.status, "done");
   assert.equal((await invoke(account, { uid: "OTHER", body: { action: "mergeGuest", guestToken: tok } })).status, 409);
+});
+
+// ---- Telefon testi öncesi hazırlık (13 Kasım 2026) ----
+
+const lastSet = (key) => [...redisLog].reverse().find((c) => c[0] === "SET" && c[1] === key);
+
+test("Sınır 5: aynı hedefe 30 günde 5 farklı misafirin taşıması başlar, 6. sıraya girer; aynı misafirin tekrar talebi ikinci kez sayılmaz", async () => {
+  reset();
+  seedTarget("REAL");
+  assert.equal(GUEST_MERGE_LIMIT, 5);
+  const t0 = Date.now();
+  __setGuestMergeClockForTests(() => t0);
+  const tickets = [];
+  for (let i = 0; i < 5; i++) {
+    db.set(`user:S${i}:recipes`, JSON.stringify([recipe(`s${i}`)]));
+    tickets.push((await createTicket(`S${i}`)).body.ticket);
+    assert.equal((await claim("REAL", tickets[i])).body.status, "done", `S${i} hemen taşınır`);
+  }
+  // Aynı misafirin (aynı bilet) tekrar talebi: sonucu görür, pencereden yer yemez.
+  assert.equal((await claim("REAL", tickets[0])).body.status, "done");
+  db.set("user:S5:recipes", JSON.stringify([recipe("s5")]));
+  const sixth = await claim("REAL", (await createTicket("S5")).body.ticket);
+  assert.equal(sixth.body.status, "deferred");
+  assert.equal(sixth.body.startAfter, t0 + 30 * DAY);
+  assert.equal(stored("user:S5:recipes").length, 1, "sıradaki misafirin verisi yerinde");
+  // Başka bir hedef bu sınırdan etkilenmez (hedef başına kural).
+  seedTarget("OTHER");
+  db.set("user:S6:recipes", JSON.stringify([recipe("s6")]));
+  assert.equal((await claim("OTHER", (await createTicket("S6")).body.ticket)).body.status, "done");
+});
+
+test("Bağlı misafir kendi eski oturumundan hesabını silemez (409); bağlanmamış misafir silebilir; hedef silinince bağlı misafir de silinir", async () => {
+  reset();
+  seedTarget("REAL");
+  await fillWindow("REAL");
+  seedGuest("G");
+  assert.equal((await claim("REAL", (await createTicket("G")).body.ticket)).body.status, "deferred");
+  const del = await invoke(account, { method: "DELETE", uid: "G", anonymous: true });
+  assert.equal(del.status, 409, JSON.stringify(del.body));
+  assert.equal(del.body.code, "guest_merge_in_progress");
+  assert.equal(stored("user:G:recipes").length, 3, "taşınacak veri silinmedi");
+  assert.equal(firebaseDeleted.includes("G"), false);
+  // Bağlanmamış misafir (açık bileti olsa bile) silinebilir.
+  db.set("user:H:recipes", JSON.stringify([recipe("h1")]));
+  await createTicket("H");
+  assert.equal((await invoke(account, { method: "DELETE", uid: "H", anonymous: true })).status, 200);
+  assert.equal(db.has("user:H:recipes"), false);
+  // Hedef silinince bağlı misafirin verisi ve yönlendirmesi de gider.
+  assert.equal((await invoke(account, { method: "DELETE", uid: "REAL" })).status, 200);
+  assert.equal(db.has("user:G:recipes"), false);
+  assert.equal(db.has("guest-merge:moved:G"), false);
+  assert.ok(firebaseDeleted.includes("G"));
+});
+
+test("Temizlik yarıda kalırsa (Firebase silinemedi) misafir süresiz donuk kalır; sonraki açılış temizliği bitirir; yönlendirme 7 gün kalır, hedef silinince gider", async () => {
+  reset();
+  seedGuest();
+  seedTarget();
+  setRoutes([
+    ["https://oauth2.googleapis.com/token", () => json(200, { access_token: "x", expires_in: 3600 })],
+    ["https://identitytoolkit.googleapis.com/v1/projects/tarif-kutusu/accounts:delete", () => json(500, { error: { message: "INTERNAL" } })],
+  ]);
+  const c = await claim("REAL", (await createTicket("G")).body.ticket);
+  assert.equal(c.body.status, "done");
+  assert.equal(c.body.cleanupPending, true);
+  assert.deepEqual(ids("user:REAL:recipes"), ["g1", "g2", "shared", "t1"], "veri taşındı");
+  assert.ok(db.has("deleted-account:G"));
+  assert.ok(!lastSet("deleted-account:G").map(String).includes("EX"), "dondurma işareti süresiz (24 saatlik silme işareti geri alındı)");
+  assert.equal(db.get("guest-merge:moved:G"), "REAL");
+  okRoutes();
+  const r = await resume("REAL");
+  assert.equal(r.body.merges[0].status, "done", JSON.stringify(r.body));
+  assertMergedOutcome();
+  assert.equal(db.get("guest-merge:moved:G"), "REAL");
+  assert.ok(lastSet("guest-merge:moved:G").map(String).includes("EX"), "yönlendirme taşıma bitince süreli");
+  assert.equal((await invoke(account, { method: "DELETE", uid: "REAL" })).status, 200);
+  assert.equal(db.has("guest-merge:moved:G"), false);
 });

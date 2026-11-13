@@ -9,6 +9,7 @@ import { mutateBucket, parseListOrThrow, bucketAuxKeys } from "./_lib/versionedB
 import { checkBucketSize } from "./_lib/bucketLimits.js";
 import { assertFamilyMember, familyRecipesKey } from "./_lib/families.js";
 import { isAccountDeleted, accountDeletedError } from "./_lib/accountDeletion.js";
+import { mergeRedirectTarget, isGuestBound } from "./_lib/guestMerge.js";
 import { isTikTokLink, tiktokTranscript } from "./_lib/tiktok.js";
 import { parseSocialUrl, SUPPORTED_LINK_MESSAGE } from "./_lib/socialUrl.js";
 import { guardAiRequest, reserveAiBudget, sendGuardError, deferResponse } from "./_lib/aiGuard.js";
@@ -188,6 +189,23 @@ async function removeRecipeOfDeletedAccount(uid, recipeId, target) {
   }
 }
 
+// Tarifin yazılacağı hesap. Hesap silindiyse tarif yazılmaz (accountDeletedError).
+// Grup 5: misafir hesabı mevcut bir hesaba taşınırken dondurulur (aynı "silindi"
+// işareti); misafirken başlatılmış job'un tarifi o zaman atılmaz, verinin
+// taşındığı hesaba yazılır (guest-merge:moved:<misafir>).
+async function redirectTargetOf(uid) {
+  const moved = await mergeRedirectTarget(uid).catch(() => null);
+  if (!moved || (await isAccountDeleted(moved).catch(() => true))) return null;
+  return moved;
+}
+
+async function recipeOwnerFor(uid) {
+  if (!(await isAccountDeleted(uid))) return uid;
+  const moved = await redirectTargetOf(uid);
+  if (moved) return moved;
+  throw accountDeletedError();
+}
+
 // release: eşzamanlılık kirası (aiGuard). Job hangi yoldan biterse bitsin bırakılıyor.
 async function processRecipeJob({ release, ...job }) {
   try {
@@ -202,6 +220,7 @@ async function runRecipeJob({ uid, jobId, sourceUrl, caption, category, addedBy,
   const timings = {};
   let recipe = null;
   let transcriptMeta = null;
+  let ownerUid = uid;
 
   try {
     const deadline = getDeadline();
@@ -249,7 +268,8 @@ async function runRecipeJob({ uid, jobId, sourceUrl, caption, category, addedBy,
     logStep(jobId, "claude", timings.claude, { outputTokens: usage?.output_tokens, stopReason });
 
     // Job sürerken hesap silinmiş olabilir: silinen hesaba tarif yazılmıyor.
-    if (await isAccountDeleted(uid)) throw accountDeletedError();
+    // Misafir başka bir hesaba taşındıysa tarif o hesaba yazılıyor.
+    ownerUid = await recipeOwnerFor(uid);
 
     t = Date.now();
     const recipeId = genId();
@@ -266,8 +286,11 @@ async function runRecipeJob({ uid, jobId, sourceUrl, caption, category, addedBy,
     if (target.scope === "family") {
       // Job kuyruktayken Plus kapanmış ya da aileden çıkılmış olabilir: tekrar
       // doğrulanıyor. Başarısızsa job başarısız olur, kişisel listeye yazılmaz.
-      await assertFamilyMember(uid, target.familyId);
+      await assertFamilyMember(ownerUid, target.familyId);
       await addRecipeToList(familyRecipesKey(target.familyId), recipe);
+    } else if (ownerUid !== uid) {
+      // Taşınan misafirin tarifi: taşımadaki gibi Free sınırı uygulanmaz (üstü kilitli görünür).
+      await addRecipeToList(recipesKey(ownerUid), recipe);
     } else {
       const profile = await getProfile(uid);
       await addRecipeToList(recipesKey(uid), recipe, (list) => {
@@ -306,25 +329,49 @@ async function runRecipeJob({ uid, jobId, sourceUrl, caption, category, addedBy,
 
   // Kontrol ile kayıt arasında hesap silindiyse az önce yazılan tarif geri
   // alınıyor (silme bu anahtarları çoktan temizlemiş olabilir).
-  if (await isAccountDeleted(uid).catch(() => false)) {
-    await removeRecipeOfDeletedAccount(uid, recipe.id, target).catch(() => {});
-    await discardJobOfDeletedAccount(uid, jobId, lockKey);
-    return;
+  if (ownerUid === uid && (await isAccountDeleted(uid).catch(() => false))) {
+    const moved = await redirectTargetOf(uid);
+    if (moved) {
+      // Misafir tam bu arada taşımaya bağlandı: taşımanın tarif adımı bu tarifi
+      // görmemiş olabilir. Kişisel tarif hedefe de yazılır (id ile tekil; aynı
+      // içerik iki kez eklenmez). Aile tarifi ailenin listesinde kalır (aile devredilir).
+      try {
+        if (target.scope === "personal") await addRecipeToList(recipesKey(moved), recipe);
+        ownerUid = moved;
+        // Taşıma çoktan bittiyse misafir anahtarına az önce yazılan kopya kalmasın.
+        if (!(await isGuestBound(uid).catch(() => true))) await removeRecipeOfDeletedAccount(uid, recipe.id, target).catch(() => {});
+      } catch (e) {
+        logStep(jobId, "redirect-failed", 0, { error: e.message });
+      }
+    }
+    if (ownerUid === uid) {
+      await removeRecipeOfDeletedAccount(uid, recipe.id, target).catch(() => {});
+      await discardJobOfDeletedAccount(uid, jobId, lockKey);
+      return;
+    }
   }
 
-  // Tarif kaydedildi: buradan sonrası başarısız olsa bile job "failed" olmamalı.
-  await patchJob(uid, jobId, {
-    status: "completed",
-    recipeId: recipe.id,
-    recipeTitle: recipe.title,
-    completedAt: Date.now(),
-    timings,
-    transcriptMeta,
-  }).catch(() => {});
+  const redirected = ownerUid !== uid;
+  if (redirected) {
+    // Misafirin job kaydı taşıma temizliğiyle siliniyor; yeniden oluşturulmaz.
+    logStep(jobId, "redirected-to-merge-target", 0);
+    await redisDel(jobKey(uid, jobId)).catch(() => {});
+    await redisDel(lockKey).catch(() => {});
+  } else {
+    // Tarif kaydedildi: buradan sonrası başarısız olsa bile job "failed" olmamalı.
+    await patchJob(uid, jobId, {
+      status: "completed",
+      recipeId: recipe.id,
+      recipeTitle: recipe.title,
+      completedAt: Date.now(),
+      timings,
+      transcriptMeta,
+    }).catch(() => {});
+  }
 
   await waitForSharePanelToClose(startedAt);
   const t = Date.now();
-  const notify = await notifyUserDevices(uid, {
+  const notify = await notifyUserDevices(ownerUid, {
     title: "Tarifin hazır 🍝",
     body: recipe.title ? `${recipe.title} tarifin hazır.` : "Tarifin hazır.",
     // Aile tarifinde uygulama doğru listeyi tazeleyebilsin diye kapsam da
@@ -338,7 +385,7 @@ async function runRecipeJob({ uid, jobId, sourceUrl, caption, category, addedBy,
   timings.total = Date.now() - startedAt;
   logStep(jobId, "fcm", timings.fcm, { sent: notify.sent, attempted: notify.attempted });
   logStep(jobId, "done", timings.total);
-  await patchJob(uid, jobId, { timings, notify }).catch(() => {});
+  if (!redirected) await patchJob(uid, jobId, { timings, notify }).catch(() => {});
 }
 
 async function countDevices(uid) {

@@ -35,14 +35,22 @@
 //    id ile eklenir (hiçbiri kaybolmaz). Free sınırı UYGULANMAZ (ürün kararı:
 //    sınırın üstü kilitli görünür).
 //  - kiler: hedefte olmayan öğeler eklenir; alışveriş listesi: hedefte boşsa
-//    kopyalanır, doluysa dokunulmaz (iki listeyi birleştirmek öğeleri bozabilir).
+//    kopyalanır, doluysa birleştirilir (denetim K2, mergeShoppingLists).
 //  - kova tavanları (bucketLimits.js): taşıma, kullanıcının kendi verisi olduğu için
 //    tavanın 2 katına kadar büyütebilir; bunu da aşarsa taşıma "blocked" olur ve
 //    misafir verisi SİLİNMEZ (yer açılınca devam eder).
 //  - aile: misafirin üyeliği ve sahipliği hedefe devredilir (bkz. transferFamily).
-//  - kötüye kullanım: hedef hesap başına 30 günde en çok GUEST_MERGE_LIMIT taşıma
-//    bağlanır (ürün kararı bekliyor). Sınırda yeni bilet bağlanmaz; misafir verisi
-//    silinmez, bilet geçerli kalır, 429 guest_merge_limit döner.
+//  - kötüye kullanım: aynı hedef hesaba son 30 günde en çok GUEST_MERGE_LIMIT (5)
+//    farklı misafir hesabının taşıması BAŞLAR (ürün kararı, 13 Kasım 2026; kişisel
+//    tarif sınırından ayrı kural). Sınırdayken misafir yine bağlanır ve sıraya
+//    alınır ("deferred", denetim K1); sırada en çok GUEST_MERGE_DEFERRED_MAX kayıt
+//    durur, o da doluysa 429 guest_merge_limit döner (misafir bağlanmaz/donmaz,
+//    bilet geçerli kalır).
+//  - yönlendirme: bağlanan misafir için guest-merge:moved:<misafir> = hedef yazılır
+//    (taşıma bitince 7 gün kalır). Misafirken başlatılmış ve taşıma sırasında biten
+//    paylaşım job'u tarifini atmak yerine bu hedefe yazar (recipe-jobs.js).
+//  - misafirin kendi oturumuyla hesap silme, bağlıyken reddedilir (409
+//    guest_merge_in_progress): veri artık hedefin; hedef silinince o da silinir.
 import crypto from "node:crypto";
 import { redisGet, redisSet, redisSetNX, redisDel, redisCommand } from "./redis.js";
 import { mutateBucket, readBucket, parseListOrThrow, bucketAuxKeys } from "./versionedBucket.js";
@@ -63,13 +71,17 @@ import {
 } from "./families.js";
 import { deleteAccount, isAccountDeleted, accountDeletedError, deletedMarkerKey } from "./accountDeletion.js";
 
-export const GUEST_MERGE_LIMIT = 3;
+// Aynı hedefe 30 günde taşıması başlayabilen farklı misafir hesabı sayısı.
+// Değişirse src/i18n.jsx'teki guestMerge.limit / guestMerge.deferred metinleri de.
+export const GUEST_MERGE_LIMIT = 5;
 // Sınırdayken bağlanıp sıraya alınan (ertelenmiş) taşımaların hedef başına üst sınırı.
 export const GUEST_MERGE_DEFERRED_MAX = 10;
 export const GUEST_MERGE_WINDOW_MS = 30 * 24 * 3600 * 1000;
 const DONE_TICKET_TTL = 30 * 24 * 3600;
 const HISTORY_KEEP_MS = 90 * 24 * 3600 * 1000;
 const LOCK_TTL = 120;
+// Taşıma bittikten sonra yönlendirmenin kalma süresi (job'lar en çok 300 sn sürer).
+const MOVED_TTL_AFTER_DONE = 7 * 24 * 3600;
 // Taşıma, tavanın en çok bu katına kadar büyütebilir (kullanıcının kendi verisi).
 export const MERGE_HEADROOM = 2;
 
@@ -77,6 +89,7 @@ export const ticketKey = (hash) => `guest-merge:ticket:${hash}`;
 export const stateKey = (guestUid) => `guest-merge:state:${guestUid}`;
 export const indexKey = (targetUid) => `user:${targetUid}:guestMerges`;
 const lockKey = (guestUid) => `guest-merge:lock:${guestUid}`;
+export const movedKey = (guestUid) => `guest-merge:moved:${guestUid}`;
 // Grup 5 ilk sürümünün işareti; geri dönüş (rollback) uyumu için yazılmaya devam eder.
 const legacyMergedKey = (guestUid) => `user:${guestUid}:mergedInto`;
 
@@ -168,7 +181,7 @@ const startedAtOf = (e) => Number(e?.startedAt ?? e?.boundAt) || 0;
 const countsTowardWindow = (e, now) => !!e && (e.status === "pending" || e.status === "done") && startedAtOf(e) > now - GUEST_MERGE_WINDOW_MS;
 
 function limitError() {
-  return httpError(429, "guest_merge_limit", "Bu hesaba bekleyen çok fazla misafir taşıması var. Misafir verilerin silinmedi; daha sonra tekrar dene.");
+  return httpError(429, "guest_merge_limit", `Bu hesaba son 30 günde ${GUEST_MERGE_LIMIT} farklı misafir hesabının verisi taşındı ve taşıma sırası dolu. Misafir verilerin silinmedi; daha sonra tekrar dene.`);
 }
 
 // Hedefin dizinine kayıt ekler (sınır kontrolü burada, atomik). Pencere doluysa
@@ -279,6 +292,19 @@ async function bindGuest({ guestUid, targetUid, ticketHash, fromIndex = false })
 async function ensureFrozen(guestUid, targetUid) {
   await redisSet(deletedMarkerKey(guestUid), String(clock()));
   await redisSet(legacyMergedKey(guestUid), targetUid);
+  await redisSet(movedKey(guestUid), targetUid);
+}
+
+// Donmuş (taşınan) misafirin verisinin gittiği hedef; yoksa null.
+export async function mergeRedirectTarget(guestUid) {
+  const value = await redisGet(movedKey(guestUid));
+  return typeof value === "string" && value && value !== guestUid ? value : null;
+}
+
+// Misafir bir hedefe bağlı mı (taşıma sürüyor / sırada)? Okunamazsa fırlatır.
+export async function isGuestBound(guestUid) {
+  const state = await readState(guestUid);
+  return !!(state && state.targetUid);
 }
 
 // ---------------------------------------------------------------------------
@@ -577,7 +603,16 @@ async function runSteps(guestUid, targetUid) {
 async function cleanup(state) {
   const { guestUid, targetUid, ticketHash } = state;
   const report = publicReport(state.report);
-  await deleteAccount(guestUid, { keepGuestMergeState: true });
+  try {
+    await deleteAccount(guestUid, { keepGuestMergeState: true });
+  } catch (e) {
+    // Silme işareti 24 saatlik yazılmış olabilir; misafir silinemedikçe süresiz
+    // donuk kalsın (24 saat sonra eski oturum yeniden yazamasın).
+    await ensureFrozen(guestUid, targetUid).catch(() => {});
+    throw e;
+  }
+  // Yönlendirme kısa bir süre daha kalır: misafirken başlamış bir job hâlâ sürüyor olabilir.
+  await redisSet(movedKey(guestUid), targetUid, MOVED_TTL_AFTER_DONE);
   if (ticketHash) {
     await redisSet(ticketKey(ticketHash), JSON.stringify({ guestUid, targetUid, status: "done", report, completedAt: clock() }), DONE_TICKET_TTL);
   }
@@ -600,10 +635,11 @@ async function runMerge(guestUid, targetUid) {
   try {
     let state;
     try {
+      // Her başlatma/sürdürmede (temizliği yeniden denerken de) misafir donuk tutulur:
+      // temizlikteki hesap silme işareti 24 saatliktir; temizlik yarıda kalırsa
+      // misafirin dondurulması böylece süresiz kalır.
       const current = await readState(guestUid);
-      if (current && current.targetUid === targetUid && !(current.steps && current.steps.families)) {
-        await ensureFrozen(guestUid, targetUid);
-      }
+      if (current && current.targetUid === targetUid) await ensureFrozen(guestUid, targetUid);
       state = await runSteps(guestUid, targetUid);
     } catch (e) {
       if (e.code === "guest_merge_capacity" || e.code === "guest_profile_unreadable") {
@@ -743,7 +779,7 @@ export async function deleteMergedGuestsOf(targetUid) {
     if (state && state.targetUid && state.targetUid !== targetUid) continue;
     await deleteAccount(guestUid, { keepGuestMergeState: true });
     const hashes = [entry?.ticketHash, state?.ticketHash].filter(Boolean);
-    await redisCommand(["DEL", stateKey(guestUid), ...bucketAuxKeys(stateKey(guestUid)), lockKey(guestUid), ...hashes.map(ticketKey)]);
+    await redisCommand(["DEL", stateKey(guestUid), ...bucketAuxKeys(stateKey(guestUid)), lockKey(guestUid), movedKey(guestUid), ...hashes.map(ticketKey)]);
     guests.push(guestUid);
   }
   return guests;

@@ -36,7 +36,7 @@ test("misafir oturumunda (ya da bilet aynı misafire aitse) hiçbir istek atılm
   assert.equal(calls.length, 0);
   await syncGuestMerge({ user: { uid: "G", isAnonymous: false }, storage: s, call: async (b) => (calls.push(b), { merges: [] }) });
   assert.deepEqual(calls.map((c) => c.action), ["resumeGuestMerges"]);
-  assert.ok(loadTicket(s), "bilet durur");
+  assert.equal(loadTicket(s), null, "aynı uid ile bağlanan misafirin bileti silinir");
 });
 
 test("talep başarılı: bilet silinir, sonuç özetlenir; geçici hata: bilet kalır, sonraki açılışta yeniden denenir", async () => {
