@@ -8,6 +8,9 @@
 //    Eski kayıtlardaki güvensiz link istemcide de hiçbir zaman href olmaz.
 //  - id: boş olmayan metin (≤ 100) ya da sayı; yoksa 400.
 //  - boyut: tek tarifin JSON'u en çok MAX_RECIPE_CHARS; aşarsa 413.
+//  - tekrar eden id (Grup 5 B6): aynı listede iki kez geçen id 400 invalid_recipe.
+//    Eski kayıtta zaten tekrar varsa (o id önceki listede en az o kadar geçiyorsa)
+//    kullanıcı kilitlenmez.
 import { safeRecipeLink } from "../../shared/safeLink.js";
 
 // Claude'un çıkardığı gerçekçi büyük bir tarif ~6–7 bin karakter (bkz.
@@ -29,6 +32,18 @@ export function checkRecipeList(next, previous) {
   const before = new Map();
   for (const r of Array.isArray(previous) ? previous : []) {
     if (r && typeof r === "object" && r.id != null) before.set(r.id, JSON.stringify(r));
+  }
+  const countIds = (arr) => {
+    const m = new Map();
+    for (const r of arr) if (r && typeof r === "object" && r.id != null) m.set(r.id, (m.get(r.id) || 0) + 1);
+    return m;
+  };
+  const nextCounts = countIds(next);
+  let previousCounts = null;
+  for (const [id, n] of nextCounts) {
+    if (n < 2) continue;
+    previousCounts ||= countIds(Array.isArray(previous) ? previous : []);
+    if ((previousCounts.get(id) || 0) < n) throw httpError(400, "invalid_recipe", "Tarif kaydı geçersiz (aynı tarif iki kez).");
   }
   let sanitized = 0;
   const list = next.map((recipe) => {

@@ -5,6 +5,8 @@ import { getProfile, FREE_RECIPE_LIMIT, FREE_LIMIT_ERROR_CODE, FREE_LIMIT_MESSAG
 import { readBucket, compareAndSet, isValidBaseVersion } from "./_lib/versionedBucket.js";
 import { assertFamilyAccess } from "./_lib/families.js";
 import { checkRecipeList } from "./_lib/recipeInput.js";
+import { checkBucketShape, checkBucketSize, parseStored } from "./_lib/bucketLimits.js";
+import { checkDataWriteLimit, clientIp, sendGuardError } from "./_lib/aiGuard.js";
 
 const ALLOWED_BUCKETS = new Set(["recipes", "shopping-list", "pantry-items"]);
 
@@ -176,6 +178,14 @@ export default async function handler(req, res) {
       return;
     }
 
+    // Grup 5 (B3): hesap başına (misafirde ayrıca IP başına) yazım hız sınırı.
+    try {
+      await checkDataWriteLimit({ uid: user.uid, isAnonymous: !!user.isAnonymous, ip: clientIp(req) });
+    } catch (e) {
+      if (sendGuardError(res, e)) return;
+      throw e;
+    }
+
     const current = await readBucket(key);
     if (current.version !== baseVersion) {
       conflict(res, current);
@@ -184,6 +194,25 @@ export default async function handler(req, res) {
 
     const isPersonalRecipes = bucket === "recipes" && scope === "personal";
     const previous = bucket === "recipes" ? parseStoredList(current.raw) : null;
+
+    // Grup 5 (B3): biçim (kiler/alışveriş listesi) ve kova boyutu. Büyüten yazım
+    // sınırı aşamaz; sınırın üstündeki eski kova küçültülebilir.
+    try {
+      if (bucket !== "recipes") checkBucketShape(bucket, next, parseStored(current.raw));
+      checkBucketSize(
+        bucket,
+        value,
+        current.raw,
+        Array.isArray(next) ? next.length : null,
+        bucket === "shopping-list" ? null : (parseStoredList(current.raw) || []).length
+      );
+    } catch (e) {
+      if (e.code) {
+        res.status(e.status).json({ error: e.message, code: e.code });
+        return;
+      }
+      throw e;
+    }
 
     // Grup 5: yeni/değişen tariflerde link, kimlik ve boyut denetimi (kişisel ve aile).
     let raw = value;
@@ -208,7 +237,13 @@ export default async function handler(req, res) {
 
     if (isPersonalRecipes) {
       const profile = await getProfile(user.uid);
-      if (!profile.isPlus && next.length > FREE_RECIPE_LIMIT && next.length > previous.length) {
+      const previousIds = idsOf(previous);
+      const added = next.filter((r) => !previousIds.has(r.id));
+      // Grup 5 (B6): eskiden yalnızca liste UZADIĞINDA bakılıyordu; sınırın
+      // üstündeki hesap tek yazımda "bir sil + bir yeni ekle" (aynı uzunluk) ile
+      // yeni tarif ekleyebiliyordu. Artık sonuç sınırın üstündeyken önceki listede
+      // olmayan HER kimlik gerçek bir "geri al" olmalı.
+      if (!profile.isPlus && next.length > FREE_RECIPE_LIMIT && added.length > 0) {
         // Sınırın üstünde büyüme yalnızca GERÇEK bir "geri al" ise kabul edilir:
         //  - eklenen her tarif son 2 dakikada silinmiş olmalı ve içeriği silinen
         //    hâliyle birebir aynı olmalı (id'yi yeniden kullanıp yeni tarif eklenemez);
@@ -217,11 +252,10 @@ export default async function handler(req, res) {
         //    (fazla tarifler silinmez, kilitlenir) kendi tariflerini geri alabilir.
         // `previous`, karşılaştır-ve-yaz'ın beklediği sürümle aynı anın verisi:
         // kontrol ile yazım arasında liste değişirse yazım çakışmayla reddedilir.
-        const previousIds = idsOf(previous);
         const recent = readRecentlyRemoved(await redisGetJSON(recentlyRemovedKey(user.uid), null));
         const restorable = new Map(recent.items.map((x) => [x.id, x.h]));
-        const added = next.filter((r) => !previousIds.has(r.id));
-        const genuineUndo = added.every((r) => restorable.get(r.id) === recipeDigest(r)) && next.length <= recent.ceiling;
+        const genuineUndo =
+          added.every((r) => restorable.get(r.id) === recipeDigest(r)) && next.length <= Math.max(recent.ceiling, previous.length);
         if (!genuineUndo) {
           res.status(403).json({ error: FREE_LIMIT_MESSAGE, code: FREE_LIMIT_ERROR_CODE });
           return;

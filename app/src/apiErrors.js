@@ -36,6 +36,8 @@ export const SERVER_ERROR_KEYS = {
   recipe_not_found: "notify.recipeNotFound",
   recipe_too_large: "errors.recipeTooLarge",
   invalid_recipe: "errors.invalidRecipe",
+  bucket_too_large: "errors.bucketTooLarge",
+  invalid_bucket_value: "errors.invalidBucketValue",
 };
 
 export function serverErrorKey(code) {

@@ -6,6 +6,7 @@ import { getProfile, FREE_RECIPE_LIMIT, FREE_LIMIT_ERROR_CODE, FREE_LIMIT_MESSAG
 import { extractRecipeFromCaption } from "./_lib/extractRecipe.js";
 import { collectPushTargets, notifyUserDevices } from "./_lib/fcm.js";
 import { mutateBucket, parseListOrThrow, bucketAuxKeys } from "./_lib/versionedBucket.js";
+import { checkBucketSize } from "./_lib/bucketLimits.js";
 import { assertFamilyMember, familyRecipesKey } from "./_lib/families.js";
 import { isAccountDeleted, accountDeletedError } from "./_lib/accountDeletion.js";
 import { isTikTokLink, tiktokTranscript } from "./_lib/tiktok.js";
@@ -156,7 +157,10 @@ async function addRecipeToList(key, recipe, check) {
     mutate: (list) => {
       if (list.some((r) => r && r.id === recipe.id)) return undefined;
       if (check) check(list);
-      return [recipe, ...list];
+      const next = [recipe, ...list];
+      // Grup 5 (B3): /api/data ile aynı kova tavanı (büyüten yazım aşamaz).
+      checkBucketSize("recipes", JSON.stringify(next), JSON.stringify(list), next.length, list.length);
+      return next;
     },
   });
 }

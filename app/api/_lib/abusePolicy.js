@@ -63,6 +63,18 @@ export const ANON_IP_CAPTION_LIMITS = [
   { seconds: HOUR, limit: 400 },
 ];
 
+// Veri yazımı (/api/data POST, Grup 5 B3) — AI değil, depolama/istek seli koruması.
+// Normal kullanım: art arda işaretleme + çakışmada en çok 4 yeniden deneme; dakikada
+// 240 bunun çok üstünde. Misafirde ayrıca IP başına (CGNAT için geniş).
+export const DATA_WRITE_LIMITS = [
+  { seconds: MINUTE, user: 240, anon: 240 },
+  { seconds: HOUR, user: 4000, anon: 2000 },
+];
+export const ANON_IP_DATA_WRITE_LIMITS = [
+  { seconds: MINUTE, limit: 1200 },
+  { seconds: HOUR, limit: 20000 },
+];
+
 // Aynı anda süren pahalı AI işi (UID başına). "heavy" havuzu Yeni Tarif Çıkar ile
 // paylaşım job'larını birlikte sayar. ttlSeconds: fonksiyon öldürülse bile kira
 // bu süre sonunda kendiliğinden düşer (sonsuza kadar kilit kalmaz).

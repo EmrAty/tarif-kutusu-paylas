@@ -4,6 +4,8 @@ import {
   RATE_LIMITS,
   ANON_IP_LIMITS,
   ANON_IP_CAPTION_LIMITS,
+  DATA_WRITE_LIMITS,
+  ANON_IP_DATA_WRITE_LIMITS,
   CONCURRENCY,
   ACTION_POOL,
   GLOBAL_ACTIONS,
@@ -100,6 +102,21 @@ export async function checkRateLimit({ action, uid, isAnonymous, ip }, { now = c
     if (retryAfter != null) {
       throw new GuardError(429, GUARD_CODES.rateLimited, MESSAGES.rate_limited, retryAfter);
     }
+  } catch (e) {
+    if (e instanceof GuardError) throw e;
+    warnUnavailable(e);
+  }
+}
+
+// Veri yazımı hız sınırı (Grup 5 B3): aynı pencere altyapısı, ayrı anahtarlar.
+// Redis'e ulaşılamazsa GEÇİRİLİR (fail-open): yazımın kendisi zaten Redis'e
+// gidecek ve orada 502 alacak; koruma katmanı ayrıca bir arıza kaynağı olmasın.
+export async function checkDataWriteLimit({ uid, isAnonymous, ip }, { now = clock() } = {}) {
+  try {
+    const windows = DATA_WRITE_LIMITS.map((w) => ({ seconds: w.seconds, limit: isAnonymous ? w.anon : w.user }));
+    let retryAfter = await hitWindows(`rl:data-write:u:${uid}`, windows, now);
+    if (retryAfter == null && isAnonymous && ip) retryAfter = await hitWindows(`rl:data-write:ip:${hashId(ip)}`, ANON_IP_DATA_WRITE_LIMITS, now);
+    if (retryAfter != null) throw new GuardError(429, GUARD_CODES.rateLimited, MESSAGES.rate_limited, retryAfter);
   } catch (e) {
     if (e instanceof GuardError) throw e;
     warnUnavailable(e);

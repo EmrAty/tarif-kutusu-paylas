@@ -162,6 +162,8 @@ const translations = {
     "notify.recipeNotFound": "Bu tarif ailede bulunamadı.",
     "errors.recipeTooLarge": "Tarif çok büyük; kaydedilemedi.",
     "errors.invalidRecipe": "Tarif kaydı geçersiz; kaydedilemedi.",
+    "errors.bucketTooLarge": "Bu liste çok büyüdü; daha fazla eklenemiyor. Yer açmak için bir şeyler silebilirsin.",
+    "errors.invalidBucketValue": "Bu değişiklik kaydedilemedi (geçersiz veri).",
 
     // Sidebar (ana tarif listesi)
     "sidebar.searchPlaceholder": "Tarif ara…",
@@ -622,6 +624,8 @@ const translations = {
     "notify.recipeNotFound": "This recipe isn't in the family.",
     "errors.recipeTooLarge": "The recipe is too large to save.",
     "errors.invalidRecipe": "The recipe record is invalid and couldn't be saved.",
+    "errors.bucketTooLarge": "This list is too large; nothing more can be added. Delete something to make room.",
+    "errors.invalidBucketValue": "This change couldn't be saved (invalid data).",
 
     "sidebar.searchPlaceholder": "Search recipes…",
     "sidebar.clearSearch": "Clear search",
