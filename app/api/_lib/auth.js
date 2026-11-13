@@ -10,10 +10,6 @@ const JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken
 
 const JWKS = createRemoteJWKSet(new URL(JWKS_URL));
 
-// req.body üzerinden değil, Authorization header'ından okunuyor — bu yüzden bu
-// fonksiyon hem GET hem POST endpoint'lerinde aynı şekilde çalışabiliyor.
-// Silinmiş hesabın hâlâ geçerli (en fazla 1 saatlik) ID token'ı reddediliyor,
-// yoksa açık kalan bir cihaz silinen veriyi yeniden yazabilirdi.
 // Firebase ID token'ını doğrular; { uid, email, isAnonymous } ya da 401 hatası.
 // Grup 5: misafir verisi taşımada (POST /api/account) gövdedeki misafir token'ı
 // da aynı kuralla doğrulanır.
@@ -34,6 +30,10 @@ export async function verifyIdToken(token) {
   }
 }
 
+// requireUser: token req.body üzerinden değil, Authorization header'ından okunuyor —
+// bu yüzden hem GET hem POST endpoint'lerinde aynı şekilde çalışabiliyor.
+// Silinmiş hesabın hâlâ geçerli (en fazla 1 saatlik) ID token'ı reddediliyor,
+// yoksa açık kalan bir cihaz silinen veriyi yeniden yazabilirdi.
 export async function requireUser(req, { allowDeleted = false } = {}) {
   const header = req.headers.authorization || req.headers.Authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : "";

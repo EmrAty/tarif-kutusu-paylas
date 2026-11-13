@@ -62,6 +62,9 @@ export async function assertNotifyAllowed({ uid, familyId, recipeId }, now = clo
   if (results[0] == null) throw rateLimited(NOTIFY_LIMITS.sameRecipeSeconds);
   for (let i = 0; i < windows.length; i++) {
     if (Number(results[1 + i * 2]) > windows[i].limit) {
+      // Bu tarif aslında gönderilmedi: 10 dakikalık beklemesini bırak (sayaç
+      // penceresi açılınca hemen gönderilebilsin).
+      await redisPipeline([["DEL", sameKey]]).catch(() => {});
       throw rateLimited(Math.max(1, (windows[i].bucket + 1) * windows[i].seconds - sec));
     }
   }

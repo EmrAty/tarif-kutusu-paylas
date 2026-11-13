@@ -11,6 +11,7 @@
 //  2. Ana sayfa ve JS paketi açılıyor
 //  3. Yasal sayfalar (/privacy, /terms, /delete-account) 200
 //  4. API fonksiyonları ayakta: kimliksiz istek 401 (404/500 değil)
+//  5. Güvenlik başlıkları (vercel.json) yerinde
 // Bir kontrol bile düşerse çıkış kodu 1.
 //
 // Preview, Vercel Authentication ile korunuyor: anahtar --bypass-file (içinde
@@ -64,7 +65,7 @@ const mask = (s) => (bypass ? String(s).split(bypass).join("***") : String(s));
 async function get(path, { method = "GET" } = {}) {
   const res = await fetch(base + path, { method, headers, redirect: "manual", signal: AbortSignal.timeout(20_000) });
   const text = await res.text();
-  return { status: res.status, text, type: res.headers.get("content-type") || "" };
+  return { status: res.status, text, type: res.headers.get("content-type") || "", headers: res.headers };
 }
 
 const results = [];
@@ -105,6 +106,18 @@ await check("ana sayfa", async () => {
   bundlePath = (r.text.match(/src="(\/assets\/[^"]+\.js)"/) || [])[1];
   expect(bundlePath, "JS paketi bağlantısı bulunamadı");
   return bundlePath;
+});
+
+// Grup 5: vercel.json güvenlik başlıkları (Grup 5 öncesi derlemelerde yok).
+await check("güvenlik başlıkları", async () => {
+  const r = await get("/");
+  const h = (k) => r.headers.get(k) || "";
+  expect(h("x-content-type-options") === "nosniff", "X-Content-Type-Options yok");
+  expect(h("x-frame-options") === "DENY", "X-Frame-Options yok");
+  expect(h("content-security-policy").includes("object-src 'none'"), "CSP yok");
+  const api = await get("/api/profile");
+  expect((api.headers.get("cache-control") || "").includes("no-store"), "API yanıtı no-store değil");
+  return "nosniff, DENY, CSP (object/base/frame/form), API no-store";
 });
 
 await check("JS paketi", async () => {
