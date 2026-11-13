@@ -1,0 +1,55 @@
+# Grup 5: her push ve main'e açılan her PR'da lint + test + build.
+# Gizli anahtar KULLANMAZ: testler bellek içi Redis ve sahte Firebase/Anthropic/
+# OpenAI/FCM ile çalışır; tanımlanmamış her dış istek testi düşürür. Bu yüzden
+# fork'tan gelen PR'larda da güvenle çalışır ve hiçbir ücretli çağrı yapmaz.
+#
+# Production'a çıkış kuralı (bkz. RELEASE.md): main'e yalnızca bu iş YEŞİL olan
+# commit girer. GitHub'da main için "Require status checks: CI / check" kuralı
+# açıldığında bu zorunlu hâle gelir.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Vercel fonksiyonlarıyla aynı ana sürüm.
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Bağımlılıklar (kilit dosyasından birebir)
+        run: npm ci --no-audit --no-fund
+
+      - name: Lint (hook sırası, tanımsız değişken vb.)
+        run: npm run lint
+
+      - name: Testler
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: version.json commit içeriyor
+        run: node -e "const v=require('./dist/version.json'); if(!v.commit||!v.commit.startsWith(process.env.GITHUB_SHA)) { console.error(v); process.exit(1) } console.log(v)"
