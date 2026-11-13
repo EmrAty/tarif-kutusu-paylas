@@ -35,38 +35,64 @@ function rateLimited(retryAfter) {
   });
 }
 
-// Sınır aşılırsa 429 fırlatır. Aşılan istek de sayılır (dürtme seli uzamasın diye
-// pencere sonuna kadar kapalı kalır).
-export async function assertNotifyAllowed({ uid, familyId, recipeId }, now = clock()) {
-  const sec = Math.floor(now / 1000);
-  // Aynı tarif için kesin 10 dakikalık bekleme (SET NX EX); diğerleri sabit pencere.
-  const sameKey = `rl:notify:same:${hash(`${uid}|${familyId}|${recipeId}`)}`;
-  const windows = [
-    { key: `rl:notify:u:${uid}`, seconds: 3600, limit: NOTIFY_LIMITS.senderHourly },
-    { key: `rl:notify:u:${uid}`, seconds: 86400, limit: NOTIFY_LIMITS.senderDaily },
-    { key: `rl:notify:f:${familyId}`, seconds: 3600, limit: NOTIFY_LIMITS.familyHourly },
-  ].map((w) => {
-    const bucket = Math.floor(sec / w.seconds);
-    return { ...w, bucket, full: `${w.key}:${w.seconds}:${bucket}` };
-  });
+// Sınır aşılırsa 429 fırlatır. Sıra (Grup 5 denetimi B4):
+//  1) aynı-tarif beklemesi (SET NX EX) — reddedilirse HİÇBİR sayaç artmaz;
+//  2) gönderenin kendi saatlik/günlük sayaçları — aşan istek de sayılır (dürtme
+//     seli pencere sonuna kadar kapalı kalır), ama aile sayacına hiç dokunmaz;
+//  3) aile saatlik sayacı — yalnızca 1 ve 2'yi geçen, gerçekten gönderilecek
+//     istekte artar; aşılırsa geri alınır (DECR).
+// Böylece tek bir üye reddedilen isteklerle ailenin diğer üyelerini kilitleyemez.
+// 2 ya da 3'te reddedilen tarifin 10 dakikalık beklemesi bırakılır (gönderilmedi).
+const pipelineOrUnavailable = async (commands) => {
   let results;
   try {
-    results = await redisPipeline([
-      ["SET", sameKey, String(sec), "NX", "EX", String(NOTIFY_LIMITS.sameRecipeSeconds)],
-      ...windows.flatMap((w) => [["INCR", w.full], ["EXPIRE", w.full, String(w.seconds + 5)]]),
-    ]);
+    results = await redisPipeline(commands);
   } catch (e) {
     throw Object.assign(new Error("Bildirim şu an gönderilemiyor. Biraz sonra tekrar dene."), { status: 503 });
   }
   if (results.some((r) => r instanceof Error)) throw Object.assign(new Error("Bildirim şu an gönderilemiyor."), { status: 503 });
-  if (results[0] == null) throw rateLimited(NOTIFY_LIMITS.sameRecipeSeconds);
-  for (let i = 0; i < windows.length; i++) {
-    if (Number(results[1 + i * 2]) > windows[i].limit) {
-      // Bu tarif aslında gönderilmedi: 10 dakikalık beklemesini bırak (sayaç
-      // penceresi açılınca hemen gönderilebilsin).
-      await redisPipeline([["DEL", sameKey]]).catch(() => {});
-      throw rateLimited(Math.max(1, (windows[i].bucket + 1) * windows[i].seconds - sec));
+  return results;
+};
+
+export async function assertNotifyAllowed({ uid, familyId, recipeId }, now = clock()) {
+  const sec = Math.floor(now / 1000);
+  const sameKey = `rl:notify:same:${hash(`${uid}|${familyId}|${recipeId}`)}`;
+  const win = (key, seconds, limit) => {
+    const bucket = Math.floor(sec / seconds);
+    return { seconds, limit, bucket, full: `${key}:${seconds}:${bucket}` };
+  };
+  const senderWindows = [win(`rl:notify:u:${uid}`, 3600, NOTIFY_LIMITS.senderHourly), win(`rl:notify:u:${uid}`, 86400, NOTIFY_LIMITS.senderDaily)];
+  const familyWindow = win(`rl:notify:f:${familyId}`, 3600, NOTIFY_LIMITS.familyHourly);
+  const retryOf = (w) => Math.max(1, (w.bucket + 1) * w.seconds - sec);
+  const releaseSame = () => redisPipeline([["DEL", sameKey]]).catch(() => {});
+
+  const [same] = await pipelineOrUnavailable([["SET", sameKey, String(sec), "NX", "EX", String(NOTIFY_LIMITS.sameRecipeSeconds)]]);
+  if (same == null) throw rateLimited(NOTIFY_LIMITS.sameRecipeSeconds);
+
+  let senderResults;
+  try {
+    senderResults = await pipelineOrUnavailable(senderWindows.flatMap((w) => [["INCR", w.full], ["EXPIRE", w.full, String(w.seconds + 5)]]));
+  } catch (e) {
+    await releaseSame();
+    throw e;
+  }
+  for (let i = 0; i < senderWindows.length; i++) {
+    if (Number(senderResults[i * 2]) > senderWindows[i].limit) {
+      await releaseSame();
+      throw rateLimited(retryOf(senderWindows[i]));
     }
+  }
+
+  let familyResults;
+  try {
+    familyResults = await pipelineOrUnavailable([["INCR", familyWindow.full], ["EXPIRE", familyWindow.full, String(familyWindow.seconds + 5)]]);
+  } catch (e) {
+    await releaseSame();
+    throw e;
+  }
+  if (Number(familyResults[0]) > familyWindow.limit) {
+    await redisPipeline([["DECR", familyWindow.full], ["DEL", sameKey]]).catch(() => {});
+    throw rateLimited(retryOf(familyWindow));
   }
 }
 

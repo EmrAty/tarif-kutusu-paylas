@@ -14,8 +14,13 @@ export default async function handler(req, res) {
   }
 
   if (req.method === "GET") {
-    const profile = await getProfile(user.uid);
-    res.status(200).json(profile);
+    // Grup 5 (B5): bozuk profil (getProfile 502 profile_unreadable fırlatır) ya
+    // da Redis hatası yakalanmamış istisna olarak sızmasın; 502 + kod döner.
+    try {
+      res.status(200).json(await getProfile(user.uid));
+    } catch (e) {
+      res.status(e.status || 502).json({ error: e.status ? e.message : "Profil okunamadı.", ...(e.code ? { code: e.code } : {}) });
+    }
     return;
   }
 

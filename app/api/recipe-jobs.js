@@ -540,6 +540,6 @@ export default async function handler(req, res) {
     }
     res.status(405).json({ error: "Method not allowed" });
   } catch (e) {
-    res.status(e.status || 502).json({ error: e.message || "İstek tamamlanamadı." });
+    res.status(e.status || 502).json({ error: e.message || "İstek tamamlanamadı.", ...(e.code ? { code: e.code } : {}) });
   }
 }

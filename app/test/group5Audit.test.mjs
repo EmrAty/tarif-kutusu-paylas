@@ -203,9 +203,10 @@ test("Bildirim 4: aynı tarif art arda → 429 (Retry-After); farklı tarifler s
   assert.ok(Number(dup.headers["retry-after"]) > 0);
   const statuses = [];
   for (let i = 1; i < 15; i++) statuses.push((await send(`r${i}`)).status);
-  // r0 + dup + r1..r14: saatlik sayaç 10'da durur (dup da sayılır).
+  // r0 + r1..r14: saatlik sayaç 10'da durur. Aynı-tarif reddi (dup) artık
+  // hiçbir sayacı artırmaz (Grup 5 B4).
   const okCount = statuses.filter((s) => s === 200).length;
-  assert.equal(okCount + 1, NOTIFY_LIMITS.senderHourly - 1, JSON.stringify(statuses));
+  assert.equal(okCount + 1, NOTIFY_LIMITS.senderHourly, JSON.stringify(statuses));
   assert.ok(statuses.slice(-3).every((s) => s === 429));
   // Bir saat sonra yeniden açılır (aynı tarif beklemesi ayrı, 10 dk).
   __setNotifyClockForTests(() => Date.UTC(2026, 10, 13, 11, 0, 5));
