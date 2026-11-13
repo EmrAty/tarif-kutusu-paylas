@@ -114,3 +114,15 @@ Commit'ler (yalnızca `group-5-ci-release`): `a7f1339` (önceki çalışma ağac
 - Kova tavanları (2 MB / 200 KB / 100 KB / 500 öğe) ve taşımanın 2 kat payı — gözden geçirilmeli.
 - CSP `script-src` (Report-Only): **eklenmedi.** Rapor toplayacak uç yok (yalnızca tarayıcı konsoluna düşerdi), Firebase Auth popup'ı `apis.google.com` ve iframe kullanıyor; değeri düşük, yanlış ayarın Enforce'a dönüşmesi riskli. Rapor ucu kurulursa yeniden değerlendirilmeli.
 - `android:allowBackup` (native): dokunulmadı, açık iş.
+
+## 8. Fable denetimi üçüncü tur (K1–K3) — 13 Kasım 2026
+
+Commit'ler: `2eef55a` (sunucu), `59a99db` (istemci). `npm run check`: lint temiz, **419/419**, build temiz. §7'deki "sınırda bilet bağlanmaz" davranışı aşağıdaki K1 ile **değişti**.
+
+- **K1 — sınırda ertelenmiş bağlama.** 30 günlük pencere doluyken claim misafiri yine KALICI bağlar: dizinde `status:"deferred"` kaydı, durum kaydı hedefe bağlı, misafir donuk. Adımlar çalışmaz; yanıt `{status:"deferred", startAfter:<ms>}` döner ve bantta "sıraya alındı, en erken <tarih>" yazar. Pencere açılınca `resumeGuestMerges` (herhangi bir cihaz, biletsiz) ertelenmişleri **ertelenme sırasıyla** başlatır. Pencereye yalnızca başlatılmış/tamamlanmış taşımalar sayılır (`startedAt`; eski kayıtlarda `boundAt`). Hedef başına en çok **10** ertelenmiş kayıt (`GUEST_MERGE_DEFERRED_MAX`); aşılırsa 429 `guest_merge_limit` döner, misafir bağlanmaz/dondurulmaz, bilet geçerli kalır. Hedef silinince ertelenmiş misafirler de silinir. İstemci artık tek yuva yerine **bilet listesi** tutar (`tarif-kutusu:guest-merge-ticket`, eski tek-nesne biçimi de okunur); her bileti sırayla talep eder, sunucuda bağlananı siler.
+- **K2 — alışveriş listesi birleştirme.** Hedefin listesi doluysa liste artık atlanmaz, birleştirilir: `selected` birleşimi (önce hedefinkiler), `checked`/`servings` alanlarında hedefin değeri korunur, yalnızca misafirde olan anahtarlar eklenir; bilinmeyen eski alanlarda çakışmada hedefinki korunur. Dağıtılan tek üyeli ailenin listesi için de aynısı geçerli. İdempotent; tavan için mevcut "blocked" kuralı. Rapor değeri `"merged"` (`kept_existing` / `not_copied_target_list_not_empty` artık yok). Onay ve sonuç metinleri (TR/EN) güncellendi.
+- **K3 — dondurma garantisi.** `runMerge` (adımlardan önce, aile adımı bitmemişse) ve ertelenmiş kayıtlar için `startOrDefer`, `deleted-account:<misafir>` ve `user:<misafir>:mergedInto` işaretlerini idempotent olarak yeniden yazar.
+- **Okunamayan misafir profili:** aile adımı tamamlanmaz, taşıma `blocked` (`guest_profile_unreadable`) kalır, misafir silinmez (aile öksüz kalmaz); profil düzelince resume bitirir. Üyelikleri aile üye listelerini tarayarak bulmak seçilmedi: tüm aileleri taramayı gerektirir.
+- Yeni anahtar yok; `user:<hedef>:guestMerges` kayıtlarına `startedAt` alanı ve `"deferred"` durumu eklendi. Geri dönüşte eski sunucu `deferred` kaydı tanımaz: misafir donuk kalır, veri kaybolmaz, yeni sunucu geri gelince devam eder.
+- **Telefonda doğrulanacak (ek):** sıraya alınmış taşıma bandı ve tarih biçimi; iki misafir hesabından art arda geçiş.
+- **Ürün kararı (ek):** ertelenmiş üst sınırı 10.
