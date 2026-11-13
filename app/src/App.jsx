@@ -41,6 +41,7 @@ import { localizeRecipe, displayIngredient, contentFingerprint, localizeAmount }
 import { servingsUnitOf } from "../shared/portionEstimate.js";
 import { safeRecipeLink } from "../shared/safeLink.js";
 import { saveRecipeToTargets, extractionSignature } from "./saveTargets.js";
+import { saveTicket as saveGuestMergeTicket, clearTicket as clearGuestMergeTicket, syncGuestMerge } from "./guestMergeClient.js";
 import { useLanguage, LANGUAGES, translate } from "./i18n.jsx";
 
 // ShareReceiver/NativeSplash sadece Android tarafında yazılmış özel native plugin'ler
@@ -148,8 +149,87 @@ async function googleLink(user) {
   }
 }
 
-async function mergeGuestData(guestToken) {
-  return authedFetch("/api/account", { method: "POST", body: { action: "mergeGuest", guestToken } });
+// Grup 5 (B1): misafir -> hesap taşıması dayanıklı bilet akışıyla (bkz.
+// guestMergeClient.js, api/_lib/guestMerge.js). localStorage erişilemezse bile
+// (gizli mod) çağrılar çökmez: okuma boş döner, bilet yazımı ise fırlatır ve
+// hesaba geçilmez.
+const guestMergeCall = (body) => authedFetch("/api/account", { method: "POST", body });
+function safeLocalStorage() {
+  try {
+    return window.localStorage;
+  } catch (e) {
+    return {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error("storage_unavailable");
+      },
+      removeItem: () => {},
+    };
+  }
+}
+
+// Taşıma özetini (guestMergeClient.summarize) kullanıcının diline çevirir.
+function guestMergeText(m, t) {
+  if (m.status === "merging") return t("account.merging");
+  if (m.status === "done") {
+    let text = t("account.mergeDone", { recipes: m.recipes ?? 0, pantry: m.pantry ?? 0 });
+    if (m.families > 0) text += ` ${t("guestMerge.doneFamilies", { count: m.families })}`;
+    if (m.shoppingKept) text += ` ${t("account.mergeShoppingKept")}`;
+    if (m.skippedRecipes > 0) text += ` ${t("account.mergeSkipped", { count: m.skippedRecipes })}`;
+    return text;
+  }
+  if (m.status === "blocked") return t("guestMerge.blocked");
+  if (m.status === "limit") return t("guestMerge.limit");
+  if (m.code === "guest_already_merged") return t("guestMerge.alreadyMerged");
+  return t("account.mergeFailedWith", { reason: m.error || t("account.mergeFailed") });
+}
+
+function GuestMergeBanner({ state, onRetry, onDismiss }) {
+  const { t } = useLanguage();
+  const busy = state.status === "merging";
+  const canRetry = state.status === "failed" || state.status === "blocked";
+  const tone = state.status === "done" || busy ? COLORS.forest : COLORS.danger;
+  return (
+    <div
+      role="status"
+      style={{
+        width: "100%",
+        background: "#EFE9D8",
+        color: tone,
+        padding: "10px 16px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: "10px",
+        fontSize: "13px",
+        fontWeight: 600,
+        flexWrap: "wrap",
+        borderBottom: `1px solid ${COLORS.line}`,
+      }}
+    >
+      {busy && <Loader2 size={14} className="animate-spin" />}
+      <span>{guestMergeText(state, t)}</span>
+      {canRetry && (
+        <button
+          type="button"
+          onClick={() => onRetry()}
+          style={{ padding: "4px 10px", borderRadius: "8px", border: `1px solid ${COLORS.forest}`, background: COLORS.panel, color: COLORS.ink, fontWeight: 700, cursor: "pointer" }}
+        >
+          {t("common.retry")}
+        </button>
+      )}
+      {!busy && (
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label={t("guestMerge.dismiss")}
+          style={{ padding: "4px 8px", borderRadius: "8px", border: "none", background: "transparent", color: COLORS.inkSoft, cursor: "pointer", fontWeight: 700 }}
+        >
+          ✕
+        </button>
+      )}
+    </div>
+  );
 }
 
 export const COLORS = {
@@ -1404,6 +1484,50 @@ export default function TarifKutusu() {
   }, []);
   const loadRecipeBucket = refreshRecipeBucket;
 
+  // Grup 5 (B1): misafir -> hesap taşıması. Her açılışta ve oturum değişince
+  // (hangi cihaz olursa olsun): cihazda bilet varsa talep edilir, sunucudaki yarım
+  // taşımalar sürdürülür. Sonuç Hesabım dışında da (üst bant) görünür.
+  const [guestMerge, setGuestMerge] = useState(null); // { uid, status, recipes, ... } | null
+  const guestMergeRunRef = useRef(0);
+  const runGuestMergeSync = useCallback(async () => {
+    const user = auth.currentUser;
+    if (!user || user.isAnonymous) return null;
+    const run = ++guestMergeRunRef.current;
+    const summary = await syncGuestMerge({ user, storage: safeLocalStorage(), call: guestMergeCall }).catch(() => null);
+    if (run !== guestMergeRunRef.current || auth.currentUser?.uid !== user.uid) return null;
+    if (summary) setGuestMerge({ ...summary, uid: user.uid, dismissed: false });
+    if (summary && (summary.status === "done" || summary.status === "merging")) {
+      await Promise.all([
+        loadRecipeBucket(PERSONAL),
+        dataStore.refresh("shopping-list", PERSONAL),
+        dataStore.refresh("pantry-items", PERSONAL),
+        loadFamiliesState(),
+      ]).catch(() => {});
+    }
+    return summary;
+  }, [loadRecipeBucket, loadFamiliesState]);
+  const guestMergeUid = authChecked && authUser && !authUser.isAnonymous ? authUser.uid : null;
+  useEffect(() => {
+    if (!guestMergeUid) return undefined;
+    let cancelled = false;
+    let timer;
+    let attempts = 0;
+    const tick = async () => {
+      const summary = await runGuestMergeSync();
+      // Başka bir istek taşımayı yürütüyorsa (kilit) birkaç kez yeniden bakılır.
+      if (!cancelled && summary?.status === "merging" && attempts < 6) {
+        attempts++;
+        timer = setTimeout(tick, 4000 * attempts);
+      }
+    };
+    tick();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [guestMergeUid, runGuestMergeSync]);
+  const visibleGuestMerge = guestMerge && guestMerge.uid === guestMergeUid && !guestMerge.dismissed ? guestMerge : null;
+
   useEffect(() => {
     if (!Capacitor.isNativePlatform() || !authUser) return;
     let cancelled = false;
@@ -1998,6 +2122,13 @@ export default function TarifKutusu() {
     >
       {updateAvailable && !updateRequired && <UpdateBanner onUpdate={reloadApp} />}
       {updateRequired && <UpdateRequiredModal onReload={reloadApp} />}
+      {visibleGuestMerge && (
+        <GuestMergeBanner
+          state={visibleGuestMerge}
+          onRetry={runGuestMergeSync}
+          onDismiss={() => setGuestMerge((g) => (g ? { ...g, dismissed: true } : g))}
+        />
+      )}
       <Header view={view} onBack={closeActiveScreen} authUser={authUser} onSignOut={handleSignOut} onOpenMenu={() => setMenuOpen(true)} />
 
       <SideMenu
@@ -2289,13 +2420,8 @@ export default function TarifKutusu() {
             personName={personName}
             onSignOut={handleSignOut}
             onImportPersonal={() => loadRecipeBucket(PERSONAL)}
-            onGuestMerged={() =>
-              Promise.all([
-                loadRecipeBucket(PERSONAL),
-                dataStore.refresh("shopping-list", PERSONAL),
-                dataStore.refresh("pantry-items", PERSONAL),
-              ]).catch(() => {})
-            }
+            guestMerge={guestMerge && guestMerge.uid === guestMergeUid ? guestMerge : null}
+            onRetryMerge={runGuestMergeSync}
             onAccountDeleted={handleAccountDeleted}
           />
         </ModalSheet>
@@ -7403,7 +7529,7 @@ function PlusModal({ closing, onClose, isPlus, onToggleTest }) {
   );
 }
 
-function AccountView({ authUser, personName, onSignOut, onImportPersonal, onGuestMerged, onAccountDeleted }) {
+function AccountView({ authUser, personName, onSignOut, onImportPersonal, guestMerge, onRetryMerge, onAccountDeleted }) {
   const { t } = useLanguage();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [linking, setLinking] = useState(false);
@@ -7415,40 +7541,40 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal, onGues
   const [emailBusy, setEmailBusy] = useState(false);
   const [emailError, setEmailError] = useState("");
   // Grup 5: misafirden mevcut hesaba geçiş. switchPrompt: onay bekleyen geçiş
-  // ({ signIn }); merge: taşıma durumu ({ status, guestToken, result, error }).
+  // ({ signIn }). Taşıma durumu üst bileşenden gelir (guestMerge).
   const [switchPrompt, setSwitchPrompt] = useState(null);
-  const [merge, setMerge] = useState(null);
+  const merge = guestMerge;
 
-  const runMerge = async (guestToken) => {
-    setMerge({ status: "merging", guestToken });
-    try {
-      const result = await mergeGuestData(guestToken);
-      setMerge({ status: "done", result });
-      await onGuestMerged?.();
-    } catch (e) {
-      setMerge({ status: "failed", guestToken, error: e.message || t("account.mergeFailed") });
-    }
-  };
-
-  // Onaydan sonra: misafir token'ı ALINIR (hesap değişince alınamaz), hesaba
-  // geçilir, sonra veriler taşınır. Taşıma başarısızsa token ~1 saat geçerli;
-  // "Tekrar dene" aynı token'la yeniden ister (sunucu tekrarı güvenle karşılar).
+  // Onaydan sonra (B1, dayanıklı): 1) misafir oturumuyla sunucudan taşıma bileti
+  // alınır ve cihazda kalıcı depoya yazılır - yazılamazsa hesaba GEÇİLMEZ;
+  // 2) hesaba geçilir; 3) taşımayı uygulama genelindeki eşitleme yapar (oturum
+  // değişince bileti talep eder; uygulama kapansa da sonraki açılışta, başka
+  // cihazda da devam eder). Giriş başarısızsa misafir olarak kalınır.
   const confirmSwitch = async () => {
     const prompt = switchPrompt;
     if (!prompt) return;
     setSwitchPrompt({ ...prompt, busy: true });
-    let guestToken;
+    const guestUid = authUser.uid;
+    const storage = safeLocalStorage();
     try {
-      guestToken = await authUser.getIdToken(true);
+      const { ticket } = await guestMergeCall({ action: "createGuestMergeTicket" });
+      saveGuestMergeTicket(storage, { ticket, guestUid });
+    } catch (e) {
+      setSwitchPrompt(null);
+      setLinkError(t("account.mergeTicketFailed"));
+      return;
+    }
+    try {
       await prompt.signIn();
     } catch (e) {
+      // Hâlâ aynı misafirsek hiçbir şey değişmedi: bilet gereksiz.
+      if (auth.currentUser?.uid === guestUid) clearGuestMergeTicket(storage);
       setSwitchPrompt(null);
       setLinkError(mapAuthError(e.code, t) || e.message || t("account.linkFailed"));
       return;
     }
     setSwitchPrompt(null);
     setEmailMode(null);
-    await runMerge(guestToken);
   };
 
   const handleLinkGoogle = async () => {
@@ -7535,19 +7661,13 @@ function AccountView({ authUser, personName, onSignOut, onImportPersonal, onGues
                 <Loader2 size={14} className="animate-spin" /> {t("account.merging")}
               </span>
             )}
-            {merge.status === "done" && (
-              <span>
-                {t("account.mergeDone", { recipes: merge.result?.recipes ?? 0, pantry: merge.result?.pantry ?? 0 })}
-                {merge.result?.shoppingList === "kept_existing" && ` ${t("account.mergeShoppingKept")}`}
-                {merge.result?.skippedRecipes > 0 && ` ${t("account.mergeSkipped", { count: merge.result.skippedRecipes })}`}
-              </span>
-            )}
-            {merge.status === "failed" && (
+            {merge.status === "done" && <span>{guestMergeText(merge, t)}</span>}
+            {merge.status !== "merging" && merge.status !== "done" && (
               <span style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px", color: COLORS.danger }}>
-                {t("account.mergeFailedWith", { reason: merge.error })}
+                {guestMergeText(merge, t)}
                 <button
                   type="button"
-                  onClick={() => runMerge(merge.guestToken)}
+                  onClick={() => onRetryMerge?.()}
                   style={{ padding: "4px 10px", borderRadius: "8px", border: `1px solid ${COLORS.forest}`, background: COLORS.panel, color: COLORS.ink, fontWeight: 700, cursor: "pointer" }}
                 >
                   {t("common.retry")}
