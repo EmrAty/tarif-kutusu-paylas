@@ -2,7 +2,7 @@
 
 Branch `group-4-family`, Grup 3'ün son commit'i `d5e447f` üzerinden (Grup 3 henüz main'de değil; main `52e04fd`).
 Commit'ler: `3fee9bd` (ilk tur), `cc8c6bd` (Plus kilidi, "aile reisi", süresiz kod), ardından son üyenin ayrılması.
-Push / Preview / merge / deploy YOK. Production verisine dokunulmadı.
+Main'e merge ve production deploy YOK; dal Preview'da (test APK `preview.tarifkutusu.app`). Production verisine dokunulmadı.
 
 ## Ürün kararları (kullanıcı, 12 Kasım 2026)
 1. Plus kapanınca kullanıcı aileden ÇIKARILMAZ, sahiplik devredilmez; aile KİLİTLENİR. Plus açılınca her şey olduğu gibi geri gelir.
@@ -59,6 +59,31 @@ Push / Preview / merge / deploy YOK. Production verisine dokunulmadı.
 **"Aile reisi":** etiket sunucunun `isOwner` alanından (meta'daki GÜNCEL `ownerUid`) gelir; devirde yeni sahibe geçer, kurucuya sabit değildir. Görünüm: `Emre (aile reisi)`, kendi satırında ek olarak `· sen`. İlk turdaki kart başlığındaki "Sahip" rozeti ve satırdaki taç kaldırıldı (tekrar olmasın). EN: "(head of family)".
 
 **Arayüz (`FamilyCard`):** davet kodu (kopyala / sahipte "Yenile"), üye listesi (sahipte her üyede "⋯" → "Sahip yap" / "Çıkar"), altta "Aileden Ayrıl" ve sahipte "Aileyi Sil". Riskli her işlem satır içi onay ister. Hata kodları `src/apiErrors.js` ile TR/EN.
+
+## Aile durumunun canlı yenilenmesi (13 Kasım 2026)
+
+**Sorun (iki telefon testi):** üye çıkarma / sahiplik devri sunucuda doğru, ama diğer telefonda ekran yenilenene ya da çıkıp girilene kadar görünmüyordu.
+
+**Kök neden (yalnızca istemci):** `GET /api/families` yalnızca girişte, görünen ad değişince ve kullanıcının KENDİ aile/Plus işleminden sonra çağrılıyordu. Arka plandan dönüşte (`resume`) yalnızca tarif kovaları tazeleniyordu, aile bilgisi değil; zamanlayıcı yoktu; Aileler ekranı açılınca da istek atılmıyordu. Ayrıca istekler sırasızdı (geç gelen eski yanıt yenisini ezebilirdi) ve tamamen kaybedilen aileden kalan tarif/alışveriş/kiler kopyaları bellekte duruyordu. Sunucu tarafında değişiklik gerekmedi.
+
+**Çözüm (`src/familySync.js`, React'ten bağımsız):**
+- Yenileme anları: açılış, Aileler ekranı açılınca (hemen), uygulama arka plandan dönünce (web `visibilitychange` + Android `resume`), uygulama açıkken aralıklı — Aileler ekranı açıkken **10 sn**, diğer ekranlarda **20 sn**. Aralıklı yenileme yalnızca en az bir ailesi (tam / kilitli / doğrulanamayan) olan kullanıcıda ya da Aileler ekranı açıkken çalışır; uygulama görünür değilken hiç istek atılmaz; aynı anda tek arka plan isteği olur. Ailesi olmayan kullanıcıda Plus değişikliği dönüşte / Aileler açılınca gelir.
+- Tek istek (`GET /api/families`) üyelik, "aile reisi" (`isOwner`/`ownerUid`), yönetim yetkisi, davet kodu ve Plus/kilit durumunu birlikte getirir; hepsi aynı anda uygulanır. Arka plan isteği adı göndermez → sunucuda yazım yok (yalnızca okuma; test edildi). Görünen ad yalnızca değişince (ve ilk başarılı yüklemeye kadar) gönderilir.
+- Sıra: yalnızca en son başlatılan isteğin yanıtı uygulanır. Kendi aile/Plus işlemin (`runFamilyChange`) yoldaki istekleri geçersiz kılar ve bitene kadar arka plan yenilemesi yapılmaz; başarısız işlemden sonra da güncel durum alınır. Açılıştaki `/api/profile` Plus yanıtı, kendisi başladıktan sonra uygulanmış daha yeni bir Plus değerini geri almaz.
+- Hata / bozuk yanıt hiçbir şeyi değiştirmez (boş liste sayılmaz), son bilinen durum kalır.
+- İçerik değişmediyse state referansı korunur (gereksiz çizim ve kilitli kart özeti isteği yok).
+- Hesap değişince zamanlayıcı durur, yoldaki yanıtlar atılır, önceki hesabın aile listeleri ekrandan silinir. Ekran kapanınca dinleyiciler/zamanlayıcı effect temizliğiyle kaldırılır.
+
+**Ekrana yansıması (App.jsx):**
+- Çıkarılan / ailesi silinen kullanıcı: aile listelerden kalkar, o ailenin tarifleri listeden düşer, tarif/alışveriş/kiler kopyaları bellekten atılır (`dropScope`), Alışveriş Listesi / Elimde Bunlar Var o aileyi seçiliyse kişisel listeye döner, o ailenin tarifi açıksa (detay/pişirme/düzenleme) listeye dönülür.
+- Plus kapanınca aile kilitli karta geçer (mevcut kilit mantığı), açılınca tam veri yeniden yüklenir; kişisel tarif kilidi de aynı Plus değeriyle güncellenir.
+- Kaydedilmemiş düzenleme: Aileler ekranındaki yazılar (aile adı, davet kodu, onarım kodu) yerel state, yenileme dokunmaz. Açık bir onay ("çıkar / sahip yap / ayrıl / sil / kod yenile") ya da üye menüsü başka cihazdaki değişiklik yüzünden anlamını yitirirse (sahip, kilit ya da üye listesi değişti) onay kapanır ve "Aile bilgisi başka bir cihazda değişti…" notu çıkar — ör. "Ayrıl" onayı açıkken son diğer üye ayrılırsa düğme sessizce "Ayrıl ve Aileyi Sil"e dönüşmez. Kendi işlem sürerken bu kontrol beklemede. Yeni sahip seçimi, ayrılan üyeyi gösteriyorsa ilk geçerli üyeye döner.
+
+**Beklenen gecikme:** Aileler ekranı açıkken ≤ ~10 sn, diğer ekranlarda ≤ ~20 sn (+ istek süresi), arka plandan dönüşte ve Aileler ekranı açılınca hemen (~1 sn).
+
+**Maliyet:** ailesi olan, uygulaması ön planda bir kullanıcı için saatte ~180 (Aileler ekranında ~360) okuma isteği; her biri profil + aile başına meta/üye okuması, yazım yok.
+
+**Test:** `test/familySync.test.mjs` (13; sıra, eski yanıt, hata/bozuk yanıt, görünmezken istek yok, tek arka plan isteği, kendi işlem sırasında bekleme, ad senkronu, hesap değişince temizlik, zamanlayıcı aralıkları, Plus kilit geçişi) ve `test/familyLiveRefresh.test.mjs` (5; gerçek `api/families.js` ile iki cihaz: çıkarma, devir + reis + kod, Plus kapat/aç, arka plan yenilemesinin yazım yapmaması, hata durumu). `npm test` 334/334, `vite build` temiz. Gerçek iki telefon doğrulaması yapılmadı. Native değişiklik yok → yeni APK gerekmez.
 
 ## Salt okunur denetim
 `app/scripts/audit-group3-readonly.mjs` ek sayımlar: `orphanOwner`, `noMembers`, `legacyInviteCodes`, `storedMemberEmails` (yalnızca sayı / aile kimliği).

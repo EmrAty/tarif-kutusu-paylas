@@ -32,6 +32,7 @@ import { MAX_IMAGES, validateImageBatch } from "../shared/imageLimits.js";
 import { compressImageFile } from "./imageCompress.js";
 import { FREE_RECIPE_LIMIT, FREE_LIMIT_ERROR_CODE } from "../shared/limits.js";
 import { lockedRecipeIds } from "./recipeLocks.js";
+import { createFamilySync, sameData, FAMILY_POLL_MS, FAMILY_POLL_OPEN_MS } from "./familySync.js";
 import { createBucketStore, createDataTransport, parseBucketValue, BUCKET_STATUS, NOT_LOADED, CONFLICT_EXHAUSTED } from "./syncedBuckets.js";
 import { appUpdateGate, clientOutdatedError, reloadForUpdate, reloadDidNotHelp, CLIENT_OUTDATED } from "./updateRequired.js";
 import { serverErrorKey, readErrorBody, classifyErrorResponse } from "./apiErrors.js";
@@ -986,6 +987,18 @@ export default function TarifKutusu() {
     [plusStatusKey]
   );
 
+  // Plus bilgisi iki kaynaktan gelir (açılıştaki /api/profile ve her aile
+  // yenilemesi). Açılıştaki istek, kendisi başladıktan SONRA uygulanmış daha
+  // yeni bir değeri geri almasın diye her uygulama bir sayaç artırır.
+  const plusEpochRef = useRef(0);
+  const applyPlusStatus = useCallback(
+    (value) => {
+      plusEpochRef.current++;
+      rememberPlusStatus(value);
+    },
+    [rememberPlusStatus]
+  );
+
   useEffect(() => {
     if (!plusStatusKey) {
       setPlusStatus(null);
@@ -994,9 +1007,10 @@ export default function TarifKutusu() {
     const cached = storageGet(plusStatusKey)?.value;
     setPlusStatus(cached === "1" ? true : cached === "0" ? false : null);
     let cancelled = false;
+    const epoch = plusEpochRef.current;
     authedFetch("/api/profile")
       .then((data) => {
-        if (!cancelled) rememberPlusStatus(!!data.isPlus);
+        if (!cancelled && epoch === plusEpochRef.current) applyPlusStatus(!!data.isPlus);
       })
       .catch(() => {
         // alınamazsa son bilinen değer kullanılmaya devam eder
@@ -1004,33 +1018,119 @@ export default function TarifKutusu() {
     return () => {
       cancelled = true;
     };
-  }, [plusStatusKey, rememberPlusStatus]);
+  }, [plusStatusKey, applyPlusStatus]);
+
+  // Aile durumu (üyelik, aile reisi, yönetim yetkisi, davet kodu, Plus/kilit)
+  // canlı yenilenir: açılışta, Aileler ekranı açılınca, uygulama arka plandan
+  // dönünce ve uygulama açıkken aralıklarla (bkz. src/familySync.js). Sıra
+  // korumalı: geç gelen eski yanıt yeni durumu geri almaz; hata boş liste
+  // sayılmaz. İçerik değişmediyse state referansı korunur.
+  const applyFamiliesRef = useRef(null);
+  applyFamiliesRef.current = (split) => {
+    setIsPlus(split.isPlus);
+    applyPlusStatus(split.isPlus);
+    // Üyeliği sunucuda doğrulanamayan aile (profilde var, üye listesinde yok)
+    // veri yüklemeye ve hedef listelerine girmez; yalnızca Aileler ekranında
+    // "tekrar katıl / ayrıl" kartı olarak görünür.
+    setFamilies((prev) => (sameData(prev, split.families) ? prev : split.families));
+    setLockedFamilies((prev) => (sameData(prev, split.locked) ? prev : split.locked));
+    setUnverifiedFamilies((prev) => (sameData(prev, split.unverified) ? prev : split.unverified));
+  };
+  const familySyncRef = useRef(null);
+  if (!familySyncRef.current) {
+    familySyncRef.current = createFamilySync({
+      request: (name) => fetchFamilies(name),
+      apply: (split) => applyFamiliesRef.current(split),
+      isVisible: () => typeof document === "undefined" || document.visibilityState !== "hidden",
+    });
+  }
+  const familySync = familySyncRef.current;
+  const personNameRef = useRef(personName);
+  personNameRef.current = personName;
 
   const loadFamiliesState = useCallback(async () => {
-    try {
-      const data = await fetchFamilies(personName);
-      setIsPlus(!!data.isPlus);
-      rememberPlusStatus(!!data.isPlus);
-      // Üyeliği sunucuda doğrulanamayan aile (profilde var, üye listesinde yok)
-      // veri yüklemeye ve hedef listelerine girmez; yalnızca Aileler ekranında
-      // "tekrar katıl / ayrıl" kartı olarak görünür.
-      const all = Array.isArray(data.families) ? data.families : [];
-      // membership alanı olmayan yanıt (eski sunucu) tam üyelik sayılır.
-      const usable = (f) => !f.membership || f.membership === "verified";
-      const locked = (f) => f.membership === "locked";
-      setFamilies(all.filter(usable));
-      setLockedFamilies(all.filter(locked));
-      setUnverifiedFamilies(all.filter((f) => !usable(f) && !locked(f)));
-    } catch (e) {
-      // bilgi alınamazsa sessizce geç, bir sonraki denemede tekrar bakılır
-    } finally {
-      setFamiliesLoaded(true);
-    }
-  }, [personName, rememberPlusStatus]);
+    const result = await familySync.load({ name: personNameRef.current });
+    // Daha yeni bir istek yoldaysa "yüklendi" kararını o verir.
+    if (result.status !== "stale" && result.status !== "skipped") setFamiliesLoaded(true);
+    return result;
+  }, [familySync]);
 
+  // Kullanıcının kendi aile / Plus işlemi: yoldaki yenilemeler geçersiz olur,
+  // işlem sürerken arka plan yenilemesi yapılmaz, bitince güncel durum alınır.
+  const runFamilyChange = useCallback(
+    async (action) => {
+      const end = familySync.beginChange();
+      try {
+        return await action();
+      } catch (e) {
+        // Sunucu reddettiyse (ör. sahiplik bu arada devredildi) ekrandaki
+        // bilgi muhtemelen eski: işlem bitince güncel durum alınır.
+        end();
+        loadFamiliesState();
+        throw e;
+      } finally {
+        end();
+      }
+    },
+    [familySync, loadFamiliesState]
+  );
+
+  // Hesap değişince önceki hesabın aile durumu ekrandan kalkar, zamanlayıcı
+  // durur, yoldaki yanıtlar atılır. (Aşağıdaki yükleme effect'inden ÖNCE.)
+  const familyAccountUid = authUser ? authUser.uid : null;
   useEffect(() => {
-    if (authUser) loadFamiliesState();
-  }, [authUser, loadFamiliesState]);
+    familySync.setAccount(familyAccountUid);
+    setFamilies([]);
+    setLockedFamilies([]);
+    setUnverifiedFamilies([]);
+    setLockedSummaries({});
+    setIsPlus(false);
+    setFamiliesLoaded(false);
+    return () => familySync.setAccount(null);
+  }, [familyAccountUid, familySync]);
+
+  // Açılışta ve görünen ad değişince (ad sunucudaki üye kaydına da yazılır).
+  useEffect(() => {
+    if (familyAccountUid) loadFamiliesState();
+  }, [familyAccountUid, personName, loadFamiliesState]);
+
+  const familiesModalOpen = modalView === "families";
+  const hasAnyFamily = families.length + lockedFamilies.length + unverifiedFamilies.length > 0;
+
+  // Aileler ekranı açılınca hemen güncel bilgi.
+  useEffect(() => {
+    if (familiesModalOpen && familyAccountUid) loadFamiliesState();
+  }, [familiesModalOpen, familyAccountUid, loadFamiliesState]);
+
+  // Uygulama açıkken aralıklı yenileme (yalnızca ailesi olan kullanıcıda ya
+  // da Aileler ekranı açıkken; uygulama görünür değilken istek atılmaz).
+  useEffect(() => {
+    if (!familyAccountUid) return undefined;
+    familySync.setPolling(familiesModalOpen ? FAMILY_POLL_OPEN_MS : hasAnyFamily ? FAMILY_POLL_MS : 0);
+    return () => familySync.stopPolling();
+  }, [familyAccountUid, familiesModalOpen, hasAnyFamily, familySync]);
+
+  // Arka plandan dönüş: web'de görünürlük, Android'de ayrıca "resume".
+  useEffect(() => {
+    if (!familyAccountUid) return undefined;
+    const refresh = () => familySync.load({ background: true }).then((r) => {
+      if (r.status === "applied" || r.status === "error") setFamiliesLoaded(true);
+    });
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    let cancelled = false;
+    let handle = null;
+    if (Capacitor.isNativePlatform()) {
+      CapacitorApp.addListener("resume", refresh).then((h) => (cancelled ? h.remove() : (handle = h)));
+    }
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisible);
+      if (handle) handle.remove();
+    };
+  }, [familyAccountUid, familySync]);
 
   useEffect(() => {
     // Bildirimler (tarif hazır/başarısız, aile "canı çekti") yalnızca Android
@@ -1326,6 +1426,19 @@ export default function TarifKutusu() {
     if (!familiesLoaded) return;
     families.forEach((f) => dataStore.ensureLoaded("recipes", f.id));
   }, [familiesLoaded, families]);
+
+  // Erişimi biten aile (üyelikten çıkarıldı, aile silindi, kilitlendi ya da
+  // üyelik doğrulanamıyor): o ailenin tarif / alışveriş / kiler verisi
+  // bellekten atılır; yalnızca sunucunun yeni yanıtıyla olur (hata listeyi
+  // boşaltmaz). Erişim geri gelirse yukarıdaki effect yeniden yükler.
+  const prevFamilyIdsRef = useRef([]);
+  useEffect(() => {
+    const ids = families.map((f) => f.id);
+    prevFamilyIdsRef.current.forEach((id) => {
+      if (!ids.includes(id)) dataStore.dropScope(id);
+    });
+    prevFamilyIdsRef.current = ids;
+  }, [families]);
 
   // Kilitli aileler (Plus kapalı): bellekteki tam veri atılır, yalnızca kart
   // özeti istenir. Sunucu da tam veriyi zaten vermez (403 family_locked).
@@ -1715,11 +1828,17 @@ export default function TarifKutusu() {
   const active = activeCandidate && !isRecipeLocked(activeCandidate) ? activeCandidate : undefined;
 
   // Tarif açıkken kilitlenirse (ör. Plus kapandı) boş ekranda kalınmasın.
+  // Açık tarif tamamen kaybolursa da (ör. aileden çıkarıldın, aile silindi)
+  // listeye dönülür. Yalnızca daha önce görülmüş tarif için: henüz yüklenen
+  // bir tarif yüzünden ekran kapanmasın.
+  const seenActiveIdRef = useRef(null);
+  if (activeCandidate) seenActiveIdRef.current = activeId;
+  const activeVanished = activeId != null && !activeCandidate && seenActiveIdRef.current === activeId;
   useEffect(() => {
-    if (activeCandidate && !active && (view === "detail" || view === "cook" || view === "edit")) {
+    if ((activeVanished || (activeCandidate && !active)) && (view === "detail" || view === "cook" || view === "edit")) {
       setView("list");
     }
-  }, [activeCandidate, active, view]);
+  }, [activeCandidate, active, activeVanished, view]);
 
   const openRecipe = (id) => {
     if (isRecipeLocked(id)) return false;
@@ -2088,6 +2207,7 @@ export default function TarifKutusu() {
             personName={personName}
             currentUid={authUser?.uid}
             onReload={loadFamiliesState}
+            onChange={runFamilyChange}
             onOpenPlus={() => setModalView("plus")}
             onImportFamily={(familyId) => loadRecipeBucket(familyId)}
           />
@@ -2110,8 +2230,10 @@ export default function TarifKutusu() {
           onClose={closeModal}
           isPlus={isPlus}
           onToggleTest={async (next) => {
-            const profile = await setPlusFlag(next);
-            rememberPlusStatus(!!profile?.isPlus);
+            await runFamilyChange(async () => {
+              const profile = await setPlusFlag(next);
+              applyPlusStatus(!!profile?.isPlus);
+            });
             await loadFamiliesState();
           }}
         />
@@ -4429,6 +4551,12 @@ function ContextTabs({ context, setContext, isPlus, families }) {
 function ShoppingList({ recipes, onNeedTranslation, isPlus, families, initialContext }) {
   const { t, language } = useLanguage();
   const [context, setContext] = useState(initialContext || PERSONAL);
+
+  // Seçili aile artık erişilebilir değilse (çıkarıldın / kilitlendi) kişisel
+  // listeye dönülür; erişilemeyen listede kalınmaz.
+  useEffect(() => {
+    if (context !== PERSONAL && !(isPlus && families.some((f) => f.id === context))) setContext(PERSONAL);
+  }, [context, isPlus, families]);
   // Liste sunucudaki sürümlü kovadan okunur: yüklenemezse boş liste
   // gösterilmez/yazılmaz, "tekrar dene" çıkar. Değişiklikler niyet olarak
   // gönderilir (aynı listeyi düzenleyen aile üyesinin seçimi ezilmez).
@@ -5581,6 +5709,11 @@ function ingredientIsAvailable(ingredientName, pantryItems) {
 function PantryFinder({ recipes, isPlus, families, isRecipeLocked, onSelectRecipe, onOpenPlus, onSaveSuggestion, pantryModalOpenRef, pantryModalCloseRef }) {
   const { t } = useLanguage();
   const [context, setContext] = useState(PERSONAL);
+  // Seçili aile artık erişilebilir değilse (çıkarıldın / kilitlendi) kişisel
+  // listeye dönülür; erişilemeyen listede kalınmaz.
+  useEffect(() => {
+    if (context !== PERSONAL && !(isPlus && families.some((f) => f.id === context))) setContext(PERSONAL);
+  }, [context, isPlus, families]);
   // Kiler sunucudaki sürümlü kovadan okunur; yüklenemezse boş sayılmaz.
   const pantrySnap = useBucket("pantry-items", context);
   const loaded = isSettled(pantrySnap);
@@ -6084,7 +6217,7 @@ function FavoritesView({ recipes, familyNameById, isRecipeLocked, onSelect, onOp
 // e-posta yok), sahip işlemleri (çıkar / sahip yap / kodu yenile / sil) ve
 // ayrılma. Riskli her işlem satır içi onay ister; sunucu yetkiyi ayrıca
 // doğrular (arayüz yalnızca kolaylık).
-function FamilyCard({ family: f, currentUid, busy, setBusy, onReload, importState, onImport, onOpenPlus }) {
+function FamilyCard({ family: f, currentUid, busy, setBusy, onReload, onChange = (action) => action(), importState, onImport, onOpenPlus }) {
   const { t } = useLanguage();
   const [confirm, setConfirm] = useState(null); // { type, uid?, name? }
   const [openMember, setOpenMember] = useState(null);
@@ -6107,11 +6240,28 @@ function FamilyCard({ family: f, currentUid, busy, setBusy, onReload, importStat
   const memberLabel = (m) => m.name || (m.isAnonymous ? t("families.guestUser") : t("families.unnamedMember"));
   const legacyCode = typeof f.inviteCode === "string" && f.inviteCode.length === 6;
 
+  // Açık onay / üye menüsü, başka cihazdaki bir değişiklik (çıkarma, devir,
+  // ayrılma, kilit) yüzünden anlamını yitirirse kapatılır ve kısa bir not
+  // gösterilir: ör. "Ayrıl" onayı açıkken son diğer üye ayrılırsa düğme
+  // sessizce "Ayrıl ve Aileyi Sil"e dönüşmesin. Yazılan metinler (aile adı,
+  // davet kodu) bu kartta değil, etkilenmez.
+  const stateSig = `${f.ownerUid}|${locked ? 1 : 0}|${f.members.map((m) => m.uid).join(",")}`;
+  const [notice, setNotice] = useState("");
+  useEffect(() => {
+    if (busy) return;
+    if (confirm && confirm.sig !== stateSig) {
+      setConfirm(null);
+      setNotice(t("families.changedElsewhere"));
+    }
+    if (openMember && (!manage || !f.members.some((m) => m.uid === openMember))) setOpenMember(null);
+    if (newOwner && !others.some((m) => m.uid === newOwner)) setNewOwner(others[0]?.uid || "");
+  }, [stateSig, busy]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const run = async (action) => {
     setError("");
     setBusy(true);
     try {
-      await action();
+      await onChange(action);
       setConfirm(null);
       setOpenMember(null);
       await onReload();
@@ -6124,7 +6274,8 @@ function FamilyCard({ family: f, currentUid, busy, setBusy, onReload, importStat
 
   const ask = (next) => {
     setError("");
-    setConfirm(next);
+    setNotice("");
+    setConfirm({ ...next, sig: stateSig });
     if (next.type === "leave" && isOwner) setNewOwner(others[0]?.uid || "");
   };
 
@@ -6331,6 +6482,12 @@ function FamilyCard({ family: f, currentUid, busy, setBusy, onReload, importStat
       </div>
       {(confirm?.type === "leave" || confirm?.type === "delete") && confirmBox}
 
+      {notice && !error && (
+        <div role="status" style={{ display: "flex", alignItems: "flex-start", gap: "8px", fontSize: "13px", padding: "10px 12px", borderRadius: "8px", background: "#F7F1E3", color: COLORS.ink, marginTop: "12px" }}>
+          <AlertCircle size={14} style={{ marginTop: "2px", flexShrink: 0, color: COLORS.mustardDark }} />
+          <span>{notice}</span>
+        </div>
+      )}
       {error && (
         <div style={{ display: "flex", alignItems: "flex-start", gap: "8px", fontSize: "13px", padding: "10px 12px", borderRadius: "8px", background: "#F5E4E0", color: COLORS.danger, marginTop: "12px" }}>
           <AlertCircle size={14} style={{ marginTop: "2px", flexShrink: 0 }} />
@@ -6341,7 +6498,7 @@ function FamilyCard({ family: f, currentUid, busy, setBusy, onReload, importStat
   );
 }
 
-function FamiliesView({ isPlus, families, unverifiedFamilies = [], lockedFamilies = [], personName, currentUid, onReload, onOpenPlus, onImportFamily }) {
+function FamiliesView({ isPlus, families, unverifiedFamilies = [], lockedFamilies = [], personName, currentUid, onReload, onChange = (action) => action(), onOpenPlus, onImportFamily }) {
   const { t } = useLanguage();
   const [nameDraft, setNameDraft] = useState("");
   const [codeDraft, setCodeDraft] = useState("");
@@ -6386,7 +6543,7 @@ function FamiliesView({ isPlus, families, unverifiedFamilies = [], lockedFamilie
     }
     setBusy(true);
     try {
-      await joinFamily(code, personName);
+      await onChange(() => joinFamily(code, personName));
       setRepairCodes((prev) => ({ ...prev, [familyId]: "" }));
       await onReload();
     } catch (e) {
@@ -6416,7 +6573,7 @@ function FamiliesView({ isPlus, families, unverifiedFamilies = [], lockedFamilie
     }
     setBusy(true);
     try {
-      await createFamily(nameDraft.trim(), personName);
+      await onChange(() => createFamily(nameDraft.trim(), personName));
       setNameDraft("");
       await onReload();
     } catch (e) {
@@ -6434,7 +6591,7 @@ function FamiliesView({ isPlus, families, unverifiedFamilies = [], lockedFamilie
     }
     setBusy(true);
     try {
-      await joinFamily(codeDraft.trim(), personName);
+      await onChange(() => joinFamily(codeDraft.trim(), personName));
       setCodeDraft("");
       await onReload();
     } catch (e) {
@@ -6447,7 +6604,7 @@ function FamiliesView({ isPlus, families, unverifiedFamilies = [], lockedFamilie
   const handleLeave = async (familyId) => {
     setBusy(true);
     try {
-      await leaveFamily(familyId);
+      await onChange(() => leaveFamily(familyId));
       await onReload();
     } catch (e) {
       setError(e.message);
@@ -6459,7 +6616,7 @@ function FamiliesView({ isPlus, families, unverifiedFamilies = [], lockedFamilie
   const handleDelete = async (familyId) => {
     setBusy(true);
     try {
-      await deleteFamily(familyId);
+      await onChange(() => deleteFamily(familyId));
       setConfirmDeleteId(null);
       await onReload();
     } catch (e) {
@@ -6536,6 +6693,7 @@ function FamiliesView({ isPlus, families, unverifiedFamilies = [], lockedFamilie
           busy={busy}
           setBusy={setBusy}
           onReload={onReload}
+          onChange={onChange}
           importState={importState[f.id]}
           onImport={handleImport}
           onOpenPlus={onOpenPlus}
