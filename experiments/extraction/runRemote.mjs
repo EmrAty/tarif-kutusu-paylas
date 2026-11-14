@@ -12,7 +12,11 @@ import fs from "node:fs";
 const args = process.argv.slice(2);
 const arg = (k) => (args.includes(k) ? args[args.indexOf(k) + 1] : undefined);
 const BASE = (arg("--base") || "").replace(/\/$/, "");
-if (!/^https:\/\/[\w.-]+\.vercel\.app$/.test(BASE)) throw new Error("--base https://<deney-preview>.vercel.app olmalı (preview.tarifkutusu.app ya da production DEĞİL).");
+// Yalnızca deney dağıtımı: dal adresi (*.vercel.app; Türkiye'den TLS sıfırlanıyor) ya da ona bağlanan exp.tarifkutusu.app.
+// Production (tarifkutusu.app, www.) ve Grup 5 Preview'ı (preview.tarifkutusu.app) reddedilir.
+if (!/^https:\/\/([\w.-]+\.vercel\.app|exp\.tarifkutusu\.app)$/.test(BASE) || /^https:\/\/tarif-kutusu-paylas\.vercel\.app$/.test(BASE)) {
+  throw new Error("--base deney dağıtımı olmalı (exp.tarifkutusu.app ya da dalın *.vercel.app adresi); production/preview.tarifkutusu.app DEĞİL.");
+}
 const PROPS = arg("--props") || "C:/Users/emrea/tk-clone-group3-apk/app/android/local.properties";
 const BYPASS = (fs.readFileSync(PROPS, "utf8").match(/^PREVIEW_BYPASS=(.*)$/m) || [])[1]?.trim();
 if (!BYPASS) throw new Error("PREVIEW_BYPASS bulunamadı.");
