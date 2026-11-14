@@ -29,7 +29,8 @@ const CACHE_TTL = 180 * 24 * 3600;
 const CLAUDE_TIMEOUT_MS = 45_000;
 const MAX_OUTPUT_TOKENS = 8000;
 const MAX_TITLES_PER_CALL = 60;
-const PROMPT_VERSION = "v1";
+// v2: malzeme bölüm adları (groups) ve adlandırma kuralları (yanlış eşdeğer yok).
+const PROMPT_VERSION = "v2";
 
 // Girdi bütçesi (sunucu tarafı, Claude'a gitmeden önce). Tarif istemciden alınmıyor
 // ama /api/data üzerinden kullanıcının kendi listesine her boyutta tarif yazılabiliyor;
@@ -74,6 +75,8 @@ Rules:
 - Return exactly the same number of ingredients and instructions, in the same order. Do not add, remove, merge or split items. Do not invent missing information.
 - Never change any number: quantities, ranges, fractions, temperatures, durations, calories and servings stay exactly as written. Do not convert units or temperatures (no °C to °F, no grams to ounces, no ml to cups).
 - Ingredient "name": the natural ${lang} name of the ingredient. Ingredient "amount": translate only the words and keep every number exactly as written. Turkish kitchen measures are not US cups: "su bardağı" -> "glass (200 ml)", "çay bardağı" -> "tea glass (100 ml)", "yemek kaşığı" -> "tbsp", "tatlı kaşığı" -> "dessert spoon (10 ml)", "çay kaşığı" -> "tsp", "diş" -> "clove"/"cloves", "adet" -> leave the word out ("2 adet" -> "2"). Into Turkish use the reverse ("tbsp" -> "yemek kaşığı", "tsp" -> "çay kaşığı", "cup" -> "kupa (240 ml)").
+- Use the ingredient name a home cook in the target language actually uses (into Turkish: honey -> bal, buttermilk -> yayık ayranı, heavy cream -> krema). If there is no exact equivalent, keep the original name instead of substituting a different ingredient (bacon is not pastırma, flank steak is not bonfile; bread, cheese and sauce varieties, cuts of meat, brand and product names stay as they are). Do not write the same ingredient in two languages ("Pastırma (bacon)").
+- "groups" (if present) are section titles of the ingredient list ("Sauce", "Spice mix"); translate each one, same count and order.
 - Keep brand and product names, and URLs, unchanged.
 - "servings_note" explains how a serving count was calculated; translate it faithfully and keep every number and unit.`;
 }
@@ -97,6 +100,12 @@ const RECIPE_SCHEMA = {
   },
   required: ["title", "ingredients", "instructions", "assumptions", "servings_note"],
   additionalProperties: false,
+};
+// Bölüm adı olan tarif için: aynı şema + groups.
+const RECIPE_SCHEMA_WITH_GROUPS = {
+  ...RECIPE_SCHEMA,
+  properties: { ...RECIPE_SCHEMA.properties, groups: { type: "array", items: { type: "string" } } },
+  required: [...RECIPE_SCHEMA.required, "groups"],
 };
 const TITLES_SCHEMA = {
   type: "object",
@@ -170,6 +179,14 @@ export function validateTranslation(payload, out) {
     assumptions: payload.assumptions && text(out.assumptions) && sameNumbers(payload.assumptions, out.assumptions) ? text(out.assumptions) : payload.assumptions,
     servings_note:
       payload.servings_note && text(out.servings_note) && sameNumbers(payload.servings_note, out.servings_note) ? text(out.servings_note) : payload.servings_note,
+    ...(Array.isArray(payload.groups) && payload.groups.length
+      ? {
+          groups: payload.groups.map((src, i) => {
+            const g = Array.isArray(out.groups) && out.groups.length === payload.groups.length ? text(out.groups[i]) : "";
+            return g && sameNumbers(src, g) ? g : src;
+          }),
+        }
+      : {}),
   };
 }
 
@@ -222,7 +239,7 @@ async function translateOne(uid, { recipeId, scope, target }, guard) {
   const { json, usage } = await callClaude({
     system: systemPrompt(target),
     userText: `<recipe>\n${JSON.stringify(payload)}\n</recipe>`,
-    schema: RECIPE_SCHEMA,
+    schema: payload.groups ? RECIPE_SCHEMA_WITH_GROUPS : RECIPE_SCHEMA,
   });
   const translation = validateTranslation(payload, json);
   if (!translation) throw Object.assign(new Error("Çeviri doğrulanamadı."), { status: 502 });

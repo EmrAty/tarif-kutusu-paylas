@@ -37,7 +37,8 @@ import { createBucketStore, createDataTransport, parseBucketValue, BUCKET_STATUS
 import { appUpdateGate, clientOutdatedError, reloadForUpdate, reloadDidNotHelp, CLIENT_OUTDATED } from "./updateRequired.js";
 import { serverErrorKey, readErrorBody, classifyErrorResponse } from "./apiErrors.js";
 import { contentLangOf, translationPayload } from "../shared/recipeLocales.js";
-import { localizeRecipe, displayIngredient, contentFingerprint, localizeAmount } from "./recipeLocale.js";
+import { localizeRecipe, displayIngredient, contentFingerprint, localizeAmount, approxText } from "./recipeLocale.js";
+import { presentRecipe, presentIngredients, groupRuns } from "./ingredientPresentation.js";
 import { servingsUnitOf } from "../shared/portionEstimate.js";
 import { safeRecipeLink } from "../shared/safeLink.js";
 import { saveRecipeToTargets, extractionSignature } from "./saveTargets.js";
@@ -2069,10 +2070,12 @@ export default function TarifKutusu() {
   }, [recipes, language, loaded]);
   const localizeForDisplay = useCallback(
     (r) => {
-      if (!r || !translationPayload(r, language)) return r;
+      // Malzemeler her durumda gösterim için düzenlenir (eski kayıtlar dahil; kayıt değişmez,
+      // bkz. ingredientPresentation.js). Düzenleme ekranı asıl kaydı (active) kullanır.
+      if (!r || !translationPayload(r, language)) return r && presentRecipe(r, language);
       const entry = translations[`${language}|${contentFingerprint(r)}`];
       const d = localizeRecipe(r, language, { translation: entry && entry.translation, title: (titleTranslations[language] || {})[r.title] });
-      return { ...d, _source: r, _translation: entry ? entry.status : "idle" };
+      return { ...presentRecipe(d, language), _source: r, _translation: entry ? entry.status : "idle" };
     },
     [translations, titleTranslations, language]
   );
@@ -4284,6 +4287,51 @@ function TranslationStatus({ status, onRetry }) {
   );
 }
 
+// Malzeme satırı düzeni (Tarif Detay + Pişirme modu): ad ve miktar aynı satırda; ikisi sığmazsa
+// miktar alt satıra, sağa yaslı geçer. Ad en az ~9rem yer alır (kelime kelime aşağı uzamaz),
+// uzun miktar sarılır (kesilmez, yatay taşmaz). Yazı küçültülmez, metin gizlenmez.
+const INGREDIENT_ROW_STYLE = { display: "flex", flexWrap: "wrap", alignItems: "baseline", columnGap: "12px", rowGap: "2px", minWidth: 0 };
+const INGREDIENT_NAME_STYLE = { flex: "1 1 9rem", minWidth: 0, overflowWrap: "anywhere" };
+const INGREDIENT_AMOUNT_STYLE = { flex: "0 1 auto", marginLeft: "auto", maxWidth: "100%", textAlign: "right", overflowWrap: "anywhere" };
+
+function IngredientGroupTitle({ children, first }) {
+  return (
+    <li
+      style={{
+        listStyle: "none",
+        margin: first ? "0 0 2px" : "10px 0 2px",
+        fontSize: "12px",
+        fontWeight: 700,
+        letterSpacing: "0.02em",
+        color: COLORS.mustardDark,
+      }}
+    >
+      {children}
+    </li>
+  );
+}
+
+function IngredientList({ ingredients, language }) {
+  // Bir bölümden sonra gelen bölümsüz satırlar o bölüme aitmiş gibi görünmesin.
+  const { t } = useLanguage();
+  return (
+    <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "8px" }}>
+      {groupRuns(ingredients).flatMap((run, r) => [
+        ...(run.group || r > 0 ? [<IngredientGroupTitle key={`g${r}`} first={r === 0}>{run.group || t("detail.otherIngredients")}</IngredientGroupTitle>] : []),
+        ...run.items.map(({ ing, index }) => {
+          const amount = displayIngredient(ing, 1, language).text;
+          return (
+            <li key={index} style={{ ...INGREDIENT_ROW_STYLE, fontSize: "14px" }}>
+              <span style={{ ...INGREDIENT_NAME_STYLE, color: COLORS.ink }}>{ing.name}</span>
+              {amount ? <span style={{ ...INGREDIENT_AMOUNT_STYLE, color: COLORS.inkSoft }}>{amount}</span> : null}
+            </li>
+          );
+        }),
+      ])}
+    </ul>
+  );
+}
+
 function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavorite, onChangeCategory, onEdit, onAddToShopping, onSendNotification, onStartCooking, onRetryTranslation }) {
   const { t, language, categoryLabel, difficultyLabel } = useLanguage();
   const { title, servings, category, prep_time_minutes, difficulty, ingredients = [], instructions = [], nutrition = {}, assumptions, servings_note, isFavorite, addedBy } = recipe;
@@ -4573,14 +4621,7 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
             {ingredients.length === 0 ? (
               <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: 0 }}>{t("detail.noIngredients")}</p>
             ) : (
-              <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "8px" }}>
-                {ingredients.map((ing, i) => (
-                  <li key={i} style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "12px", fontSize: "14px" }}>
-                    <span style={{ color: COLORS.ink }}>{ing.name}</span>
-                    <span style={{ flexShrink: 0, whiteSpace: "nowrap", color: COLORS.inkSoft }}>{displayIngredient(ing, 1, language).text}</span>
-                  </li>
-                ))}
-              </ul>
+              <IngredientList ingredients={ingredients} language={language} />
             )}
           </ExpandableSection>
 
@@ -4711,12 +4752,15 @@ function mergeIngredients(chosenRecipes, servingsMap = {}, lang = "tr") {
     const base = baseServingsOf(r);
     const factor = base && servingsMap[r.id] ? servingsMap[r.id] / base : 1;
     (r.ingredients || []).forEach((ing) => {
+      // Tarifte hazırlanan karışıma yapılan atıf ("Baharat karışımı — 2 yemek kaşığı") satın
+      // alınacak bir malzeme değil; içeriği zaten kendi bölümünde listeleniyor.
+      if (ing._ref) return;
       const key = normalizeIngredientName(ing._canon ? ing._canon.name : ing.name);
       if (!key) return;
       if (!map.has(key)) map.set(key, { name: ing.name, parts: [], rounded: [] });
       const entry = map.get(key);
       const shown = displayIngredient(ing, factor, lang);
-      entry.parts.push({ canon: shown.canonText, from: shown.from, display: shown.text });
+      entry.parts.push({ canon: shown.canonText, from: shown.from, display: shown.text, estimated: !!shown.estimated });
       if (shown.rounded) entry.rounded.push({ exact: shown.exactText, shown: shown.text });
     });
   });
@@ -4729,9 +4773,10 @@ function mergeIngredients(chosenRecipes, servingsMap = {}, lang = "tr") {
       const parsed = parseAmount(p.canon);
       if (parsed) {
         const k = `${p.from}|${parsed.unit}`;
-        const g = byUnit.get(k) || { from: p.from, unit: parsed.unit, sum: 0, displays: [] };
+        const g = byUnit.get(k) || { from: p.from, unit: parsed.unit, sum: 0, displays: [], estimated: false };
         g.sum += parsed.num;
         g.displays.push(p.display);
+        if (p.estimated) g.estimated = true;
         byUnit.set(k, g);
       } else if ((p.display || "").trim()) {
         others.push(p.display.trim());
@@ -4741,7 +4786,9 @@ function mergeIngredients(chosenRecipes, servingsMap = {}, lang = "tr") {
       ...Array.from(byUnit.values()).map((g) => {
         if (g.displays.length === 1) return g.displays[0].trim();
         const canonText = `${Number.isInteger(g.sum) ? g.sum : g.sum.toFixed(1)}${g.unit ? " " + g.unit : ""}`;
-        return localizeAmount(canonText, g.from, lang) ?? canonText;
+        const total = localizeAmount(canonText, g.from, lang) ?? canonText;
+        // Toplama tahmini bir miktar girdiyse toplam da tahminidir.
+        return g.estimated ? approxText(total, lang) : total;
       }),
       ...others,
     ];
@@ -5306,7 +5353,9 @@ function CookMode({ recipe, onFinish }) {
               <p style={{ fontSize: "16px", color: COLORS.inkSoft }}>{t("detail.noIngredients")}</p>
             ) : (
               <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "12px" }}>
-                {ingredients.map((ing, i) => {
+                {groupRuns(ingredients).flatMap((run, r) => [
+                  ...(run.group || r > 0 ? [<IngredientGroupTitle key={`g${r}`} first={r === 0}>{run.group || t("detail.otherIngredients")}</IngredientGroupTitle>] : []),
+                  ...run.items.map(({ ing, index: i }) => {
                   const done = checkedIngredients.has(i);
                   return (
                     <li key={i} style={{ borderBottom: `1px solid ${COLORS.line}` }}>
@@ -5347,17 +5396,22 @@ function CookMode({ recipe, onFinish }) {
                         >
                           {done && <Check size={12} color="#F3EFE6" />}
                         </span>
-                        <span style={{ flex: 1 }}>{ing.name}</span>
-                        <span style={{ color: COLORS.inkSoft, flexShrink: 0 }}>
-                          {scaledIngredients[i].text}
-                          {scaledIngredients[i].rounded && (
-                            <RoundedBadge name={ing.name} pairs={[{ exact: scaledIngredients[i].exactText, shown: scaledIngredients[i].text }]} />
-                          )}
+                        <span style={{ ...INGREDIENT_ROW_STYLE, flex: 1 }}>
+                          <span style={INGREDIENT_NAME_STYLE}>{ing.name}</span>
+                          {scaledIngredients[i].text ? (
+                            <span style={{ ...INGREDIENT_AMOUNT_STYLE, color: COLORS.inkSoft }}>
+                              {scaledIngredients[i].text}
+                              {scaledIngredients[i].rounded && (
+                                <RoundedBadge name={ing.name} pairs={[{ exact: scaledIngredients[i].exactText, shown: scaledIngredients[i].text }]} />
+                              )}
+                            </span>
+                          ) : null}
                         </span>
                       </button>
                     </li>
                   );
-                })}
+                  }),
+                ])}
               </ul>
             )}
             {someNotScaled && <p style={{ fontSize: "12px", color: COLORS.inkSoft, margin: "14px 0 0" }}>{t("servings.someNotScaled")}</p>}
@@ -5537,7 +5591,15 @@ function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setS
   const [link, setLink] = useState(initial?.link || "");
   const [ingredients, setIngredients] = useState(() =>
     initial?.ingredients && initial.ingredients.length > 0
-      ? initial.ingredients.map((ing) => ({ _key: uid(), name: ing.name || "", amount: ing.amount || "" }))
+      ? initial.ingredients.map((ing) => ({
+          _key: uid(),
+          name: ing.name || "",
+          amount: ing.amount || "",
+          // Formda düzenlenmez ama kaydedilirken kaybolmaz (bkz. cleanIngredients).
+          _group: typeof ing.group === "string" ? ing.group : "",
+          _estimated: ing.estimated === true,
+          _origAmount: ing.amount || "",
+        }))
       : [{ _key: uid(), name: "", amount: "" }]
   );
   const [instructions, setInstructions] = useState(() =>
@@ -5604,7 +5666,16 @@ function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setS
     }
     setError("");
 
-    const cleanIngredients = ingredients.filter((i) => i.name.trim()).map((i) => ({ name: i.name.trim(), amount: i.amount.trim() }));
+    // Bölüm adı korunur; "tahmini" işareti yalnızca miktar elle değiştirilmediyse kalır
+    // (kullanıcının yazdığı miktar artık tahmin değildir).
+    const cleanIngredients = ingredients
+      .filter((i) => i.name.trim())
+      .map((i) => ({
+        name: i.name.trim(),
+        amount: i.amount.trim(),
+        ...(i._group && i._group.trim() ? { group: i._group.trim() } : {}),
+        ...(i._estimated && i.amount.trim() && i.amount.trim() === String(i._origAmount || "").trim() ? { estimated: true } : {}),
+      }));
     const cleanInstructions = instructions.filter((s) => s.text.trim()).map((s) => s.text.trim());
 
     // Porsiyon elle girildi/değiştirildiyse AI'ın hesap gerekçesi artık geçerli değil:
@@ -6043,7 +6114,8 @@ function PantryFinder({ recipes, isPlus, families, isRecipeLocked, onSelectRecip
 
   const results = contextRecipes
     .map((r) => {
-      const ingredients = r.ingredients || [];
+      // Eski kayıtta tek satıra yazılmış karışımlar ayrı malzeme sayılır; karışıma atıf sayılmaz.
+      const ingredients = presentIngredients(r.ingredients || []).filter((ing) => !ing._ref);
       const total = ingredients.length;
       const matched = ingredients.filter((ing) => ingredientIsAvailable(ing.name, items));
       const missing = ingredients.filter((ing) => !ingredientIsAvailable(ing.name, items));

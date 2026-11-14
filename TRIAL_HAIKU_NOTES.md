@@ -28,4 +28,40 @@ Her tarif için: kaynak link, yol (paylaşım paneli / Yeni Tarif Çıkar), sonu
 
 | # | Tarih | Link | Yol | Malzemeler + miktar/birim kaynakla aynı mı | Alternatifler korunmuş mu | Yapılış kaynakla uyumlu mu (kaynakta yoksa boş mu) | Kaynakta olmayan ekleme | Süre (sn) | Not |
 |---|---|---|---|---|---|---|---|---|---|
-| 1 | | | | | | | | | |
+| 1 | 15 Kas 00:31 | tiktok.com/@rainyycook/video/7575869460007947538 | paylaşım paneli | kullanıcı karşılaştırdı, sorun yok | — | uyumlu (kullanıcı) | görülmedi | 15,7 (Haiku) | "Tarifin hazır" bildirimi gelmedi — aşağıda |
+| 2 | | | | | | | | | |
+
+### #1 bildirimi neden gelmedi (15 Kasım, Upstash `tk-preview-test` CLI'dan salt okunur doğrulandı)
+- Job `1794691906383-qi2eyh`: `status: completed`, `timings.extractModel: "claude-haiku-5-5"`, `claude: 15681 ms`,
+  `notify: {sent: 0, attempted: 0, error: null}`, `timings.fcm: 6 ms` → **hedef bulunamadı, FCM'e hiç istek gitmedi.**
+- Zaman çizelgesi (TR): istek 00:31:41 · job başladı 00:31:46 · tamamlandı 00:32:02 · **Android cihaz kaydı 00:36:11**
+  (`user:<uid>:pushTargets`, platform `android`, tek kayıt; `push-owner` aynı uid'ye ait = job'un hesabı).
+- Kök neden: yeni test Redis'i boş başladı; cihaz kaydı yalnızca **ana uygulama** açılınca yapılır (paylaşım paneli
+  düz WebView, push plugin'i yok). Paylaşım ana uygulama bu hesapla hiç açılmadan yapıldı → o anda 0 hedef.
+  Tasarım gereği (bkz. `_lib/fcm.js` "Bedeli"); panelin `noNotifyNote` uyarısı bu durumda gösterilir.
+  "Zorla durdur" bu job'u etkilemedi (gönderim denenmedi bile). Kod değişikliği yapılmadı.
+- Kayıt artık var; sonraki paylaşımda `notify.attempted` 1 olmalı.
+
+## Malzeme listesi okunabilirliği (15 Kasım, telefon ekran görüntüleri: Nashville + steak sandviç)
+Kaynak tarifler İngilizce, uygulama Türkçe. Zincirdeki kök nedenler (Haiku'ya özgü değil; prompt/şema/arayüz):
+- **Prompt** "Miktarlar net değilse makul tahminler yap" diyordu → "belirtilmemiş, tahminen 45 g". Adlandırma
+  kuralı yoktu → "Pastırma (bacon)", "Flank bonfile (flank steak)" (yanlış eşdeğer + iki dil), "(veya tercih edilen ekmek)".
+- **Şema** malzemede yalnız `{name, amount}` → karışımın bütün içeriği tek satırın `amount`'una yazılıyordu.
+- **Arayüz** miktar `nowrap` + `flexShrink: 0` → ad kelime kelime aşağı uzuyor, miktar karttan taşıp kesiliyordu.
+
+Değişiklikler:
+- Yeni çıkarılanlar: prompt'a malzeme listesi + adlandırma kuralları; şemaya `group` (bölüm adı) ve `estimated`
+  (tahmini miktar, ekranda "Yaklaşık"); kayıttan önce `shared/ingredientText.js` ile deterministik temizlik.
+- Eski kayıtlar (YALNIZCA gösterimde, kayıt değişmez): "belirtilmemiş…" temizliği, tahmin → "Yaklaşık …", tek satıra
+  yazılmış karışımın bölüm başlığı + ayrı malzemelere bölünmesi (`src/ingredientPresentation.js`). Eski adlar
+  ("Pastırma (bacon)", "Flank bonfile") ve alternatif metinleri DEĞİŞMEZ — anlamı yalnız yeniden çıkarma düzeltir.
+- Ekran: ad + miktar aynı satırda; sığmazsa miktar alt satıra sağa yaslı geçer (kesilmez, taşmaz). Bölüm başlıkları
+  Tarif Detay + Pişirme modunda; bir bölümden sonraki bölümsüz satırlar "Diğer malzemeler" altında.
+- Alışveriş listesi: bölümlerdeki aynı malzeme toplanır; karışıma atıf ("Baharat karışımı") listeye girmez; tahmini
+  miktar içeren toplam "Yaklaşık". "Elimde Bunlar Var" bölünmüş satırlarla eşleştirir. Düzenleme formu `group`/
+  `estimated`'ı korur (miktar elle değişirse tahmin işareti kalkar).
+- Çeviri: bölüm adları `groups` ile çevrilir (bölümsüz eski tarifin çeviri yükü aynı biçimde kalır);
+  adlandırma kuralları çeviri prompt'unda da. Prompt değiştiği için `PROMPT_VERSION` v2: önbellek anahtarı değişir,
+  İngilizce arayüzde açılan her tarif bir kez yeniden çevrilir (Sonnet, ücretli; yalnız açılınca).
+- Testler: `test/ingredientDisplay.test.mjs` (gerçek kayıtlar `test/fixtures/trialRecipes.mjs`). Görünüm: gerçek
+  `RecipeDetail`/`CookMode` 360 px genişlikte (yerel başsız Chrome) kontrol edildi; geçici sayfa repoda yok.

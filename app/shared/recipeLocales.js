@@ -29,6 +29,16 @@ export const SERVINGS_NOTE_LANG = "tr";
 
 const str = (v) => (typeof v === "string" ? v : "");
 
+// Malzeme bölüm adları, tarifte ilk görülüş sırasıyla, tekrarsız.
+export function groupNamesOf(ingredients) {
+  const out = [];
+  for (const i of Array.isArray(ingredients) ? ingredients : []) {
+    const g = str(i && i.group).trim();
+    if (g && !out.includes(g)) out.push(g);
+  }
+  return out;
+}
+
 // Hedef dile çevrilmesi gereken alanlar. Çevrilecek bir şey yoksa null.
 // Sayısal alanlar (porsiyon, besin değerleri, kimlikler, linkler) hiç dahil değil.
 export function translationPayload(recipe, target) {
@@ -38,9 +48,13 @@ export function translationPayload(recipe, target) {
   if (!contentNeeds && !noteNeeds) return null;
   const ingredients = Array.isArray(recipe.ingredients) ? recipe.ingredients : [];
   const instructions = Array.isArray(recipe.instructions) ? recipe.instructions : [];
+  // Bölüm adları ("Sos", "Kaplama") ayrı bir listede çevrilir. Bölümü olmayan (eski) tarifte
+  // anahtar hiç eklenmez: çevrilecek metin, dolayısıyla önbellek anahtarı eskisiyle aynı kalır.
+  const groups = contentNeeds ? groupNamesOf(ingredients) : [];
   return {
     title: contentNeeds ? str(recipe.title) : "",
     ingredients: contentNeeds ? ingredients.map((i) => ({ name: str(i && i.name), amount: str(i && i.amount) })) : [],
+    ...(groups.length ? { groups } : {}),
     instructions: contentNeeds ? instructions.map(str) : [],
     assumptions: contentNeeds ? str(recipe.assumptions) : "",
     servings_note: noteNeeds ? str(recipe.servings_note) : "",

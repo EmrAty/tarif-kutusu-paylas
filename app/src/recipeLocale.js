@@ -5,7 +5,7 @@
 // diline çevrilir. Birimler önce buradaki sabit sözlükle (deterministik) çevrilir;
 // sözlüğün tanımadığı ifadelerde yapay zekânın çevirdiği miktar metni kullanılır.
 import { scaleIngredient } from "./servings.js";
-import { contentLangOf } from "../shared/recipeLocales.js";
+import { contentLangOf, groupNamesOf } from "../shared/recipeLocales.js";
 
 // --- Birim sözlüğü -------------------------------------------------------------------
 // Her giriş: [kaynak ifade(ler)i, { dil: [tekil, çoğul] }]. Türk bardak ölçüleri "cup"a
@@ -148,13 +148,52 @@ export function localizeAmount(text, from, to) {
   return [qty, ...parts].filter(Boolean).join(" ");
 }
 
+// "2 su bardağı çok amaçlı un" → { amount: "2 su bardağı", name: "çok amaçlı un" }.
+// Miktar + birim/boy ifadeleri baştan okunur; kalan metin malzeme adıdır. Sayıyla başlamayan ya da
+// adı kalmayan metinde null. Yalnızca eski kayıtlarda tek satıra yazılmış karışımları gösterimde
+// ayırmak için kullanılır (bkz. src/ingredientPresentation.js).
+export function splitQuantityPrefix(text) {
+  const raw = String(text || "").trim();
+  const yarim = /^(yarım)(?![\p{L}])\s*(.*)$/isu.exec(raw);
+  const m = yarim || QTY_RE.exec(raw);
+  if (!m) return null;
+  let rest = m[2];
+  let consumed = raw.length - rest.length;
+  for (let guard = 0; guard < 4 && rest; guard++) {
+    const n = norm(rest);
+    let best = null;
+    for (const table of [UNITS, MODIFIERS]) {
+      for (const [keys] of table) {
+        for (const k of keys) {
+          const kn = norm(k);
+          // Kalan metnin tamamı birim/boy sözcüğüyse ad yok: malzeme değil.
+          if (n === kn) return null;
+          if ((n.startsWith(kn + " ") || n.startsWith(kn + "(")) && (!best || kn.length > best)) best = kn.length;
+        }
+      }
+    }
+    if (!best) break;
+    // Birim/boy sözcüğü + hemen ardından gelen "(200 ml)" gibi not.
+    let take = best;
+    const after = /^\s*\([^()]*\)/.exec(rest.slice(take));
+    if (after && /\d/.test(after[0])) take += after[0].length;
+    const ws = /^\s*/.exec(rest.slice(take))[0].length;
+    consumed += take + ws;
+    rest = rest.slice(take + ws);
+  }
+  const amount = raw.slice(0, consumed).trim();
+  const name = rest.trim();
+  if (!name || !amount) return null;
+  return { amount, name };
+}
+
 // --- Gösterim tarifi ------------------------------------------------------------------
 // Çevirinin bağlı olduğu içerik: bunlardan biri değişince (tarif düzenlendi) önbellek anahtarı değişir.
 export function contentFingerprint(recipe) {
   const text = JSON.stringify([
     recipe.content_lang || "",
     recipe.title || "",
-    (recipe.ingredients || []).map((i) => [i && i.name, i && i.amount]),
+    (recipe.ingredients || []).map((i) => (i && (i.group || i.estimated) ? [i.name, i.amount, i.group || "", !!i.estimated] : [i && i.name, i && i.amount])),
     recipe.instructions || [],
     recipe.assumptions || "",
     recipe.servings_note || "",
@@ -177,9 +216,14 @@ export function localizeRecipe(recipe, lang, { translation, title } = {}) {
   const out = { ...recipe, _origTitle: recipe.title, _displayLang: lang };
   if (contentTranslated) {
     out.title = translation.title || title || recipe.title;
+    // Bölüm adları ayrı listede çevrilir (sıra: tarifte ilk görülüş sırası, bkz. translationPayload).
+    const srcGroups = groupNamesOf(ingredients);
+    const trGroups = Array.isArray(translation.groups) && translation.groups.length === srcGroups.length ? translation.groups : srcGroups;
+    const groupMap = new Map(srcGroups.map((g, i) => [g, trGroups[i] || g]));
     out.ingredients = ingredients.map((ing, i) => {
       const tr = (translation.ingredients || [])[i] || {};
-      return { ...ing, name: tr.name || ing.name, _canon: { name: ing.name, amount: ing.amount }, _from: from, _aiAmount: tr.amount || null };
+      const group = ing.group ? { group: groupMap.get(ing.group) || ing.group } : {};
+      return { ...ing, ...group, name: tr.name || ing.name, _canon: { name: ing.name, amount: ing.amount }, _from: from, _aiAmount: tr.amount || null };
     });
     if ((translation.instructions || []).length === (recipe.instructions || []).length) out.instructions = translation.instructions;
     if (translation.assumptions) out.assumptions = translation.assumptions;
@@ -191,6 +235,21 @@ export function localizeRecipe(recipe, lang, { translation, title } = {}) {
 // Bir malzemenin gösterim adı ve (ölçeklenmiş) miktarı. Tarif Detay, Pişirme modu ve
 // Alışveriş Listesi hep bunu kullanır: ölçek → pratik yuvarlama → dil.
 export function displayIngredient(ing, factor, lang) {
+  const shown = displayIngredientRaw(ing, factor, lang);
+  // Tahmini miktar (kaynakta yok): sayı yine ölçeklenir, başına "Yaklaşık" yazılır. canonText
+  // (alışveriş listesinde toplama için) öneksiz kalır.
+  if (ing && ing.estimated && String(shown.text || "").trim()) {
+    return { ...shown, text: approxText(shown.text, lang), estimated: true };
+  }
+  return shown;
+}
+
+const APPROX = { tr: "Yaklaşık", en: "About" };
+export function approxText(text, lang) {
+  return `${APPROX[lang] || APPROX.en} ${text}`;
+}
+
+function displayIngredientRaw(ing, factor, lang) {
   const decimal = lang === "tr" ? "," : ".";
   const canon = ing && ing._canon;
   // canonText/from: asıl dildeki (ölçeklenmiş) miktar — alışveriş listesi toplamayı bunun üzerinden yapar.

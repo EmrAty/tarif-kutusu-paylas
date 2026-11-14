@@ -1,6 +1,7 @@
 import { recipeSystemPrompt, buildRecipeUserText } from "../../shared/recipeExtraction.js";
 import { DEFAULT_CONTENT_LANG, isContentLanguage } from "../../shared/recipeLocales.js";
 import { extractionModel } from "../../shared/extractModel.js";
+import { normalizeExtractedIngredients } from "../../shared/ingredientText.js";
 import {
   applyPortionEstimate,
   PORTION_DISH_TYPES,
@@ -36,8 +37,10 @@ const RECIPE_SCHEMA = {
       type: "array",
       items: {
         type: "object",
-        properties: { name: { type: "string" }, amount: { type: "string" } },
-        required: ["name", "amount"],
+        // group: bölüm adı ("Sos", "Baharat karışımı"; yoksa ""), estimated: miktar kaynakta yok,
+        // modelin tahmini (uygulama "Yaklaşık" diye gösterir). Bkz. shared/recipeExtraction.js.
+        properties: { name: { type: "string" }, amount: { type: "string" }, group: { type: "string" }, estimated: { type: "boolean" } },
+        required: ["name", "amount", "group", "estimated"],
         additionalProperties: false,
       },
     },
@@ -162,5 +165,8 @@ export async function extractRecipe({ link, caption = "", notes = "", images = [
   if (!recipe || typeof recipe.title !== "string" || !Array.isArray(recipe.ingredients)) {
     throw new ExtractError("Tarif ayrıştırılamadı.", "parse");
   }
-  return { recipe: { ...applyPortionEstimate(recipe), content_lang: lang }, usage: data.usage, stopReason: data.stop_reason, model };
+  // Malzeme metni kayıttan önce deterministik temizlenir ("belirtilmemiş, tahminen 45 g" →
+  // "45 g" + estimated); boş grup/false bayrak kayda yazılmaz (bkz. shared/ingredientText.js).
+  const ingredients = normalizeExtractedIngredients(recipe.ingredients);
+  return { recipe: { ...applyPortionEstimate({ ...recipe, ingredients }), content_lang: lang }, usage: data.usage, stopReason: data.stop_reason, model };
 }

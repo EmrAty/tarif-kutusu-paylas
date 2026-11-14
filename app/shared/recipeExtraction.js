@@ -17,7 +17,7 @@ SADECE ve SADECE aşağıdaki şemaya uyan HAM JSON döndür. Markdown yok, aç�
   "servings_unit": string,
   "prep_time_minutes": number,
   "difficulty": string, // "Kolay", "Orta" veya "Zor" değerlerinden biri
-  "ingredients": [ { "name": string, "amount": string } ],
+  "ingredients": [ { "name": string, "amount": string, "group": string, "estimated": boolean } ],
   "instructions": [ string ],
   "nutrition": {
     "calories": number,
@@ -51,7 +51,23 @@ Nutrition alanındaki değerler porsiyon başına DEĞİL, tarifteki TÜM malzem
 
 Eğer sana verilen metin/görsellerde malzemeler açıkça ve eksiksiz yazılı DEĞİLSE ve sen bu yemeğin genel bilgine dayanarak malzemelerin bir kısmını ya da tamamını kendin tahmin ettiysen, bunu "assumptions" alanında AÇIKÇA belirt (örn: "Malzemelerin bir kısmı bu yemeğin tipik tarifine göre tarafımca tamamlandı."). Malzemeler zaten eksiksiz yazılıysa bunu belirtmene gerek yok.
 
-Miktarlar net değilse o yemeğin tipik bir porsiyonuna göre makul tahminler yap ve bunu "assumptions" alanında belirt. Yapılış adımları verilmemişse "instructions" alanını boş dizi olarak döndür, uydurma. "prep_time_minutes" ve "difficulty" belirtilmemişse tarifin niteliğine göre makul bir tahmin yap. `;
+MALZEME LİSTESİ ("ingredients") — telefonda okunacak; kısa, sade ve eksiksiz olsun:
+- Her satır TEK bir malzemedir. "name" yalnızca malzemenin adı (gerekirse kısa hazırlık bilgisiyle: "Rendelenmiş parmesan", "İnce doğranmış marul"). "amount" yalnızca o malzemenin miktarıdır ("2 yemek kaşığı", "400 g", "1 adet", "1–2 diş"); "amount" alanına başka malzeme adı, liste ya da cümle YAZMA.
+- Kaynak malzemeleri bölümlere ayırıyorsa (sos, baharat karışımı, kaplama, marine, hamur, iç harç, üzeri için…) ya da bir karışımın içeriğini sayıyorsa, karışımdaki HER malzemeyi ayrı satır yaz ve "group" alanına kısa bölüm adını yaz ("Baharat karışımı", "Kaplama", "Sos"). Aynı bölümün satırları art arda gelsin. Bölümü olmayan malzemede "group" boş metin ("").
+- Aynı malzeme birden çok bölümde kullanılıyorsa her bölümde kendi miktarıyla ayrı satır yaz; miktarları toplama, tek satırda birleştirme.
+- Tarifin içinde hazırlanan bir karışım başka bir bölümde malzeme olarak kullanılıyorsa o satırın "name" alanını karışımın "group" adıyla AYNI yaz (ör. "Baharat karışımı", "2 yemek kaşığı").
+- Miktar kaynakta yazıyorsa kaynaktaki gibi yaz (birim dönüştürme yapma) ve "estimated": false.
+- Miktar kaynakta YOKSA sayı UYDURMA: "amount" boş metin ("") olsun. Kaynak miktar yerine bir kullanım söylüyorsa ("tadına göre", "kızartmak için", "üzerine serpmek için", "isteğe bağlı") onu kısa yaz; kaynakta böyle bir ifade yoksa bunları da ekleme.
+- Tahmini miktar yalnızca kaynak açıkça ima ediyorsa (videoda görünen 1 paket, "iki dilim ekmekle" yapılan sandviç gibi) verilebilir: o zaman "amount" yalnızca sayı ve birim olsun ("45 g") ve "estimated": true. "belirtilmemiş", "tahminen", "yaklaşık", "örn." gibi kelimeleri "amount" alanına YAZMA; uygulama tahmini miktarı kendisi "Yaklaşık" diye gösterir. Besin değeri için kafanda varsaydığın miktarları "amount" alanına değil, yalnızca "assumptions" alanına kısaca yaz.
+- Alternatifler: yalnızca kaynakta gerçekten alternatif varsa kısa yaz ("Ciabatta ya da başka bir ekmek", "Tereyağı ya da margarin"). "tercih edilen", "örn.", "ya da diğer" gibi yapay açıklamalar ve kaynakta olmayan alternatifler ekleme.
+
+ADLANDIRMA VE DİL (malzeme adları, başlık ve yapılış adımları için):
+- Malzemeyi hedef dilde mutfakta gerçekten kullanılan doğal adıyla yaz. Türkçe için ör.: honey → bal, buttermilk → yayık ayranı, all-purpose flour → un, brown sugar → esmer şeker, heavy cream → krema, scallions → taze soğan, cilantro → kişniş, cayenne pepper → acı kırmızı toz biber, chicken breast → tavuk göğsü.
+- Tam karşılığı OLMAYAN malzemeyi başka bir malzemeye DÖNÜŞTÜRME: bacon pastırma değildir ("Bacon" yaz), flank steak bonfile değildir ("Flank steak" yaz), ciabatta, brioche, havarti, parmigiano reggiano, Worcestershire sosu, sriracha gibi ekmek/peynir/sos çeşitleri, et kesimleri, marka ve ürün adları orijinal adıyla kalır.
+- Aynı malzemeyi iki dilde tekrar yazma ("Pastırma (bacon)", "Flank bonfile (flank steak)" gibi). Parantezi yalnızca doğru ürünü alabilmek için gerçekten gereken kısa bilgi için kullan.
+- Başlık kısa ve doğal olsun; aynı kelimeyi iki dilde tekrarlama ("Biftekli Steak Sandviç" değil "Steak Sandviç"), parantez içinde uzun malzeme listesi yazma.
+
+Yapılış adımları verilmemişse "instructions" alanını boş dizi olarak döndür, uydurma. "prep_time_minutes" ve "difficulty" belirtilmemişse tarifin niteliğine göre makul bir tahmin yap. `;
 
 // Çıktı dili uygulamanın dilidir (kaynak videonun dili değil). Türkçe'de prompt
 // bu özellikten önceki haliyle birebir aynı; başka dilde yalnızca son talimat değişir.
