@@ -109,7 +109,22 @@ export function experimentEnabled(env = process.env) {
   return env.VERCEL_ENV === "preview" && env.VERCEL_GIT_COMMIT_REF === BRANCH;
 }
 
-const safeErr = (e) => ({ message: e.message, httpStatus: e.httpStatus ?? null, detail: e.detail ?? null });
+const redactHost = (t) => {
+  let host = "";
+  try {
+    host = new URL(process.env.KV_REST_API_URL || "").hostname;
+  } catch (e) {
+    host = "";
+  }
+  return host ? String(t).split(host).join("<redis-host>") : String(t);
+};
+const safeErr = (e) => ({
+  message: e.message,
+  httpStatus: e.httpStatus ?? null,
+  detail: e.detail ?? null,
+  causeCode: e.cause?.code ?? null,
+  cause: e.cause?.message ? redactHost(e.cause.message).slice(0, 200) : null,
+});
 async function step(fn) {
   try {
     return { ok: true, value: await fn() };

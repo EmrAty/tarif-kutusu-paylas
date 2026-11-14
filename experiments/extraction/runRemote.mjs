@@ -48,7 +48,7 @@ const cleanup = async () => {
 try {
   const st = await (await fetch(`${BASE}/api/experiment`, { headers: headers(session) })).json().catch(() => ({}));
   if (!st.enabled) throw new Error(`Deney ucu etkin değil: ${JSON.stringify(st).slice(0, 200)}`);
-  const summary = { commit: st.commit, branch: st.branch, hasAnthropicKey: st.hasAnthropicKey, capUsd: st.capUsd, spentUsd: st.spentUsd, reservedUsd: st.reservedUsd, calls: st.calls.length };
+  const summary = { commit: st.commit, vercelEnv: st.vercelEnv, branch: st.branch, redis: st.redis, hasAnthropicKey: st.hasAnthropicKey, capUsd: st.capUsd, spentUsd: st.spentUsd, reservedUsd: st.reservedUsd, calls: st.calls.length };
   console.log("Durum:", JSON.stringify(summary));
   const results = load("results-models.json", {});
   const syncLedger = (s) => fs.writeFileSync(here("ledger.json"), JSON.stringify({ source: BASE, calls: s.calls }, null, 1));
