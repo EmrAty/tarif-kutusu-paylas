@@ -65,3 +65,21 @@ Değişiklikler:
   İngilizce arayüzde açılan her tarif bir kez yeniden çevrilir (Sonnet, ücretli; yalnız açılınca).
 - Testler: `test/ingredientDisplay.test.mjs` (gerçek kayıtlar `test/fixtures/trialRecipes.mjs`). Görünüm: gerçek
   `RecipeDetail`/`CookMode` 360 px genişlikte (yerel başsız Chrome) kontrol edildi; geçici sayfa repoda yok.
+
+## Miktarlar fazla boşaldı (15 Kasım, steak sandviçin yeniden çıkarılması, tarif `1794696884886-v1d2bx`)
+Kaynak (kaithompson "STEAK SANDWICH" açıklaması, uygulamanın caption okuyucusuyla alındı) yalnızca 5 miktar veriyor:
+2 onions, 4 tbsp mayo, 2 tbsp grainy Dijon, 2 tsp Worcestershire, 1 tbsp hot sauce. Beşi de kayıtta ve ekranda var
+→ **temizlik/gösterim hiçbir miktarı silmedi.** Diğer 15 satır kaynakta miktarsız; bunları **model boş döndürdü**, çünkü
+bir önceki düzeltmede prompt "kaynakta yoksa boş bırak, tahmini yalnız kaynak açıkça ima ediyorsa ver" diyordu
+(fazla katı). "Ciabatta ekmeği ya da başka bir ekmek" adı da o prompt'taki örnekten geldi.
+Ayrıca Haiku hatası: kaynak "Wrap 2 asparagus with 1 slice of bacon", kayıtlı adım "Her kuşkonmazı bir dilim bacon ile sarın".
+
+Değişiklik:
+- Prompt: kaynak miktarı aynen (estimated false); kaynakta yoksa bağlamdan pratik/yuvarlak öneri + `estimated: true`
+  (yapay hassasiyet yok); dayanak yoksa tuz/baharat "damak zevkine göre", aksi hâlde boş. Besin hesabı tahminlerle tutarlı.
+- Ad: genel tercih "ya da istediğin/başka bir/herhangi bir X" ve "(veya tercih edilen X)" → "X (tercihen)";
+  "(örn. Y)" → "(Y gibi)"; belirli alternatif ("Tereyağı ya da margarin"), hazırlama ayrıntısı korunur
+  (`simplifyIngredientName`; yeni kayıtta sunucuda, eski kayıtta yalnız Türkçe gösterimde).
+- Ekran: tahmin içeren tarifte listenin altında tek ortak not ("Yaklaşık" yazanlar kaynakta yok; tarife göre önerildi),
+  Tarif Detay + Pişirme modu. Ölçeklemede "Yaklaşık" etiketi her katsayıda kalır (test).
+- Zaten kayıtlı `1794696884886-v1d2bx` tarifinin boş miktarları geri gelmez (kayıtta sayı yok); yeniden çıkarma gerekir.

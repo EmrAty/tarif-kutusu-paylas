@@ -44,3 +44,37 @@ export const STEAK_INGREDIENTS = [
   { amount: "1 yemek kaşığı", name: "Acı sos" },
   { amount: "belirtilmemiş", name: "Sarımsak tozu" },
 ];
+
+// Aynı videonun (kaithompson, "STEAK SANDWICH") 15 Kasım'da yeni prompt'la yeniden çıkarılmış hali.
+// Kaynakta miktarı yazan yalnızca: 2 onions, 4 tbsp mayo, 2 tbsp grainy Dijon, 2 tsp Worcestershire,
+// 1 tbsp hot sauce. Diğerlerini model ("kaynakta yoksa boş bırak" kuralıyla) boş döndürdü.
+export const STEAK_V2_INGREDIENTS = [
+  { amount: "", name: "Ciabatta ekmeği ya da başka bir ekmek" },
+  { amount: "", name: "Havarti peyniri" },
+  { amount: "", name: "Flank steak" },
+  { amount: "", name: "Tuz ve karabiber" },
+  { amount: "", name: "Sıvı yağ" },
+  { amount: "", name: "Tereyağı" },
+  { amount: "", name: "Sarımsak" },
+  { amount: "", name: "Taze otlar" },
+  { amount: "2 adet", name: "Soğan" },
+  { amount: "", name: "Balzamik sirke" },
+  { amount: "", name: "Worcestershire sosu" },
+  { amount: "", name: "Bacon" },
+  { amount: "", name: "Kuşkonmaz" },
+  { amount: "", name: "Parmigiano reggiano" },
+  { amount: "", name: "Maydanoz" },
+  { amount: "4 yemek kaşığı", group: "Sos", name: "Mayonez" },
+  { amount: "2 yemek kaşığı", group: "Sos", name: "Tane hardallı Dijon hardal" },
+  { amount: "2 çay kaşığı", group: "Sos", name: "Worcestershire sosu" },
+  { amount: "1 yemek kaşığı", group: "Sos", name: "Acı sos" },
+  { amount: "", group: "Sos", name: "Sarımsak tozu, tuz ve karabiber" },
+];
+// Kaynakta yazan miktarlar ("ad|bölüm" → beklenen gösterim).
+export const STEAK_SOURCE_AMOUNTS = {
+  Soğan: "2 adet",
+  Mayonez: "4 yemek kaşığı",
+  "Tane hardallı Dijon hardal": "2 yemek kaşığı",
+  "Worcestershire sosu|Sos": "2 çay kaşığı",
+  "Acı sos": "1 yemek kaşığı",
+};

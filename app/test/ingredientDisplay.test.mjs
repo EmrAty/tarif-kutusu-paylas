@@ -16,14 +16,14 @@ globalThis.fetch = async (url, init = {}) => {
   );
 };
 
-const { cleanAmount, normalizeExtractedIngredients } = await import("../shared/ingredientText.js");
+const { cleanAmount, normalizeExtractedIngredients, simplifyIngredientName } = await import("../shared/ingredientText.js");
 const { recipeSystemPrompt } = await import("../shared/recipeExtraction.js");
 const { translationPayload } = await import("../shared/recipeLocales.js");
 const { extractRecipeFromCaption } = await import("../api/_lib/extractRecipe.js");
 const { validateTranslation } = await import("../api/translate-recipe.js");
-const { presentIngredients, splitCompoundAmount, groupRuns } = await import("../src/ingredientPresentation.js");
+const { presentIngredients, splitCompoundAmount, groupRuns, hasEstimatedAmounts } = await import("../src/ingredientPresentation.js");
 const { displayIngredient, localizeRecipe, splitQuantityPrefix } = await import("../src/recipeLocale.js");
-const { NASHVILLE_INGREDIENTS, STEAK_INGREDIENTS } = await import("./fixtures/trialRecipes.mjs");
+const { NASHVILLE_INGREDIENTS, STEAK_INGREDIENTS, STEAK_V2_INGREDIENTS, STEAK_SOURCE_AMOUNTS } = await import("./fixtures/trialRecipes.mjs");
 
 const digits = (s) => (String(s).match(/\d+/g) || []).join("|");
 const CONTRADICTION = /belirtilme|tahminen|not specified|unspecified/i;
@@ -65,21 +65,28 @@ test("temizlik hiçbir zaman metinde olmayan bir sayı eklemez (gerçek kayıtla
 
 // ---------------------------------------------------------------------------------------------
 // 2. Çıkarma: prompt kuralları, şema, kayıttan önce temizlik.
-test("prompt: tek satır = tek malzeme, bölüm (group), sayı uydurmama, tahmin bayrağı, doğru eşdeğer kuralları", () => {
+test("prompt: tek satır = tek malzeme, bölüm, kaynak miktarı korunur, bağlamdan yuvarlak tahmin, doğru eşdeğer", () => {
   const p = recipeSystemPrompt("tr");
   assert.doesNotMatch(p, /Miktarlar net değilse o yemeğin tipik bir porsiyonuna göre makul tahminler yap/, "eski 'makul tahmin yap' talimatı kalkmalı");
   assert.match(p, /"ingredients": \[ \{ "name": string, "amount": string, "group": string, "estimated": boolean \} \]/);
   assert.match(p, /Her satır TEK bir malzemedir/);
   assert.match(p, /"group" alanına kısa bölüm adını/);
   assert.match(p, /Aynı malzeme birden çok bölümde/);
-  assert.match(p, /sayı UYDURMA/);
-  assert.match(p, /"belirtilmemiş", "tahminen", "yaklaşık", "örn\." gibi kelimeleri "amount" alanına YAZMA/);
+  assert.doesNotMatch(p, /Miktar kaynakta YOKSA sayı UYDURMA/, "tahmini tamamen yasaklayan kural kalkmalı (miktarlar fazla boşalıyordu)");
+  assert.doesNotMatch(p, /ya da başka bir ekmek/, "mekanik alternatif örneği prompt'ta olmamalı");
+  assert.match(p, /Kaynakta yazan HER miktarı aynen koru/);
+  assert.match(p, /bağlamından makul bir öneri çıkarılabiliyorsa/);
+  assert.match(p, /Yapay hassasiyet kullanma/);
+  assert.match(p, /Dayanak yoksa sayı doldurma/);
+  assert.match(p, /"belirtilmemiş", "tahminen", "yaklaşık", "örn\." gibi kelimeleri YAZMA/);
+  assert.match(p, /"Ciabatta ekmeği \(tercihen\)"/);
+  assert.match(p, /belirli alternatifler veriyorsa onları koru/);
   assert.match(p, /honey → bal/);
   assert.match(p, /buttermilk → yayık ayranı/);
   assert.match(p, /bacon pastırma değildir/);
   assert.match(p, /flank steak bonfile değildir/);
   assert.match(p, /Aynı malzemeyi iki dilde tekrar yazma/);
-  assert.match(p, /yalnızca kaynakta gerçekten alternatif varsa/);
+  assert.match(p, /kaynakta olmayan alternatifler ekleme/);
   // Dil talimatı yine en sonda (İngilizce içerik de aynı kuralları alır).
   assert.ok(recipeSystemPrompt("en").includes("Her satır TEK bir malzemedir"));
 });
@@ -177,13 +184,13 @@ test("eski kayıt (steak): 'belirtilmemiş, tahminen …' → tahmini miktar; sa
   assert.deepEqual(by["Maydanoz"], ["", false]);
   assert.deepEqual(by["Pastırma (bacon)"], ["en az 4 dilim", false]);
   assert.deepEqual(by["Kuru soğan"], ["2 adet", false]);
-  for (const i of shown) {
+  shown.forEach((i, idx) => {
     assert.doesNotMatch(i.amount, CONTRADICTION, i.name);
     for (const n of digits(i.amount).split("|").filter(Boolean)) {
-      const src = STEAK_INGREDIENTS.find((s) => s.name === i.name);
+      const src = STEAK_INGREDIENTS[idx];
       assert.ok(digits(src.amount).split("|").includes(n), `${i.name}: ${n} uydurulmuş`);
     }
-  }
+  });
 });
 
 test("bölme temkinli: tek parça, ondalık virgül ya da cümle bölünmez", () => {
@@ -271,4 +278,103 @@ test("çeviri doğrulama + gösterim: bölüm adları çevrilir; sayısı tutmaz
   const d = localizeRecipe(recipe, "en", { translation: { title: "T", ingredients: [{ name: "Flour", amount: "" }, { name: "Salt", amount: "" }], groups: ["Coating", "Sauce"], instructions: [] } });
   assert.deepEqual(d.ingredients.map((i) => [i.group, i.name]), [["Coating", "Flour"], ["Sauce", "Salt"]]);
   assert.equal(recipe.ingredients[0].group, "Kaplama", "kayıtlı tarif değişmez");
+});
+
+// ---------------------------------------------------------------------------------------------
+// 6. Kaynak miktarı / tahmini miktar / miktarsız malzeme (miktarlar fazla boşalıyordu).
+test("kaynak, tahmini ve miktarsız malzeme: kaynak miktarı hiçbir adımda silinmez, tahmin işareti korunur", async () => {
+  nextModelRecipe = {
+    title: "Steak Sandviç",
+    servings: null,
+    servings_unit: "porsiyon",
+    prep_time_minutes: 60,
+    difficulty: "Orta",
+    ingredients: [
+      { name: "Ciabatta ekmeği ya da başka bir ekmek", amount: "1 adet", group: "", estimated: true },
+      { name: "Flank steak", amount: "500 g", group: "", estimated: true },
+      { name: "Tuz ve karabiber", amount: "damak zevkine göre", group: "", estimated: false },
+      { name: "Taze otlar", amount: "", group: "", estimated: false },
+      { name: "Soğan", amount: "2 adet", group: "", estimated: false },
+      { name: "Mayonez", amount: "4 yemek kaşığı", group: "Sos", estimated: false },
+      // Model kaynak miktarını yanlışlıkla tahmin işaretlese bile miktar silinmez.
+      { name: "Acı sos", amount: "1 yemek kaşığı", group: "Sos", estimated: true },
+    ],
+    instructions: ["Karıştır."],
+    nutrition: { calories: 1, protein_g: 1, carbs_g: 1, fat_g: 1 },
+    assumptions: "",
+    portion: { dish_type: "ana_yemek", cooking_method: "tava", items: [] },
+  };
+  const { recipe } = await extractRecipeFromCaption({ link: "https://www.tiktok.com/@a/video/1", caption: "x", timeoutMs: 5000 });
+  assert.deepEqual(recipe.ingredients, [
+    { name: "Ciabatta ekmeği (tercihen)", amount: "1 adet", estimated: true },
+    { name: "Flank steak", amount: "500 g", estimated: true },
+    { name: "Tuz ve karabiber", amount: "damak zevkine göre" },
+    { name: "Taze otlar", amount: "" },
+    { name: "Soğan", amount: "2 adet" },
+    { name: "Mayonez", amount: "4 yemek kaşığı", group: "Sos" },
+    { name: "Acı sos", amount: "1 yemek kaşığı", group: "Sos", estimated: true },
+  ]);
+  const presented = presentIngredients(recipe.ingredients);
+  assert.deepEqual(
+    presented.map((i) => [i.name, displayIngredient(i, 1, "tr").text]),
+    [
+      ["Ciabatta ekmeği (tercihen)", "Yaklaşık 1 adet"],
+      ["Flank steak", "Yaklaşık 500 g"],
+      ["Tuz ve karabiber", "damak zevkine göre"],
+      ["Taze otlar", ""],
+      ["Soğan", "2 adet"],
+      ["Mayonez", "4 yemek kaşığı"],
+      ["Acı sos", "Yaklaşık 1 yemek kaşığı"],
+    ]
+  );
+  assert.equal(hasEstimatedAmounts(presented), true, "ortak not gösterilir");
+});
+
+test("yeni steak kaydı (gerçek): kaynakta yazan 5 miktarın hepsi gösterimde duruyor; boşlar modelden geldi", () => {
+  const shown = presentIngredients(STEAK_V2_INGREDIENTS);
+  assert.equal(shown.length, STEAK_V2_INGREDIENTS.length);
+  for (const [k, amount] of Object.entries(STEAK_SOURCE_AMOUNTS)) {
+    const [name, group] = k.split("|");
+    const row = shown.find((i) => i.name === name && (group ? i.group === group : true));
+    assert.ok(row, name);
+    assert.equal(displayIngredient(row, 1, "tr").text, amount, name);
+  }
+  // Kayıtta boş olan miktar gösterimde de boş: temizlik/gösterim bir şey silmedi, bir şey de uydurmadı.
+  STEAK_V2_INGREDIENTS.forEach((src, i) => assert.equal(shown[i].amount, src.amount, src.name));
+  assert.equal(hasEstimatedAmounts(shown), false, "tahmin yoksa not da yok");
+  assert.equal(shown[0].name, "Ciabatta ekmeği (tercihen)", "eski kayıtta da ad gösterimde sadeleşir");
+  assert.equal(hasEstimatedAmounts(presentIngredients(STEAK_INGREDIENTS)), true, "ilk steak kaydı: 'Yaklaşık' miktarlar + not");
+});
+
+test("ad sadeleştirme genel kural: genel tercih → '(tercihen)', belirli alternatif ve hazırlama ayrıntısı korunur", () => {
+  const cases = [
+    ["Ciabatta ekmeği (veya tercih edilen ekmek)", "Ciabatta ekmeği (tercihen)"],
+    ["Ciabatta ekmeği ya da başka bir ekmek", "Ciabatta ekmeği (tercihen)"],
+    ["Brioche ya da istediğin bir sandviç ekmeği", "Brioche (tercihen)"],
+    ["Tam buğday unu veya herhangi bir un", "Tam buğday unu (tercihen)"],
+    ["Nötr yağ (örn. ayçiçek)", "Nötr yağ (ayçiçek gibi)"],
+    ["Tereyağı ya da margarin", "Tereyağı ya da margarin"],
+    ["Süt (veya badem sütü)", "Süt (veya badem sütü)"],
+    ["Taze kekik ya da diğer otlar", "Taze kekik ya da diğer otlar"],
+    ["Rendelenmiş parmesan", "Rendelenmiş parmesan"],
+    ["Oda sıcaklığında tereyağı", "Oda sıcaklığında tereyağı"],
+  ];
+  for (const [input, out] of cases) assert.equal(simplifyIngredientName(input, "tr"), out, input);
+  assert.equal(simplifyIngredientName("Ciabatta bread (or bread of choice)", "en"), "Ciabatta bread (or bread of choice)", "İngilizce metne dokunulmaz");
+});
+
+test("porsiyon ölçekleme: tahmin etiketi her katsayıda kalır, kaynak miktarı etiket almaz, miktarsız satır boş kalır", () => {
+  const est = { name: "Flank steak", amount: "500 g", estimated: true };
+  const pcs = { name: "Ciabatta ekmeği", amount: "1 adet", estimated: true };
+  const src = { name: "Mayonez", amount: "4 yemek kaşığı" };
+  const none = { name: "Taze otlar", amount: "" };
+  for (const f of [0.5, 1, 1.5, 2, 3]) {
+    assert.match(displayIngredient(est, f, "tr").text, /^Yaklaşık [\d½¼¾]/, `g ×${f}`);
+    assert.match(displayIngredient(pcs, f, "tr").text, /^Yaklaşık [\d½¼¾]/, `adet ×${f}`);
+    assert.match(displayIngredient(est, f, "en").text, /^About [\d½¼¾]/, `en ×${f}`);
+    assert.doesNotMatch(displayIngredient(src, f, "tr").text, /Yaklaşık/, `kaynak ×${f}`);
+    assert.equal(displayIngredient(none, f, "tr").text, "", `boş ×${f}`);
+  }
+  assert.equal(displayIngredient(est, 2, "tr").text, "Yaklaşık 1000 g");
+  assert.equal(displayIngredient(src, 2, "tr").text, "8 yemek kaşığı");
 });

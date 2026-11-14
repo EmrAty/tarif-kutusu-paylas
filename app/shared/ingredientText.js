@@ -58,15 +58,35 @@ export function cleanAmount(amount, estimated = false) {
   return { amount: text, estimated: est && /[\d½¼¾⅓⅔⅛]|yarım/iu.test(text) };
 }
 
+// Malzeme ADININ sadeleştirilmesi (yalnız Türkçe metin; genel dil kuralı, tek kelimeye özel değil).
+// Kaynak belirli bir malzemeyi önerip "ya da istediğin/herhangi bir X" diyorsa bu yalnızca bir
+// tercih bildirir: "Ciabatta ekmeği (veya tercih edilen ekmek)" / "Ciabatta ekmeği ya da başka bir
+// ekmek" → "Ciabatta ekmeği (tercihen)". Belirli alternatifler ("Tereyağı ya da margarin"),
+// hazırlama ayrıntısı ve malzemenin kimliği DEĞİŞMEZ. "(örn. ayçiçek)" → "(ayçiçek gibi)".
+const GENERIC_CHOICE = String.raw`(?:tercih\s+(?:edilen|ettiğiniz|ettiğin)|istediğiniz|istediğin|dilediğiniz|dilediğin|başka\s+bir|herhangi\s+bir|elinizdeki|elindeki)`;
+const OR = String.raw`(?:veya|ya\s+da|yahut)`;
+const PAREN_CHOICE_RE = new RegExp(String.raw`\s*\(\s*${OR}\s+${GENERIC_CHOICE}(?=[\s)])[^()]*\)`, "iu");
+const TRAILING_CHOICE_RE = new RegExp(String.raw`\s+${OR}\s+${GENERIC_CHOICE}(?:\s+bir)?(?:\s+[^\s,;()]+){0,3}\s*$`, "iu");
+const EXAMPLE_PAREN_RE = /\(\s*(?:örn\.|örneğin|ör\.)\s*([^()]+?)\s*\)/iu;
+
+export function simplifyIngredientName(name, lang = "tr") {
+  let text = str(name).replace(/\s+/g, " ").trim();
+  if (lang !== "tr" || !text) return text;
+  if (PAREN_CHOICE_RE.test(text)) text = text.replace(PAREN_CHOICE_RE, " (tercihen)");
+  else if (TRAILING_CHOICE_RE.test(text)) text = text.replace(TRAILING_CHOICE_RE, " (tercihen)");
+  text = text.replace(EXAMPLE_PAREN_RE, (_, inner) => `(${inner} gibi)`);
+  return text.replace(/\s+/g, " ").trim();
+}
+
 // Yeni çıkarılan tarifin malzemeleri (sunucu, kayıttan önce). Şema alanları:
 // { name, amount, group, estimated }. Kayda yalnızca dolu `group` ve `estimated: true` yazılır
 // (eski kayıtlarla aynı biçim kalsın, boş alan birikmesin).
-export function normalizeExtractedIngredients(ingredients) {
+export function normalizeExtractedIngredients(ingredients, lang = "tr") {
   if (!Array.isArray(ingredients)) return [];
   const out = [];
   for (const ing of ingredients) {
     if (!ing || typeof ing !== "object") continue;
-    const name = str(ing.name).trim();
+    const name = simplifyIngredientName(ing.name, lang);
     if (!name) continue;
     const { amount, estimated } = cleanAmount(ing.amount, ing.estimated === true);
     const group = str(ing.group).replace(/\s+/g, " ").trim().replace(/[:：]$/, "").trim();

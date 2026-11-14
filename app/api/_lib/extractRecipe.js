@@ -167,6 +167,6 @@ export async function extractRecipe({ link, caption = "", notes = "", images = [
   }
   // Malzeme metni kayıttan önce deterministik temizlenir ("belirtilmemiş, tahminen 45 g" →
   // "45 g" + estimated); boş grup/false bayrak kayda yazılmaz (bkz. shared/ingredientText.js).
-  const ingredients = normalizeExtractedIngredients(recipe.ingredients);
+  const ingredients = normalizeExtractedIngredients(recipe.ingredients, lang);
   return { recipe: { ...applyPortionEstimate({ ...recipe, ingredients }), content_lang: lang }, usage: data.usage, stopReason: data.stop_reason, model };
 }

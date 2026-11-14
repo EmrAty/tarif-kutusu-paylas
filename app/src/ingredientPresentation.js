@@ -7,10 +7,12 @@
 //    ("Kaplama unu" → "2 su bardağı un, 1/2 su bardağı mısır nişastası, …") satır bölünür:
 //    satırın adı bölüm başlığı olur, her parça kendi miktarıyla ayrı malzeme olur. Bölme
 //    yalnızca parçaların çoğu "miktar + ad" biçimindeyse yapılır; emin olunamazsa satır aynen kalır.
-// 3. Bölüm adıyla aynı adı taşıyan malzeme (tarifte hazırlanan karışımın başka bölümde
+// 3. Türkçe gösterimde ad sadeleşir: "X (veya tercih edilen ekmek)" / "X ya da başka bir ekmek" →
+//    "X (tercihen)"; "(örn. ayçiçek)" → "(ayçiçek gibi)" (bkz. shared/ingredientText.js).
+// 4. Bölüm adıyla aynı adı taşıyan malzeme (tarifte hazırlanan karışımın başka bölümde
 //    kullanılması: "Baharat karışımı — 2 yemek kaşığı") `_ref` işaretlenir; alışveriş listesine
 //    ve "Elimde Bunlar Var" eşleştirmesine girmez (satın alınacak bir şey değil).
-import { cleanAmount } from "../shared/ingredientText.js";
+import { cleanAmount, simplifyIngredientName } from "../shared/ingredientText.js";
 import { splitQuantityPrefix } from "./recipeLocale.js";
 
 const str = (v) => (typeof v === "string" ? v : v == null ? "" : String(v));
@@ -61,10 +63,11 @@ export function splitCompoundAmount(text) {
   return withQty >= 2 && withQty >= Math.ceil(parts.length / 2) ? parts : null;
 }
 
-function cleanOne(ing) {
+function cleanOne(ing, lang) {
   const canon = ing._canon;
   const { amount, estimated } = cleanAmount(canon ? canon.amount : ing.amount, ing.estimated === true);
-  const out = { ...ing, ...(estimated ? { estimated: true } : {}) };
+  // Ad yalnızca Türkçe gösterimde sadeleşir ("(veya tercih edilen ekmek)" → "(tercihen)").
+  const out = { ...ing, name: simplifyIngredientName(ing.name, lang), ...(estimated ? { estimated: true } : {}) };
   if (!estimated) delete out.estimated;
   if (canon) {
     out._canon = { ...canon, amount };
@@ -81,7 +84,7 @@ export function presentIngredients(ingredients, lang = "tr") {
   const list = Array.isArray(ingredients) ? ingredients.filter((i) => i && typeof i === "object") : [];
   const out = [];
   for (const raw of list) {
-    const ing = cleanOne(raw);
+    const ing = cleanOne(raw, lang);
     const canon = ing._canon;
     const sourceText = canon ? canon.amount : ing.amount;
     const parts = ing.group ? null : splitCompoundAmount(sourceText);
@@ -141,4 +144,9 @@ export function groupRuns(ingredients) {
     else runs.push({ group, items: [{ ing, index }] });
   });
   return runs;
+}
+
+// Listede gösterilecek tahmini miktar var mı (ortak "Yaklaşık … önerildi" notu için).
+export function hasEstimatedAmounts(ingredients) {
+  return (ingredients || []).some((i) => i && i.estimated === true && str(i._canon ? i._canon.amount : i.amount).trim() !== "");
 }

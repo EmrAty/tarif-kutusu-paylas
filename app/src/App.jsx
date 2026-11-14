@@ -38,7 +38,7 @@ import { appUpdateGate, clientOutdatedError, reloadForUpdate, reloadDidNotHelp, 
 import { serverErrorKey, readErrorBody, classifyErrorResponse } from "./apiErrors.js";
 import { contentLangOf, translationPayload } from "../shared/recipeLocales.js";
 import { localizeRecipe, displayIngredient, contentFingerprint, localizeAmount, approxText } from "./recipeLocale.js";
-import { presentRecipe, presentIngredients, groupRuns } from "./ingredientPresentation.js";
+import { presentRecipe, presentIngredients, groupRuns, hasEstimatedAmounts } from "./ingredientPresentation.js";
 import { servingsUnitOf } from "../shared/portionEstimate.js";
 import { safeRecipeLink } from "../shared/safeLink.js";
 import { saveRecipeToTargets, extractionSignature } from "./saveTargets.js";
@@ -4311,10 +4311,18 @@ function IngredientGroupTitle({ children, first }) {
   );
 }
 
+// Tahmini miktar içeren tarifte listenin altında tek, kısa ortak not (satır satır açıklama yok).
+function EstimatedAmountsNote({ ingredients }) {
+  const { t } = useLanguage();
+  if (!hasEstimatedAmounts(ingredients)) return null;
+  return <p style={{ fontSize: "12px", lineHeight: 1.45, color: COLORS.inkSoft, margin: "12px 0 0" }}>{t("detail.estimatedNote")}</p>;
+}
+
 function IngredientList({ ingredients, language }) {
   // Bir bölümden sonra gelen bölümsüz satırlar o bölüme aitmiş gibi görünmesin.
   const { t } = useLanguage();
   return (
+    <>
     <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "8px" }}>
       {groupRuns(ingredients).flatMap((run, r) => [
         ...(run.group || r > 0 ? [<IngredientGroupTitle key={`g${r}`} first={r === 0}>{run.group || t("detail.otherIngredients")}</IngredientGroupTitle>] : []),
@@ -4329,6 +4337,8 @@ function IngredientList({ ingredients, language }) {
         }),
       ])}
     </ul>
+    <EstimatedAmountsNote ingredients={ingredients} />
+    </>
   );
 }
 
@@ -5414,6 +5424,7 @@ function CookMode({ recipe, onFinish }) {
                 ])}
               </ul>
             )}
+            {ingredients.length > 0 && <EstimatedAmountsNote ingredients={ingredients} />}
             {someNotScaled && <p style={{ fontSize: "12px", color: COLORS.inkSoft, margin: "14px 0 0" }}>{t("servings.someNotScaled")}</p>}
           </div>
         )}
