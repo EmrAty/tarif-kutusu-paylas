@@ -109,7 +109,7 @@ export default async function handler(req, res) {
   const out = deferResponse(res);
   const startedAt = Date.now();
   try {
-    const { recipe, usage, stopReason } = await extractRecipe({
+    const { recipe, usage, stopReason, model } = await extractRecipe({
       link: link.value.trim(),
       caption: caption.value,
       notes: notes.value,
@@ -118,7 +118,7 @@ export default async function handler(req, res) {
       timeoutMs: CLAUDE_TIMEOUT_MS,
     });
     console.log(
-      JSON.stringify({ tag: "extract", ms: Date.now() - startedAt, images: images.length, outputTokens: usage?.output_tokens, stopReason })
+      JSON.stringify({ tag: "extract", model, ms: Date.now() - startedAt, images: images.length, inputTokens: usage?.input_tokens, outputTokens: usage?.output_tokens, stopReason })
     );
     out.res.status(200).json({ recipe });
   } catch (e) {

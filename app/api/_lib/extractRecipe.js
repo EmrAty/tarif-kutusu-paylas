@@ -1,5 +1,6 @@
 import { recipeSystemPrompt, buildRecipeUserText } from "../../shared/recipeExtraction.js";
 import { DEFAULT_CONTENT_LANG, isContentLanguage } from "../../shared/recipeLocales.js";
+import { extractionModel } from "../../shared/extractModel.js";
 import {
   applyPortionEstimate,
   PORTION_DISH_TYPES,
@@ -19,7 +20,8 @@ import {
 // iletiyordu). Çıktı şemaya bağlı (her zaman geçerli JSON); max_tokens yüksek
 // çünkü claude-sonnet-5 önce düşünüyor ve düşünme token'ları da bu bütçeden
 // harcanıyor; zaman aşımı var.
-const MODEL = "claude-sonnet-5";
+// HAIKU DENEMESİ: model shared/extractModel.js'te ortama göre seçilir (Preview: Haiku 5.5, diğer: Sonnet 5).
+// İstek gövdesi, prompt, şema, max_tokens ve hata yönetimi değişmedi.
 const MAX_TOKENS = 16000;
 
 const RECIPE_SCHEMA = {
@@ -109,6 +111,7 @@ export async function extractRecipe({ link, caption = "", notes = "", images = [
     { type: "text", text: buildRecipeUserText({ link, caption, notes, imageCount: images.length }) },
   ];
 
+  const model = extractionModel();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let response;
@@ -123,7 +126,7 @@ export async function extractRecipe({ link, caption = "", notes = "", images = [
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: MODEL,
+        model,
         max_tokens: MAX_TOKENS,
         system: recipeSystemPrompt(lang),
         messages: [{ role: "user", content }],
@@ -159,5 +162,5 @@ export async function extractRecipe({ link, caption = "", notes = "", images = [
   if (!recipe || typeof recipe.title !== "string" || !Array.isArray(recipe.ingredients)) {
     throw new ExtractError("Tarif ayrıştırılamadı.", "parse");
   }
-  return { recipe: { ...applyPortionEstimate(recipe), content_lang: lang }, usage: data.usage, stopReason: data.stop_reason };
+  return { recipe: { ...applyPortionEstimate(recipe), content_lang: lang }, usage: data.usage, stopReason: data.stop_reason, model };
 }

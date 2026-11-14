@@ -258,14 +258,15 @@ async function runRecipeJob({ uid, jobId, sourceUrl, caption, category, addedBy,
     const claudeTimeout = Math.max(15_000, Math.min(MAX_CLAUDE_MS, remainingMs() - RESERVE_MS));
 
     let t = Date.now();
-    const { recipe: parsed, usage, stopReason } = await extractRecipeFromCaption({
+    const { recipe: parsed, usage, stopReason, model: extractModel } = await extractRecipeFromCaption({
       link: sourceUrl,
       caption: recipeText,
       language,
       timeoutMs: claudeTimeout,
     });
     timings.claude = Date.now() - t;
-    logStep(jobId, "claude", timings.claude, { outputTokens: usage?.output_tokens, stopReason });
+    logStep(jobId, "claude", timings.claude, { model: extractModel, inputTokens: usage?.input_tokens, outputTokens: usage?.output_tokens, stopReason });
+    timings.extractModel = extractModel;
 
     // Job sürerken hesap silinmiş olabilir: silinen hesaba tarif yazılmıyor.
     // Misafir başka bir hesaba taşındıysa tarif o hesaba yazılıyor.

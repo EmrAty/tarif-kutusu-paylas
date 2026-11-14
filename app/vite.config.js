@@ -1,3 +1,4 @@
+import { extractionModel } from "./shared/extractModel.js";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { writeFileSync } from "fs";
@@ -19,7 +20,8 @@ const buildVersion = String(Date.now());
 function gitInfo() {
   const sha = process.env.VERCEL_GIT_COMMIT_SHA || safeGit("git rev-parse HEAD");
   const ref = process.env.VERCEL_GIT_COMMIT_REF || safeGit("git rev-parse --abbrev-ref HEAD");
-  return { commit: sha || null, ref: ref || null, env: process.env.VERCEL_ENV || "local" };
+  // HAIKU DENEMESİ: sunucunun bu ortamda kullanacağı tarif çıkarma modeli (shared/extractModel.js ile aynı kural)
+  return { commit: sha || null, ref: ref || null, env: process.env.VERCEL_ENV || "local", extractModel: extractionModel() };
 }
 function safeGit(command) {
   try {
