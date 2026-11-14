@@ -109,14 +109,28 @@ export function experimentEnabled(env = process.env) {
   return env.VERCEL_ENV === "preview" && env.VERCEL_GIT_COMMIT_REF === BRANCH;
 }
 
+const safeErr = (e) => ({ message: e.message, httpStatus: e.httpStatus ?? null, detail: e.detail ?? null });
+async function step(fn) {
+  try {
+    return { ok: true, value: await fn() };
+  } catch (e) {
+    console.error(JSON.stringify({ tag: "experiment", step: "status", ...safeErr(e) }));
+    return { ok: false, error: safeErr(e) };
+  }
+}
+
 async function status() {
-  const [spent, reserved] = await Promise.all([redisCommand(["GET", K.spent]), redisCommand(["GET", K.reserved])]);
-  const ledger = (await redisCommand(["LRANGE", K.ledger, "0", "999"])) || [];
+  const ping = await step(() => redisCommand(["PING"]));
+  const sums = await step(() => Promise.all([redisCommand(["GET", K.spent]), redisCommand(["GET", K.reserved])]));
+  const ledgerStep = await step(() => redisCommand(["LRANGE", K.ledger, "0", "999"]));
+  const keys = await step(() => keyCounts());
+  const [spent, reserved] = sums.ok ? sums.value : [null, null];
+  const ledger = ledgerStep.ok ? ledgerStep.value || [] : [];
   return {
     enabled: true,
     vercelEnv: process.env.VERCEL_ENV,
     branch: process.env.VERCEL_GIT_COMMIT_REF,
-    redis: { ...redisIsolation(), keys: await keyCounts() },
+    redis: { ...redisIsolation(), ping: ping.ok ? ping.value : ping.error, keys: keys.ok ? keys.value : keys.error, ledgerOk: ledgerStep.ok },
     commit: (process.env.VERCEL_GIT_COMMIT_SHA || "").slice(0, 7),
     hasAnthropicKey: !!process.env.ANTHROPIC_API_KEY,
     capUsd: CAP_MICRO_USD / 1e6,
@@ -205,6 +219,7 @@ export default async function handler(req, res) {
     const out = await run(body.id, body.config);
     res.status(out.status).json(out.body);
   } catch (e) {
-    res.status(500).json({ error: "Deney isteği tamamlanamadı." });
+    console.error(JSON.stringify({ tag: "experiment", step: "handler", ...safeErr(e) }));
+    res.status(500).json({ error: "Deney isteği tamamlanamadı.", ...safeErr(e) });
   }
 }

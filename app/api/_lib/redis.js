@@ -17,6 +17,7 @@ export async function redisGet(key) {
   if (!res.ok) {
     const err = new Error("Veritabanına erişilemedi.");
     err.status = 502;
+    err.httpStatus = res.status; // DENEME: teşhis için (gizli değer değil)
     throw err;
   }
   const data = await res.json();
@@ -105,6 +106,7 @@ export async function redisPipeline(commands) {
   if (!res.ok) {
     const err = new Error("Veritabanına erişilemedi.");
     err.status = 502;
+    err.httpStatus = res.status; // DENEME: teşhis için (gizli değer değil)
     throw err;
   }
   const data = await res.json();
@@ -123,6 +125,7 @@ export async function redisCommand(command) {
   if (!res.ok) {
     const err = new Error("Veritabanına erişilemedi.");
     err.status = 502;
+    err.httpStatus = res.status; // DENEME: teşhis için (gizli değer değil)
     throw err;
   }
   const data = await res.json();
