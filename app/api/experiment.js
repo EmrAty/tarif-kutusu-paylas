@@ -10,6 +10,7 @@
 //    çıktı) ayrılır, tavanı (3 $) aşacaksa çağrı başlatılmaz. Yanıt gelmezse ayrılan tutar harcanmış sayılır.
 //  - Aynı (id, config) bir kez çağrılır; sonuç Redis'te saklanır, tekrar istek yeni çağrı yapmaz.
 //  - Bildirim göndermez, kullanıcı verisine dokunmaz. Anahtar hiçbir yanıtta yer almaz.
+import crypto from "node:crypto";
 import { requireUser } from "./_lib/auth.js";
 import { extractRecipe, RECIPE_SCHEMA } from "./_lib/extractRecipe.js";
 import { recipeSystemPrompt, buildRecipeUserText } from "../shared/recipeExtraction.js";
@@ -61,6 +62,49 @@ redis.call("SET", KEYS[1], string.format("%d", spent))
 redis.call("SET", KEYS[2], string.format("%d", reserved))
 return {spent, reserved}`;
 
+// İZOLASYON KİLİDİ (Redis'e HİÇBİR komuttan, kimlik doğrulamadan bile önce — auth silinmiş hesap için Redis okur):
+// Production Redis'i Vercel'de "upstash-kv-cyclamen-island" (yalnız Production); Preview'a elle eklenmiş ayrı test
+// Redis'i var (host "cyclamen" içermez). Redis tanımlı değilse ya da production'a benziyorsa uç 503 döner.
+// Gizli değer dışarı verilmez: yalnız host'un SHA-256 özeti, ilk iki harfi ve sınıflaması.
+export function redisIsolation(env = process.env) {
+  const url = env.KV_REST_API_URL || "";
+  let host = "";
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch (e) {
+    host = "";
+  }
+  const looksProduction = /cyclamen/.test(host);
+  return {
+    ok: !!host && !!env.KV_REST_API_TOKEN && !looksProduction,
+    configured: !!host && !!env.KV_REST_API_TOKEN,
+    looksProduction,
+    upstashHost: host.endsWith(".upstash.io"),
+    hostPrefix: host.slice(0, 2),
+    hostSha256: host ? crypto.createHash("sha256").update(host).digest("hex").slice(0, 16) : null,
+  };
+}
+
+// Salt okunur: anahtar SAYILARI (adlar dönmez). En fazla 20 sayfa SCAN.
+async function keyCounts() {
+  const counts = { total: 0, user: 0, family: 0, job: 0, experiment: 0, truncated: false };
+  let cursor = "0";
+  for (let page = 0; page < 20; page++) {
+    const [next, keys] = await redisCommand(["SCAN", cursor, "COUNT", "1000"]);
+    for (const k of keys || []) {
+      counts.total++;
+      if (k.startsWith("user:")) counts.user++;
+      else if (k.startsWith("family:")) counts.family++;
+      else if (k.startsWith("job:")) counts.job++;
+      else if (k.startsWith(`${NS}:`)) counts.experiment++;
+    }
+    cursor = String(next);
+    if (cursor === "0") return counts;
+  }
+  counts.truncated = true;
+  return counts;
+}
+
 export function experimentEnabled(env = process.env) {
   return env.VERCEL_ENV === "preview" && env.VERCEL_GIT_COMMIT_REF === BRANCH;
 }
@@ -70,7 +114,9 @@ async function status() {
   const ledger = (await redisCommand(["LRANGE", K.ledger, "0", "999"])) || [];
   return {
     enabled: true,
+    vercelEnv: process.env.VERCEL_ENV,
     branch: process.env.VERCEL_GIT_COMMIT_REF,
+    redis: { ...redisIsolation(), keys: await keyCounts() },
     commit: (process.env.VERCEL_GIT_COMMIT_SHA || "").slice(0, 7),
     hasAnthropicKey: !!process.env.ANTHROPIC_API_KEY,
     capUsd: CAP_MICRO_USD / 1e6,
@@ -122,6 +168,11 @@ async function run(id, configName) {
 }
 
 export default async function handler(req, res) {
+  const iso = redisIsolation();
+  if (!iso.ok) {
+    res.status(503).json({ error: "isolation", redis: iso });
+    return;
+  }
   try {
     await requireUser(req);
   } catch (e) {

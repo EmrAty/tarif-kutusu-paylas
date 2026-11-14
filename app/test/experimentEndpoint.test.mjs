@@ -65,6 +65,41 @@ async function call(method, body, { noAuth = false } = {}) {
 const enable = () => Object.assign(process.env, { VERCEL_ENV: "preview", VERCEL_GIT_COMMIT_REF: "experiment/cheap-extraction" });
 const reset = () => { db.clear(); anthropicCalls = []; anthropicReply = () => ({ status: 200, body: okBody(3000, 700) }); };
 
+test("izolasyon: production'a benzeyen ya da tanımsız Redis'te HİÇBİR Redis/ağ isteği olmadan 503", async () => {
+  reset();
+  enable();
+  const seen = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (u, i) => (seen.push(String(u)), realFetch(u, i));
+  try {
+    for (const url of ["https://cyclamen-island-12345.upstash.io", "", "not a url"]) {
+      process.env.KV_REST_API_URL = url;
+      const r = await call("POST", { id: "c01", config: "haiku" });
+      assert.equal(r.status, 503, url);
+      assert.equal(r.body.error, "isolation");
+      assert.ok(!JSON.stringify(r.body).includes("12345"), "host tam olarak dönmemeli");
+    }
+  } finally {
+    process.env.KV_REST_API_URL = KV;
+    globalThis.fetch = realFetch;
+  }
+  assert.deepEqual(seen, []);
+  assert.equal(anthropicCalls.length, 0);
+});
+
+test("durum: Redis parmak izi gizli değer içermez, anahtar sayıları salt okunur", async () => {
+  reset();
+  enable();
+  db.set("user:A:recipes", "[]");
+  const st = await call("GET");
+  assert.equal(st.status, 200);
+  assert.equal(st.body.redis.ok, true);
+  assert.equal(st.body.redis.looksProduction, false);
+  assert.equal(st.body.redis.keys.user, 1);
+  assert.ok(!JSON.stringify(st.body).includes("test-token"));
+  assert.ok(!JSON.stringify(st.body).includes("kv.test"));
+});
+
 test("token yoksa 401 (ortam doğru olsa bile), sağlayıcıya gidilmez", async () => {
   reset();
   enable();
