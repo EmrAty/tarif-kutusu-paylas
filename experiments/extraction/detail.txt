@@ -1,0 +1,104 @@
+Derlem: 33 açıklama (27 liste, 1 düzyazı, 5 tarifsiz)
+Kapıdan bağımsız ayrıştırma doğruluğu (yalnız liste tarifleri): tam doğru 19/27, ortalama malzeme recall 0.98
+Ayrıştırma süresi: ort 3.31 ms, en çok 56.45 ms
+Katı kapı, uygulama dili = açıklama dili: kabul 9/33 (27%); liste tariflerinin 33%'i | kabul edilip DOĞRU 9, kabul edilip YANLIŞ 0 []
+Gevşek kapı, uygulama dili = açıklama dili: kabul 15/33 (45%); liste tariflerinin 56%'i | kabul edilip DOĞRU 13, kabul edilip YANLIŞ 2 [c29,c30]
+Katı kapı, uygulama TR (EN açıklama → model): kabul 7/33 (21%); liste tariflerinin 26%'i | kabul edilip DOĞRU 7, kabul edilip YANLIŞ 0 []
+
+--- c01 [list/tr] strict=false lenient=false correct=true recall=1.00
+  red: yapılışta eklenen, listede olmayan: "çikolatalar"
+
+--- c02 [list/tr] strict=false lenient=true correct=true recall=1.00
+  red: yapılış başlıksız (sınırı tahmin) | büyük harften tahmin edilen 1 sınır
+
+--- c03 [list/tr] strict=false lenient=true correct=true recall=1.00
+  red: yapılış başlıksız (sınırı tahmin) | büyük harften tahmin edilen 1 sınır
+
+--- c04 [list/tr] strict=false lenient=false correct=true recall=1.00
+  red: malzeme başlığı/madde işareti yok | miktarsız uzun parça: "Dilediğiniz miktarda kırmızı toz biber, " | uzun malzeme (birleşmiş olabilir): "Dilediğiniz miktarda kırmızı toz biber, …" | büyük harften tahmin edilen 2 sınır
+
+--- c05 [list/tr] strict=true lenient=true correct=true recall=1.00
+
+--- c06 [list/tr] strict=false lenient=false correct=false recall=0.80
+  red: malzeme başlığı/madde işareti yok | miktarsız uzun parça: "Tuz eğer klasik bardak kullanacaksanız y" | adın içinde ikinci miktar: "300 ml 1 su bardağı bulgur" | büyük harften tahmin edilen 1 sınır
+  eksik: 1 su bardağı bulgur | fazla: 300 ml|1 su bardağı bulgur | 
+
+--- c07 [list/tr] strict=false lenient=true correct=true recall=1.00
+  red: yapılış başlıksız (sınırı tahmin)
+
+--- c08 [list/tr] strict=true lenient=true correct=true recall=1.00
+
+--- c09 [list/tr] strict=false lenient=false correct=false recall=0.88
+  red: miktarsız malzeme oranı 7/17 | miktarsız uzun parça: "iyice karışana kadar sosu karıştırın. 1." | uzun malzeme (birleşmiş olabilir): "en az 30 dakika dinlendirin, böylece lez…"
+  eksik: yarım çay kaşığı kırmızı biber / yarım çay kaşığı sarımsak tozu | fazla: |iyice karışana kadar sosu karıştırın. 1. Sosu buzdolabında / en az 30|dakika dinlendirin, böylece lezzetleri birbirine karışacak ve sos daha lezzetli olacaktır | 
+
+--- c10 [list/tr] strict=false lenient=false correct=false recall=1.00
+  red: malzeme başlığı/madde işareti yok | yapılış başlıksız (sınırı tahmin) | büyük harften tahmin edilen 1 sınır | yapılışta listede olmayan ölçülü malzeme: "1/2 paket krema"
+  eksik:  | fazla: |Vanilin hariç | 
+
+--- c11 [list/tr] strict=false lenient=false correct=false recall=0.75
+  red: miktarsız malzeme oranı 4/9 | yapılış başlıksız (sınırı tahmin) | büyük harften tahmin edilen 4 sınır | yapılışta eklenen, listede olmayan: "peynir"
+  eksik: 1 yemek kaşığı zeytinyağı / 1 çay kaşığı bal | fazla: 1|yemek kaşığı zeytinyağı / 1|çay kaşığı bal / |Hepsini karıştırın hazır | eksik adım: hepsini karıştırın 
+
+--- c12 [list/tr] strict=true lenient=true correct=true recall=1.00
+
+--- c13 [insufficient/tr] strict=false lenient=false 
+  red: malzeme başlığı/madde işareti yok | malzeme sayısı 0 < 3
+
+--- c14 [list/tr] strict=true lenient=true correct=true recall=1.00
+
+--- c15 [list/tr] strict=false lenient=false correct=true recall=1.00
+  red: miktarsız uzun parça: "Üstünü geçmeyecek şekilde sıcak su" | büyük harften tahmin edilen 2 sınır
+
+--- c16 [list/tr] strict=true lenient=true correct=true recall=1.00
+
+--- c17 [list/tr] strict=true lenient=true correct=true recall=1.00
+
+--- c18 [list/tr] strict=false lenient=false correct=true recall=1.00
+  red: malzeme başlığı/madde işareti yok | yapılış başlıksız (sınırı tahmin) | büyük harften tahmin edilen 1 sınır
+
+--- c19 [list/en] strict=true lenient=true correct=true recall=1.00
+
+--- c20 [list/en] strict=false lenient=true correct=true recall=1.00
+  red: yapılış başlıksız (sınırı tahmin)
+
+--- c21 [list/en] strict=false lenient=false correct=false recall=1.00
+  red: miktarsız uzun parça: "onion, Napa cabbage, fish cake, and saus" | miktarsız uzun parça: "Soft boiled egg, Mozzarella cheese & Gre" | yapılış başlıksız (sınırı tahmin) | büyük harften tahmin edilen 3 sınır
+  eksik:  | fazla: |⬇ / |Tteokbokki / |Sauce ⬇ | 
+
+--- c22 [list/en] strict=false lenient=false correct=false recall=1.00
+  red: miktarsız malzeme oranı 14/14 | büyük harften tahmin edilen 2 sınır
+  eksik:  | fazla: |Dried / |Dried | 
+
+--- c23 [prose/en] strict=false lenient=false 
+  red: malzeme başlığı/madde işareti yok | miktarsız malzeme oranı 3/4 | miktarsız uzun parça: "Tamari — or a touch of" | miktarsız uzun parça: "Würze, if you want that nostalgic"
+
+--- c24 [list/en] strict=false lenient=false correct=true recall=1.00
+  red: yapılışta listede olmayan ölçülü malzeme: "1/3 cup of"
+
+--- c25 [list/tr] strict=false lenient=false correct=true recall=1.00
+  red: malzeme başlığı/madde işareti yok | büyük harften tahmin edilen 3 sınır
+
+--- c26 [insufficient/tr] strict=false lenient=false 
+  red: malzeme başlığı/madde işareti yok | malzeme sayısı 1 < 3 | uzun malzeme (birleşmiş olabilir): "5 dakikada yapabileceğiniz en hafif ve k…"
+
+--- c27 [list/tr] strict=true lenient=true correct=true recall=1.00
+
+--- c28 [insufficient/tr] strict=false lenient=false 
+  red: malzeme başlığı/madde işareti yok | malzeme sayısı 0 < 3
+
+--- c29 [list/tr] strict=false lenient=true correct=false recall=1.00
+  red: büyük harften tahmin edilen 1 sınır
+  eksik:  | fazla: |Kreması | 
+
+--- c30 [list/tr] strict=false lenient=true correct=false recall=0.93
+  red: büyük harften tahmin edilen 1 sınır
+  eksik: çikolata parçaları | fazla: |Çikolata / |Parçaları | 
+
+--- c31 [insufficient/tr] strict=false lenient=false 
+  red: malzeme başlığı/madde işareti yok | malzeme sayısı 0 < 3
+
+--- c32 [insufficient/tr] strict=false lenient=false 
+  red: malzeme başlığı/madde işareti yok | malzeme sayısı 0 < 3
+
+--- c33 [list/en] strict=true lenient=true correct=true recall=1.00

@@ -1,0 +1,101 @@
+Derlem: 27 açıklama (24 liste, 0 düzyazı, 2 tarifsiz)
+Kapıdan bağımsız ayrıştırma doğruluğu (yalnız liste tarifleri): tam doğru 8/24, ortalama malzeme recall 0.87
+Ayrıştırma süresi: ort 4.25 ms, en çok 60.58 ms
+Katı kapı, uygulama dili = açıklama dili: kabul 2/27 (7%); liste tariflerinin 8%'i | kabul edilip DOĞRU 2, kabul edilip YANLIŞ 0 []
+Gevşek kapı, uygulama dili = açıklama dili: kabul 3/27 (11%); liste tariflerinin 13%'i | kabul edilip DOĞRU 2, kabul edilip YANLIŞ 1 [t19]
+Katı kapı, uygulama TR (EN açıklama → model): kabul 2/27 (7%); liste tariflerinin 8%'i | kabul edilip DOĞRU 2, kabul edilip YANLIŞ 0 []
+
+--- t01 [list/tr] strict=false lenient=false correct=false recall=1.00
+  red: malzeme başlığı/madde işareti yok
+  eksik:  | fazla: |ayırın) | 
+
+--- t02 [list/tr] strict=false lenient=false correct=false recall=0.90
+  red: malzeme başlığı/madde işareti yok | uzun malzeme (birleşmiş olabilir): "1 yemek kaşığı nişasta mısır nişasta kul…" | adın içinde ikinci miktar: "10 gr" | adın içinde ikinci miktar: "200 ml"
+  eksik: 5 su bardağı un | fazla: 5 su bardağı|artı / 1 yemek kaşığı|un kontrollü ekleyelim bazen / 5 su bardağı|da yeterli oluyor / 1|sarısı / |ayıralım / |10 gr / |Kullandığım su bardağı ölçüsü / |200 ml / |Kullandığım çay bardağı ölçüsü / |125 ml / |Poğaça tarifi | eksik adım: 180 derecede pişirdim 
+
+--- t03 [list/tr] strict=false lenient=false correct=false recall=0.20
+  red: malzeme başlığı/madde işareti yok | miktarsız uzun parça: "Cam Tepside yapacaksanız fırının En Alt " | uzun malzeme (birleşmiş olabilir): "Cam Tepside yapacaksanız fırının En Alt …" | yapılış başlıksız (sınırı tahmin)
+  eksik: 1 yufka / 1 beyaz peynir / 1 maydonoz / 2 yumurta / 1 süt / 1 yağ / kabartma tozu / yumurta sarısı | fazla: 210|dereceli Fırında 25.dakika konturollü / |Cam Tepside yapacaksanız fırının En Alt kısmında pişiriri yoksa Altı Kızarmaz Zutaten / |Böreklik / 1|Schüssel Weißkäse / 1|Prise Petersilie Für die Soße / 2|Eier / 1|Tasse Milch / 1|Tasse Öl / 1|Esslöffel Mehl / 1/2|Päckchen Backpulver / 1|Eigelb | eksik adım: beklettim 
+
+--- t04 [list/tr] strict=false lenient=false correct=true recall=1.00
+  red: malzeme başlığı/madde işareti yok | büyük harften tahmin edilen 6 sınır
+
+--- t05 [list/tr] strict=false lenient=false correct=false recall=0.71
+  red: malzeme başlığı/madde işareti yok | adın içinde ikinci miktar: "2 buçuk bardak" | adın içinde ikinci miktar: "6 7 bardak un" | adın içinde ikinci miktar: "600-700gr 150 gram tereyağ"
+  eksik: 150 gram tereyağ / kaşar | fazla: |2 buçuk bardak / 600-700gr|150 gram tereyağ / |İç malzeme | yapılışa karışan: youtube kanalimi
+
+--- t06 [list/tr] strict=false lenient=false correct=false recall=0.91
+  red: miktarsız malzeme oranı 6/12 | miktarsız uzun parça: "Üzerine isteğe bağlı pul biber, kekik ve" | büyük harften tahmin edilen 2 sınır
+  eksik: yarım paket krema | fazla: |Yarım / |Paket krema | 
+
+--- t07 [list/tr] strict=true lenient=true correct=true recall=1.00
+
+--- t08 [list/tr] strict=false lenient=false correct=true recall=1.00
+  red: malzeme başlığı/madde işareti yok | miktarsız uzun parça: "Yarım çay bardağına yakın pekmez" | büyük harften tahmin edilen 1 sınır
+
+--- t09 [list/tr] strict=false lenient=false correct=false recall=1.00
+  red: malzeme başlığı/madde işareti yok | miktarsız uzun parça: "Şimdiden deneyen herkese afiyet olsun"
+  eksik:  | fazla: |Şimdiden deneyen herkese afiyet olsun | 
+
+--- t10 [list/tr] strict=false lenient=false correct=true recall=1.00
+  red: malzeme başlığı/madde işareti yok
+
+--- t11 [list/tr] strict=false lenient=false correct=false recall=0.88
+  red: miktarsız malzeme oranı 6/13 | miktarsız uzun parça: "aşağıda . Bu ve daha fazla" | miktarsız uzun parça: "YOUTUBE kanalıma ÜCRETSİZ ABONE OLabilir" | miktarsız uzun parça: "biodaki linke tıklayarak ya da google’a "
+  eksik: 550 - 600 ml su | fazla: |aşağıda . Bu ve daha fazla / |YOUTUBE kanalıma ÜCRETSİZ ABONE OLabilirsiniz . Detaylı tarif videosunu / |biodaki linke tıklayarak ya da google’a “Çiçek’in Tarifleri Domates Çorbası” yazıp aratarak izleyebilirsiniz / |YouTube/ÇiçekinTarifleri / |DOMATES ÇORBASI / 600 ml|su | 
+
+--- t12 [list/tr] strict=false lenient=false correct=false recall=1.00
+  red: miktarsız malzeme oranı 5/11 | miktarsız uzun parça: "Birer yemek kaşığı domates ve biber salç" | miktarsız uzun parça: "Tuz, karabiber, kırmızı toz biber, zerde" | büyük harften tahmin edilen 3 sınır
+  eksik:  | fazla:  | yapılışa karışan: pişme esnasında tereyağ
+
+--- t13 [list/tr] strict=false lenient=false correct=false recall=0.22
+  red: uzun malzeme (birleşmiş olabilir): "45-50 dak. haşlayın. Haşladıktan sonra…" | uzun malzeme (birleşmiş olabilir): "5 su bardağı tavuk suyunu ekleyip karıs…" | büyük harften tahmin edilen 1 sınır
+  eksik: 1 yemek kaşığı tereyağ / 1 yemek kaşığı salça / 2 yemek kaşığı un / 5 su bardağı tavuk suyu / 1-1,5 tatlı kaşığı tuz / 2-3 yemek kaşığı limon suyu / 1 diş sarımsak | fazla: 1|yemek kaşığı tereyağ / 1|yemek kaşığı dolusu domates salçası / 2|yemek kaşığı dolusu un / 5|su bardağı tavuk suyu / 1-1,5|tatlı kaşığı tuz / 2-3|yemek kaşığı limon suyu / 1|diş sarımsak / |Hazırlanışı: Tavukların üzerine / 5|su bardağı kadar soğuk su ilave edin ve yaklaşık / 45-50|dak. haşlayın. Haşladıktan sonra tavukları didikleyin ve suyunu bir kenara alın. Tencerenin içerisine tereyağını alın ve ezilmiş sarımsağı kısaca kavurun. Üzerine un ilave ederek köpürene kadar kavurmaya devam edin. Salçayıda ekleyip birlikte devam kavurun / |Ardından üzerine / 5|su bardağı tavuk suyunu ekleyip karıştırın. Limon suyunu ,tavukları ve şehriyeyi ilave edip birlikte / 10|dakika pişirmeye devam edin.Afiyet olsun:) | eksik adım: soğuk su ilave; pişirmeye devam edin 
+
+--- t14 [list/tr] strict=false lenient=false correct=false recall=1.00
+  red: malzeme başlığı/madde işareti yok | yapılış başlıksız (sınırı tahmin) | büyük harften tahmin edilen 2 sınır
+  eksik:  | fazla:  | yapılışa karışan: doktorum
+
+--- t15 [fetch_failed/tr] strict=false lenient=false 
+  red: dil unknown ≠ uygulama tr (çeviri gerekir) | malzeme başlığı/madde işareti yok | malzeme sayısı 0 < 3
+
+--- t16 [list/tr] strict=false lenient=false correct=false recall=1.00
+  red: malzeme başlığı/madde işareti yok | miktarsız malzeme oranı 11/14 | miktarsız uzun parça: "Ölçülerini kendi damak tadınıza göre aya"
+  eksik:  | fazla: |Baharatlar / |Ölçülerini kendi damak tadınıza göre ayarlaya bilirsiniz “ | eksik adım: küçük küçük doğrayıp; yemeğimiz hazır 
+
+--- t17 [list/tr] strict=false lenient=false correct=false recall=0.70
+  red: uzun malzeme (birleşmiş olabilir): "1 tatlı kaşığı tuz,1 tatlı kaşığı kırmız…" | adın içinde ikinci miktar: "1 tatlı kaşığı tuz,1 tatlı kaşığı kırmız" | uzun malzeme (birleşmiş olabilir): "yaklaşık 5 dakika soteleyin.Mantarlar pi…" | uzun malzeme (birleşmiş olabilir): "10 dakika pişmeye bırakın.Domatesler suy…"
+  eksik: 1 tatlı kaşığı kırmızı toz biber / 1 çay kaşığı karabiber / 1 tatlı kaşığı kekik | fazla: yaklaşık 5|dakika soteleyin.Mantarlar piştikten sonra domates ve baharatları da ekleyip / 10|dakika pişmeye bırakın.Domatesler suyunu çektiğinde yemeğiniz hazır olmuş demektir.Afiyet olsun | eksik adım: julyen doğrayın; hazır olmuş demektir 
+
+--- t18 [list/tr] strict=false lenient=false correct=false recall=0.33
+  red: malzeme sayısı 2 < 3 | miktarsız malzeme oranı 1/2 | uzun malzeme (birleşmiş olabilir): "yarım kilo göğüs -tuz, kırmızı toz biber…" | adın içinde ikinci miktar: "yarım kilo göğüs -tuz, kırmızı toz biber"
+  eksik: köri / yarım çay bardağı soda / 2 yemek kaşığı sirke / krema | fazla:  | 
+
+--- t19 [list/tr] strict=false lenient=true correct=false recall=1.00
+  red: yapılış başlıksız (sınırı tahmin) | büyük harften tahmin edilen 2 sınır
+  eksik:  | fazla: 1 yemek kaşığı|( kontrollü ekleyin) | 
+
+--- t20 [list/tr] strict=false lenient=false correct=false recall=1.00
+  red: yapılış başlıksız (sınırı tahmin) | büyük harften tahmin edilen 1 sınır | yapılışta eklenen, listede olmayan: "yağı"
+  eksik:  | fazla: |(1paket) | eksik adım: kontrol edip çıkarabilirsiniz 
+
+--- t21 [list/tr] strict=false lenient=false correct=false recall=1.00
+  red: adın içinde ikinci miktar: "200ml" | adın içinde ikinci miktar: "100ml" | büyük harften tahmin edilen 2 sınır
+  eksik:  | fazla: |Sonradan sade hamura / |Bardak ölçüleri; Su bardağı / |200ml / |Çay bardağı / |100ml | 
+
+--- t22 [list/tr] strict=true lenient=true correct=true recall=1.00
+
+--- t23 [list/tr] strict=false lenient=false correct=true recall=1.00
+  red: yapılışta eklenen, listede olmayan: "eleyerek"
+
+--- t24 [list/tr] strict=false lenient=false correct=true recall=1.00
+  red: malzeme başlığı/madde işareti yok
+
+--- t25 [list/tr] strict=false lenient=false correct=true recall=1.00
+  red: yapılışta eklenen, listede olmayan: "kadar"
+
+--- t26 [insufficient/tr] strict=false lenient=false 
+  red: malzeme başlığı/madde işareti yok | malzeme sayısı 0 < 3
+
+--- t27 [insufficient/tr] strict=false lenient=false 
+  red: malzeme başlığı/madde işareti yok | malzeme sayısı 0 < 3

@@ -1,0 +1,4 @@
+# DENEME dalı (experiment/cheap-extraction): Vercel Hobby dağıtım başına en fazla 12 fonksiyon.
+# Deney ucu (api/experiment.js) için aile bildirimi ucu bu dağıtıma yüklenmez; dosya ve testleri repoda kalır.
+# Ayrıca bu korumalı deney dağıtımından gerçek kullanıcılara bildirim gönderilemez.
+api/notify.js

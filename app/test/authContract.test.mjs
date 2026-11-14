@@ -24,6 +24,8 @@ const ENDPOINTS = {
   "recipe-jobs": ["GET", "POST"],
   "suggest-recipes": ["POST"],
   "translate-recipe": ["POST"],
+  // DENEME dalı (experiment/cheap-extraction): yalnızca bu dalın Preview dağıtımında etkin
+  experiment: ["GET", "POST"],
 };
 
 // Uçların gövde/sorgu ile kimlik taşımaya çalışması da işe yaramamalı: bu

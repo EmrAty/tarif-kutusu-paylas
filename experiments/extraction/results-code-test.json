@@ -1,0 +1,2647 @@
+[
+ {
+  "id": "t01",
+  "kind": "list",
+  "lang": "tr",
+  "ms": 60.5827,
+  "s": {
+   "recall": 1,
+   "misses": [],
+   "spurious": [
+    "|ayırın)"
+   ],
+   "stepsOk": true,
+   "stepsNote": "",
+   "extrasMissing": [],
+   "correct": false
+  },
+  "strictSame": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok"
+   ]
+  },
+  "lenientSame": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok"
+   ]
+  },
+  "strictTr": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok"
+   ]
+  },
+  "title": null,
+  "ingredients": [
+   [
+    "1 su bardağı",
+    "su",
+    ""
+   ],
+   [
+    "1 su bardağı",
+    "süt",
+    ""
+   ],
+   [
+    "1 paket",
+    "instant maya",
+    ""
+   ],
+   [
+    "3 yemek kaşığı",
+    "toz şeker",
+    ""
+   ],
+   [
+    "1 su bardağı",
+    "ayçiçek yağı",
+    ""
+   ],
+   [
+    "2",
+    "yumurta (1 adet yumurta sarısını üzerine",
+    ""
+   ],
+   [
+    "",
+    "ayırın)",
+    "sürmek"
+   ],
+   [
+    "1 tatlı kaşığı",
+    "tuz",
+    "sürmek"
+   ],
+   [
+    "6-6.5 su bardağı",
+    "un",
+    "sürmek"
+   ]
+  ],
+  "instructions": []
+ },
+ {
+  "id": "t02",
+  "kind": "list",
+  "lang": "tr",
+  "ms": 14.1414,
+  "s": {
+   "recall": 0.9,
+   "misses": [
+    "5 su bardağı un"
+   ],
+   "spurious": [
+    "5 su bardağı|artı",
+    "1 yemek kaşığı|un kontrollü ekleyelim bazen",
+    "5 su bardağı|da yeterli oluyor",
+    "1|sarısı",
+    "|ayıralım",
+    "|10 gr",
+    "|Kullandığım su bardağı ölçüsü",
+    "|200 ml",
+    "|Kullandığım çay bardağı ölçüsü",
+    "|125 ml",
+    "|Poğaça tarifi"
+   ],
+   "stepsOk": false,
+   "stepsNote": "eksik adım: 180 derecede pişirdim ",
+   "extrasMissing": [],
+   "correct": false
+  },
+  "strictSame": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok",
+    "uzun malzeme (birleşmiş olabilir): \"1 yemek kaşığı nişasta mısır nişasta kul…\"",
+    "adın içinde ikinci miktar: \"10 gr\"",
+    "adın içinde ikinci miktar: \"200 ml\"",
+    "adın içinde ikinci miktar: \"125 ml\"",
+    "yapılışta listede olmayan ölçülü malzeme: \"2 su bardağı kadar\"",
+    "yapılışta eklenen, listede olmayan: \"sırasıyla\"",
+    "yapılışta eklenen, listede olmayan: \"unu\"",
+    "yapılışta eklenen, listede olmayan: \"unu\""
+   ]
+  },
+  "lenientSame": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok",
+    "uzun malzeme (birleşmiş olabilir): \"1 yemek kaşığı nişasta mısır nişasta kul…\"",
+    "adın içinde ikinci miktar: \"10 gr\"",
+    "adın içinde ikinci miktar: \"200 ml\"",
+    "adın içinde ikinci miktar: \"125 ml\"",
+    "yapılışta listede olmayan ölçülü malzeme: \"2 su bardağı kadar\"",
+    "yapılışta eklenen, listede olmayan: \"sırasıyla\"",
+    "yapılışta eklenen, listede olmayan: \"unu\"",
+    "yapılışta eklenen, listede olmayan: \"unu\""
+   ]
+  },
+  "strictTr": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok",
+    "uzun malzeme (birleşmiş olabilir): \"1 yemek kaşığı nişasta mısır nişasta kul…\"",
+    "adın içinde ikinci miktar: \"10 gr\"",
+    "adın içinde ikinci miktar: \"200 ml\"",
+    "adın içinde ikinci miktar: \"125 ml\"",
+    "yapılışta listede olmayan ölçülü malzeme: \"2 su bardağı kadar\"",
+    "yapılışta eklenen, listede olmayan: \"sırasıyla\"",
+    "yapılışta eklenen, listede olmayan: \"unu\"",
+    "yapılışta eklenen, listede olmayan: \"unu\""
+   ]
+  },
+  "title": null,
+  "ingredients": [
+   [
+    "5 su bardağı",
+    "artı",
+    ""
+   ],
+   [
+    "1 yemek kaşığı",
+    "un kontrollü ekleyelim bazen",
+    ""
+   ],
+   [
+    "5 su bardağı",
+    "da yeterli oluyor",
+    ""
+   ],
+   [
+    "1 yemek kaşığı",
+    "nişasta mısır nişasta kullandım buğday da kullanabilirsiniz",
+    ""
+   ],
+   [
+    "250 gr",
+    "oda ısısında yumusamış tereyağ",
+    ""
+   ],
+   [
+    "1 çay bardağı",
+    "ılık su",
+    ""
+   ],
+   [
+    "2 adet",
+    "yumurta",
+    ""
+   ],
+   [
+    "1",
+    "sarısı",
+    ""
+   ],
+   [
+    "",
+    "ayıralım",
+    "üzeri"
+   ],
+   [
+    "4 yemek kaşığı",
+    "yoğurt sulu tarafından",
+    "üzeri"
+   ],
+   [
+    "1 paket",
+    "insant kuru maya",
+    "üzeri"
+   ],
+   [
+    "",
+    "10 gr",
+    "üzeri"
+   ],
+   [
+    "1 yemek kaşığı",
+    "tozşeker",
+    "üzeri"
+   ],
+   [
+    "1 tatlı kaşığı",
+    "tuz damak tadınıza göre ayarlayabilirsiniz",
+    "üzeri"
+   ],
+   [
+    "1 adet",
+    "yumurta sarısı",
+    "Üzeri"
+   ],
+   [
+    "",
+    "Kullandığım su bardağı ölçüsü",
+    "Üzeri"
+   ],
+   [
+    "",
+    "200 ml",
+    "Üzeri"
+   ],
+   [
+    "",
+    "Kullandığım çay bardağı ölçüsü",
+    "Üzeri"
+   ],
+   [
+    "",
+    "125 ml",
+    "Üzeri"
+   ],
+   [
+    "",
+    "Poğaça tarifi",
+    "Üzeri"
+   ]
+  ],
+  "instructions": [
+   "Oda ısısında yumusamış tereyağ ılık suyu ekleyip mayayı ekleyip biraz karıştıralım maya aktif olması için geri kalan malzemeleri de sırasıyla ekleyip karıştıralım ilk önce 2 su bardağı kadar unu ekleyip karıştırıp 1 yemek kaşığı nişastayı ekleyip karıştırıp tekrar unu ekleyelim unu kontrollü ekleyelim bazen 5 su bardağı yeterli oluyor yumurta büyüklüğüne göre değişebilir ele yapışmayan yumuşak kıvamda olmasına hamurun dikkat edelim hamuru güzel yoğurup yoğurma kabında üzerini kapatıp 20 dakika dinlendirelim"
+  ]
+ },
+ {
+  "id": "t03",
+  "kind": "list",
+  "lang": "tr",
+  "ms": 4.1082,
+  "s": {
+   "recall": 0.2,
+   "misses": [
+    "1 yufka",
+    "1 beyaz peynir",
+    "1 maydonoz",
+    "2 yumurta",
+    "1 süt",
+    "1 yağ",
+    "kabartma tozu",
+    "yumurta sarısı"
+   ],
+   "spurious": [
+    "210|dereceli Fırında 25.dakika konturollü",
+    "|Cam Tepside yapacaksanız fırının En Alt kısmında pişiriri yoksa Altı Kızarmaz Zutaten",
+    "|Böreklik",
+    "1|Schüssel Weißkäse",
+    "1|Prise Petersilie Für die Soße",
+    "2|Eier",
+    "1|Tasse Milch",
+    "1|Tasse Öl",
+    "1|Esslöffel Mehl",
+    "1/2|Päckchen Backpulver",
+    "1|Eigelb"
+   ],
+   "stepsOk": false,
+   "stepsNote": "eksik adım: beklettim ",
+   "extrasMissing": [],
+   "correct": false
+  },
+  "strictSame": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok",
+    "miktarsız uzun parça: \"Cam Tepside yapacaksanız fırının En Alt \"",
+    "uzun malzeme (birleşmiş olabilir): \"Cam Tepside yapacaksanız fırının En Alt …\"",
+    "yapılış başlıksız (sınırı tahmin)"
+   ]
+  },
+  "lenientSame": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok",
+    "miktarsız uzun parça: \"Cam Tepside yapacaksanız fırının En Alt \"",
+    "uzun malzeme (birleşmiş olabilir): \"Cam Tepside yapacaksanız fırının En Alt …\""
+   ]
+  },
+  "strictTr": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok",
+    "miktarsız uzun parça: \"Cam Tepside yapacaksanız fırının En Alt \"",
+    "uzun malzeme (birleşmiş olabilir): \"Cam Tepside yapacaksanız fırının En Alt …\"",
+    "yapılış başlıksız (sınırı tahmin)"
+   ]
+  },
+  "title": "Su Böreği Tadında Börek 1",
+  "ingredients": [
+   [
+    "210",
+    "dereceli Fırında 25.dakika konturollü",
+    "Sosu"
+   ],
+   [
+    "",
+    "Cam Tepside yapacaksanız fırının En Alt kısmında pişiriri yoksa Altı Kızarmaz Zutaten",
+    "Sosu"
+   ],
+   [
+    "1",
+    "Packung",
+    "Sosu"
+   ],
+   [
+    "",
+    "Böreklik",
+    "Sosu"
+   ],
+   [
+    "1",
+    "Schüssel Weißkäse",
+    "Sosu"
+   ],
+   [
+    "1",
+    "Prise Petersilie Für die Soße",
+    "Sosu"
+   ],
+   [
+    "2",
+    "Eier",
+    "Sosu"
+   ],
+   [
+    "1",
+    "Tasse Milch",
+    "Sosu"
+   ],
+   [
+    "1",
+    "Tasse Öl",
+    "Sosu"
+   ],
+   [
+    "1",
+    "Esslöffel Mehl",
+    "Sosu"
+   ],
+   [
+    "1",
+    "Tasse Soda",
+    "Sosu"
+   ],
+   [
+    "1/2",
+    "Päckchen Backpulver",
+    "Sosu"
+   ],
+   [
+    "1",
+    "Eigelb",
+    "Sosu"
+   ]
+  ],
+  "instructions": [
+   "Die letzte Teigschicht mit der restlichen Soße bestreichen",
+   "Den Börek",
+   "20 Minuten ruhen lassen",
+   "Den Backofen auf",
+   "210 Grad vorheizen",
+   "Den Börek",
+   "25 Minuten backen"
+  ]
+ },
+ {
+  "id": "t04",
+  "kind": "list",
+  "lang": "tr",
+  "ms": 3.5511,
+  "s": {
+   "recall": 1,
+   "misses": [],
+   "spurious": [],
+   "stepsOk": true,
+   "stepsNote": "",
+   "extrasMissing": [],
+   "correct": true
+  },
+  "strictSame": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok",
+    "büyük harften tahmin edilen 6 sınır"
+   ]
+  },
+  "lenientSame": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok"
+   ]
+  },
+  "strictTr": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok",
+    "büyük harften tahmin edilen 6 sınır"
+   ]
+  },
+  "title": null,
+  "ingredients": [
+   [
+    "2 su bardağı",
+    "su (400 ml )",
+    ""
+   ],
+   [
+    "2 su bardağı",
+    "un ( 240 gram )",
+    ""
+   ],
+   [
+    "1/2 çay bardağı",
+    "sıvı yağ",
+    ""
+   ],
+   [
+    "1 adet",
+    "yumurta",
+    ""
+   ],
+   [
+    "",
+    "Tuz",
+    ""
+   ],
+   [
+    "100 gram",
+    "kaşar peyniri",
+    "İç dolgu"
+   ],
+   [
+    "150 gram",
+    "beyaz peyniri",
+    "İç dolgu"
+   ],
+   [
+    "",
+    "Yeşil soğan",
+    "İç dolgu"
+   ],
+   [
+    "",
+    "Pul biber",
+    "İç dolgu"
+   ]
+  ],
+  "instructions": []
+ },
+ {
+  "id": "t05",
+  "kind": "list",
+  "lang": "tr",
+  "ms": 2.7329,
+  "s": {
+   "recall": 0.7142857142857143,
+   "misses": [
+    "150 gram tereyağ",
+    "kaşar"
+   ],
+   "spurious": [
+    "|2 buçuk bardak",
+    "600-700gr|150 gram tereyağ",
+    "|İç malzeme"
+   ],
+   "stepsOk": false,
+   "stepsNote": "yapılışa karışan: youtube kanalimi",
+   "extrasMissing": [],
+   "correct": false
+  },
+  "strictSame": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok",
+    "adın içinde ikinci miktar: \"2 buçuk bardak\"",
+    "adın içinde ikinci miktar: \"6 7 bardak un\"",
+    "adın içinde ikinci miktar: \"600-700gr 150 gram tereyağ\"",
+    "adın içinde ikinci miktar: \"4 5 adet patates\"",
+    "yapılış başlıksız (sınırı tahmin)",
+    "büyük harften tahmin edilen 2 sınır",
+    "yapılışta eklenen, listede olmayan: \"kontrollü\""
+   ]
+  },
+  "lenientSame": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok",
+    "adın içinde ikinci miktar: \"2 buçuk bardak\"",
+    "adın içinde ikinci miktar: \"6 7 bardak un\"",
+    "adın içinde ikinci miktar: \"600-700gr 150 gram tereyağ\"",
+    "adın içinde ikinci miktar: \"4 5 adet patates\"",
+    "yapılışta eklenen, listede olmayan: \"kontrollü\""
+   ]
+  },
+  "strictTr": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok",
+    "adın içinde ikinci miktar: \"2 buçuk bardak\"",
+    "adın içinde ikinci miktar: \"6 7 bardak un\"",
+    "adın içinde ikinci miktar: \"600-700gr 150 gram tereyağ\"",
+    "adın içinde ikinci miktar: \"4 5 adet patates\"",
+    "yapılış başlıksız (sınırı tahmin)",
+    "büyük harften tahmin edilen 2 sınır",
+    "yapılışta eklenen, listede olmayan: \"kontrollü\""
+   ]
+  },
+  "title": null,
+  "ingredients": [
+   [
+    "500 ml",
+    "su",
+    ""
+   ],
+   [
+    "",
+    "2 buçuk bardak",
+    ""
+   ],
+   [
+    "1 tatlı kaşığı",
+    "tuz",
+    ""
+   ],
+   [
+    "6",
+    "7 bardak un",
+    ""
+   ],
+   [
+    "600-700gr",
+    "150 gram tereyağ",
+    ""
+   ],
+   [
+    "",
+    "İç malzeme",
+    ""
+   ],
+   [
+    "4",
+    "5 adet patates",
+    ""
+   ],
+   [
+    "",
+    "tuz pulbiber ve kaşar",
+    ""
+   ]
+  ],
+  "instructions": [
+   "Hamur malzemelerini karıştırıp yumuşak ele yapışmayan bir hamur elde edelim",
+   "hamurun kıvamı kesinlikle çok yumuşak olmalı unu kontrollü ekleyin",
+   "10 dakika dinlendirin merdaneyle hamuru büyütün oda ısısında tereyağını her tarafına sürün rulo şeklinde sarın",
+   "Yarım saat soğuk bir ortamda bekletin",
+   "sonra bastırarak hamurdan istediğiniz boyutta kesin masaya sıvıyağ döküp yağlı bir şekilde açın incecik olmalı ve oldukça kolay açılacak",
+   "Patates ekleyin ve kaşar ekleyip videodaki gibi katlayın öncede",
+   "10 dakika ısıtılmış fanlı fırında kızarana kadar pişirin",
+   "youtube kanalimi ziyaret edin"
+  ]
+ },
+ {
+  "id": "t06",
+  "kind": "list",
+  "lang": "tr",
+  "ms": 1.125,
+  "s": {
+   "recall": 0.9090909090909091,
+   "misses": [
+    "yarım paket krema"
+   ],
+   "spurious": [
+    "|Yarım",
+    "|Paket krema"
+   ],
+   "stepsOk": true,
+   "stepsNote": "",
+   "extrasMissing": [
+    "zeytinyağ"
+   ],
+   "correct": false
+  },
+  "strictSame": {
+   "accept": false,
+   "reasons": [
+    "miktarsız malzeme oranı 6/12",
+    "miktarsız uzun parça: \"Üzerine isteğe bağlı pul biber, kekik ve\"",
+    "büyük harften tahmin edilen 2 sınır"
+   ]
+  },
+  "lenientSame": {
+   "accept": false,
+   "reasons": [
+    "miktarsız malzeme oranı 6/12",
+    "miktarsız uzun parça: \"Üzerine isteğe bağlı pul biber, kekik ve\""
+   ]
+  },
+  "strictTr": {
+   "accept": false,
+   "reasons": [
+    "miktarsız malzeme oranı 6/12",
+    "miktarsız uzun parça: \"Üzerine isteğe bağlı pul biber, kekik ve\"",
+    "büyük harften tahmin edilen 2 sınır"
+   ]
+  },
+  "title": "“Az Malzemeli Pratik Mantar Çorbası” ✅",
+  "ingredients": [
+   [
+    "4-5 adet",
+    "mantar",
+    ""
+   ],
+   [
+    "Bir orta boy",
+    "soğan",
+    ""
+   ],
+   [
+    "2 diş",
+    "sarımsak",
+    ""
+   ],
+   [
+    "Bir yemek kaşığı",
+    "tereyağı",
+    ""
+   ],
+   [
+    "Bir yemek kaşığı",
+    "un",
+    ""
+   ],
+   [
+    "",
+    "Yarım",
+    ""
+   ],
+   [
+    "",
+    "Paket krema",
+    ""
+   ],
+   [
+    "4-5 dal",
+    "maydanoz",
+    ""
+   ],
+   [
+    "",
+    "Tuz",
+    ""
+   ],
+   [
+    "",
+    "Karabiber",
+    ""
+   ],
+   [
+    "",
+    "Kaynar su",
+    ""
+   ],
+   [
+    "",
+    "Üzerine isteğe bağlı pul biber, kekik ve limon",
+    ""
+   ]
+  ],
+  "instructions": [
+   "Yemeklik doğradığımız soğana az zeytinyağında kavuruyoruz tereyağı ve sarımsak ekliyoruz, sarımsağın kokusu çıkmaya başlayınca doğradığımız mantarları ekliyoruz, bir yemek kaşığı un ekleyip kavurduktan sonra krema ve kaynar suyunu ekliyoruz, kremanın oda ısısında olması daha iyi olur, 10 dakika kaynattıktan sonra ince kıyılmış maydanoz, tuz, karabiber ekleyip ocaktan alıyoruz"
+  ]
+ },
+ {
+  "id": "t07",
+  "kind": "list",
+  "lang": "tr",
+  "ms": 1.3122,
+  "s": {
+   "recall": 1,
+   "misses": [],
+   "spurious": [],
+   "stepsOk": true,
+   "stepsNote": "",
+   "extrasMissing": [],
+   "correct": true
+  },
+  "strictSame": {
+   "accept": true,
+   "reasons": []
+  },
+  "lenientSame": {
+   "accept": true,
+   "reasons": []
+  },
+  "strictTr": {
+   "accept": true,
+   "reasons": []
+  },
+  "title": null,
+  "ingredients": [
+   [
+    "2 adet",
+    "yufka",
+    ""
+   ],
+   [
+    "150 gr",
+    "kaşar peyniri",
+    "İçi"
+   ],
+   [
+    "100 gr",
+    "beyaz peynir",
+    "İçi"
+   ],
+   [
+    "Çeyrek demet",
+    "maydanoz",
+    "İçi"
+   ],
+   [
+    "1 çay kaşığı",
+    "pul biber",
+    "İçi"
+   ],
+   [
+    "2 adet",
+    "yumurta",
+    "Sosu"
+   ],
+   [
+    "1 çay kaşığı",
+    "kabartma tozu",
+    "Sosu"
+   ],
+   [
+    "3 yemek kaşığı",
+    "sıvı yağ",
+    "Sosu"
+   ],
+   [
+    "3 yemek kaşığı",
+    "yoğurt",
+    "Sosu"
+   ],
+   [
+    "1 çay kaşığı",
+    "tuz",
+    "Sosu"
+   ],
+   [
+    "Yarım çay kaşığı",
+    "karabiber",
+    "Sosu"
+   ]
+  ],
+  "instructions": [
+   "Sosu için karıştırma kabına yumurta, yoğurt, sıvı yağ, tuz, karabiber ve kabartma tozunu alarak güzelce çırpalım",
+   "Ayrı bir kapta rendelenmiş kaşar peyniri, beyaz peynir, pul biber ve ince kıyılmış maydanozu karıştıralım",
+   "Yufkalardan birini tezgaha açalım, üzerine hazırladığımız sosun yarısını gezdirip fırça ile her yerine sürelim",
+   "Peynirli iç harcı yayalım ve diğer yufkayı da üzerine serelim",
+   "Kalan sosu fırça ile her yerine gelecek şekilde sürelim",
+   "Yufkanın kenarlarını önce hafifçe içe katlayalım, sonra rulo şeklinde saralım",
+   "Dilim dilim kestikten sonra böreklerimiz pişmeye hazır",
+   "Birkaç dakika öncesinden ısıttığımız tost makinesine pişirme kağıdı yerleştirelim ve dilimlediğimiz börekleri sıralayalım",
+   "Böreklerimiz pişerken ezilmemesi için tost makinesinin kapağını aralık kalacak şekilde kapatalım",
+   "Orta sıcaklıkta yaklaşık 30 dakika kontrollü bir şekilde pişirelim",
+   "Sürenin sonunda üzerleri güzelce kızaran yumuşacık pişmiş börekleri sıcak sıcak servis edebilirsiniz"
+  ]
+ },
+ {
+  "id": "t08",
+  "kind": "list",
+  "lang": "tr",
+  "ms": 2.1834,
+  "s": {
+   "recall": 1,
+   "misses": [],
+   "spurious": [],
+   "stepsOk": true,
+   "stepsNote": "",
+   "extrasMissing": [],
+   "correct": true
+  },
+  "strictSame": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok",
+    "miktarsız uzun parça: \"Yarım çay bardağına yakın pekmez\"",
+    "büyük harften tahmin edilen 1 sınır"
+   ]
+  },
+  "lenientSame": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok",
+    "miktarsız uzun parça: \"Yarım çay bardağına yakın pekmez\""
+   ]
+  },
+  "strictTr": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok",
+    "miktarsız uzun parça: \"Yarım çay bardağına yakın pekmez\"",
+    "büyük harften tahmin edilen 1 sınır"
+   ]
+  },
+  "title": null,
+  "ingredients": [
+   [
+    "1,5 su bardağı",
+    "ılık süt",
+    ""
+   ],
+   [
+    "1 su bardağı",
+    "ılık su",
+    ""
+   ],
+   [
+    "3-4 yemek kaşığı",
+    "şeker",
+    ""
+   ],
+   [
+    "1 paket",
+    "instant maya",
+    ""
+   ],
+   [
+    "1 su bardağı",
+    "sıvıyağ",
+    ""
+   ],
+   [
+    "1 tatlı kaşığı",
+    "tuz",
+    ""
+   ],
+   [
+    "1 çay kaşığı",
+    "mahlep (Yoksa önemli değil)",
+    ""
+   ],
+   [
+    "7 su bardağı",
+    "un",
+    ""
+   ],
+   [
+    "1 tatlı kaşığı",
+    "oda ısısında yumuşamış tereyağ",
+    ""
+   ],
+   [
+    "",
+    "Kaşar peyniri",
+    ""
+   ],
+   [
+    "",
+    "Yarım çay bardağına yakın pekmez",
+    "Bulamak"
+   ],
+   [
+    "1 su bardağı",
+    "su",
+    "Bulamak"
+   ],
+   [
+    "",
+    "Bolca kavrulmuş susam",
+    "Bulamak"
+   ]
+  ],
+  "instructions": [
+   "Öncelikle ılık süt, ılık su, şeker ve instant mayayı bir kabın içine alıp çırpalım",
+   "Daha sonra içine sıvıyağını ilave edelim ve elemiş olduğumuz unu azar azar ekleyerek karıştıralım",
+   "Bir miktar un ekledikten sonra yüz ve mahlebini ekleyelim ve yoğurmaya devam edelim",
+   "Elimize hafif yapışan yumuşak bir hamur elde edelim",
+   "En son oda sıcaklığında yumuşamış tereyağınıda ekleyip, iyice yoğuralım",
+   "Hamuru toparlayıp, üzerini streç filmle sıkıca kapatalım ve bir örtüye sarıp, sıcak bir ortamda 1 saat mayalandıralım",
+   "Mayalanan hamuru hafifçe çok söndürmeden gazını alalım",
+   "Mandalina büyüklüğünde parçalar kopartıp, elimizle yuvarlayalım",
+   "Mayalanması için bir tepsinin üzerine koyalım be hepsi için aynı işlemi uygulayalım",
+   "Poğaçamızı yapmak için ilk yaptığımız bezeyi alalım ve alt kısmı üste gelecek şekilde düz bir zemine koyalım",
+   "Elimizle çok bastırmadan ve inceltmeden bir miktar açalım",
+   "İçine bir miktar dilimlenmiş kaşar peyniri koyacağım ve üzerini kapatalım. Daha sonra elimizle düzeltelim",
+   "Poğaçamızı birleştirdiğimiz kısımdan tutup, üst tarafını önce pekmezli suya daha sonra her tarafını bol susama bulayalım",
+   "Poğaçamızı yağlı kağıt serilmiş fırın tepsimizi yerleştirelim. Hepsi için aynı işlemi uygulayalım. Ortalama 16-17 adet poğaçamız çıkıyor",
+   "Tepsimiz üzerine bir bez örtüp 15-20 dakika tepsi mayası verelim. Bu çok önemli",
+   "Mayalanan poğaçalarımızın üzerine çok derin olmayacak şekilde 3 tane çizik atalım. Çok derin keserseniz poğaça kestiğiniz yerlerden patlar ve kaşar peynirleri dışına çıkar",
+   "Önceden ısıtmış olduğumuz 180 derece alt üst ayarda poğaçalarımızın üzeri ve altı hafif kızarana kadar pişirelim"
+  ]
+ },
+ {
+  "id": "t09",
+  "kind": "list",
+  "lang": "tr",
+  "ms": 0.7461,
+  "s": {
+   "recall": 1,
+   "misses": [],
+   "spurious": [
+    "|Şimdiden deneyen herkese afiyet olsun"
+   ],
+   "stepsOk": true,
+   "stepsNote": "",
+   "extrasMissing": [
+    "salça"
+   ],
+   "correct": false
+  },
+  "strictSame": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok",
+    "miktarsız uzun parça: \"Şimdiden deneyen herkese afiyet olsun\""
+   ]
+  },
+  "lenientSame": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok",
+    "miktarsız uzun parça: \"Şimdiden deneyen herkese afiyet olsun\""
+   ]
+  },
+  "strictTr": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok",
+    "miktarsız uzun parça: \"Şimdiden deneyen herkese afiyet olsun\""
+   ]
+  },
+  "title": "SALÇALI MERCİMEK ÇORBASI",
+  "ingredients": [
+   [
+    "1 su bardağı",
+    "mercimek",
+    ""
+   ],
+   [
+    "1 adet",
+    "soğan",
+    ""
+   ],
+   [
+    "1 adet",
+    "havuç",
+    ""
+   ],
+   [
+    "1 adet",
+    "patates",
+    ""
+   ],
+   [
+    "1 yemek kaşığı",
+    "un",
+    ""
+   ],
+   [
+    "3 yemek kaşığı",
+    "sıvı yağı",
+    ""
+   ],
+   [
+    "2 litre",
+    "su",
+    ""
+   ],
+   [
+    "",
+    "Tuz",
+    ""
+   ],
+   [
+    "",
+    "Pul biber",
+    ""
+   ],
+   [
+    "",
+    "Nane",
+    ""
+   ],
+   [
+    "",
+    "Şimdiden deneyen herkese afiyet olsun",
+    ""
+   ]
+  ],
+  "instructions": []
+ },
+ {
+  "id": "t10",
+  "kind": "list",
+  "lang": "tr",
+  "ms": 0.7598,
+  "s": {
+   "recall": 1,
+   "misses": [],
+   "spurious": [],
+   "stepsOk": true,
+   "stepsNote": "",
+   "extrasMissing": [],
+   "correct": true
+  },
+  "strictSame": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok"
+   ]
+  },
+  "lenientSame": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok"
+   ]
+  },
+  "strictTr": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok"
+   ]
+  },
+  "title": "SALÇALI YOĞURT ÇORBASI",
+  "ingredients": [
+   [
+    "1 çay bardağı",
+    "tel şehriye",
+    ""
+   ],
+   [
+    "1,5 yemek kaşığı",
+    "tereyağı",
+    ""
+   ],
+   [
+    "1 yemek kaşığı",
+    "sıvı yağ",
+    ""
+   ],
+   [
+    "1 yemek kaşığı",
+    "karışık salça",
+    ""
+   ],
+   [
+    "1 litre",
+    "su",
+    ""
+   ],
+   [
+    "1 su bardağı",
+    "yoğurt",
+    ""
+   ],
+   [
+    "1 adet",
+    "yumurta",
+    ""
+   ],
+   [
+    "",
+    "Tuz",
+    ""
+   ],
+   [
+    "",
+    "Karabiber",
+    ""
+   ],
+   [
+    "Yarım tutam",
+    "maydanoz",
+    ""
+   ]
+  ],
+  "instructions": []
+ },
+ {
+  "id": "t11",
+  "kind": "list",
+  "lang": "tr",
+  "ms": 2.8548,
+  "s": {
+   "recall": 0.875,
+   "misses": [
+    "550 - 600 ml su"
+   ],
+   "spurious": [
+    "|aşağıda . Bu ve daha fazla",
+    "|YOUTUBE kanalıma ÜCRETSİZ ABONE OLabilirsiniz . Detaylı tarif videosunu",
+    "|biodaki linke tıklayarak ya da google’a “Çiçek’in Tarifleri Domates Çorbası” yazıp aratarak izleyebilirsiniz",
+    "|YouTube/ÇiçekinTarifleri",
+    "|DOMATES ÇORBASI",
+    "600 ml|su"
+   ],
+   "stepsOk": true,
+   "stepsNote": "",
+   "extrasMissing": [],
+   "correct": false
+  },
+  "strictSame": {
+   "accept": false,
+   "reasons": [
+    "miktarsız malzeme oranı 6/13",
+    "miktarsız uzun parça: \"aşağıda . Bu ve daha fazla\"",
+    "miktarsız uzun parça: \"YOUTUBE kanalıma ÜCRETSİZ ABONE OLabilir\"",
+    "miktarsız uzun parça: \"biodaki linke tıklayarak ya da google’a \"",
+    "uzun malzeme (birleşmiş olabilir): \"YOUTUBE kanalıma ÜCRETSİZ ABONE OLabilir…\"",
+    "uzun malzeme (birleşmiş olabilir): \"biodaki linke tıklayarak ya da google’a …\"",
+    "yapılışta eklenen, listede olmayan: \"unu\"",
+    "yapılışta eklenen, listede olmayan: \"baharatlarını\""
+   ]
+  },
+  "lenientSame": {
+   "accept": false,
+   "reasons": [
+    "miktarsız malzeme oranı 6/13",
+    "miktarsız uzun parça: \"aşağıda . Bu ve daha fazla\"",
+    "miktarsız uzun parça: \"YOUTUBE kanalıma ÜCRETSİZ ABONE OLabilir\"",
+    "miktarsız uzun parça: \"biodaki linke tıklayarak ya da google’a \"",
+    "uzun malzeme (birleşmiş olabilir): \"YOUTUBE kanalıma ÜCRETSİZ ABONE OLabilir…\"",
+    "uzun malzeme (birleşmiş olabilir): \"biodaki linke tıklayarak ya da google’a …\"",
+    "yapılışta eklenen, listede olmayan: \"unu\"",
+    "yapılışta eklenen, listede olmayan: \"baharatlarını\""
+   ]
+  },
+  "strictTr": {
+   "accept": false,
+   "reasons": [
+    "miktarsız malzeme oranı 6/13",
+    "miktarsız uzun parça: \"aşağıda . Bu ve daha fazla\"",
+    "miktarsız uzun parça: \"YOUTUBE kanalıma ÜCRETSİZ ABONE OLabilir\"",
+    "miktarsız uzun parça: \"biodaki linke tıklayarak ya da google’a \"",
+    "uzun malzeme (birleşmiş olabilir): \"YOUTUBE kanalıma ÜCRETSİZ ABONE OLabilir…\"",
+    "uzun malzeme (birleşmiş olabilir): \"biodaki linke tıklayarak ya da google’a …\"",
+    "yapılışta eklenen, listede olmayan: \"unu\"",
+    "yapılışta eklenen, listede olmayan: \"baharatlarını\""
+   ]
+  },
+  "title": "Dünyanın en kolay çorba ✅ tam kıvamında",
+  "ingredients": [
+   [
+    "",
+    "aşağıda . Bu ve daha fazla",
+    ""
+   ],
+   [
+    "",
+    "YOUTUBE kanalıma ÜCRETSİZ ABONE OLabilirsiniz . Detaylı tarif videosunu",
+    "tarif"
+   ],
+   [
+    "",
+    "biodaki linke tıklayarak ya da google’a “Çiçek’in Tarifleri Domates Çorbası” yazıp aratarak izleyebilirsiniz",
+    "izlemek"
+   ],
+   [
+    "",
+    "YouTube/ÇiçekinTarifleri",
+    "izlemek"
+   ],
+   [
+    "",
+    "DOMATES ÇORBASI",
+    "izlemek"
+   ],
+   [
+    "750 ml",
+    "domates püresi ( kışlık konserve) 550",
+    "izlemek"
+   ],
+   [
+    "600 ml",
+    "su",
+    "izlemek"
+   ],
+   [
+    "2 yemek kaşığı",
+    "un",
+    "izlemek"
+   ],
+   [
+    "2 yemek kaşığı",
+    "tereyağı",
+    "izlemek"
+   ],
+   [
+    "1 tatlı kaşığı",
+    "tuz",
+    "izlemek"
+   ],
+   [
+    "1 çay kaşığı",
+    "karabiber",
+    "izlemek"
+   ],
+   [
+    "1/3 çay kaşığı",
+    "kimyon",
+    "izlemek"
+   ],
+   [
+    "",
+    "kaşar peyniri",
+    "üzeri"
+   ]
+  ],
+  "instructions": [
+   "kışlık domates sosunu robottan geçirip püre haline getirin",
+   "tereyağını eritip unu ekleyip 3-4 dk kavurun tel çırpıcı ile karıştırırken domates püresini ve biraz da su ekleyip kaynayana kadar pişirin",
+   "kaynadıktan sonra baharatlarını ekleyin ve istediğiniz kıvama göre su ilavesi yapıp 2 dk daha pişirin üzerine kaşar peyniri rendesi ile servis edin AFİYET OLSUN"
+  ]
+ },
+ {
+  "id": "t12",
+  "kind": "list",
+  "lang": "tr",
+  "ms": 1.1744,
+  "s": {
+   "recall": 1,
+   "misses": [],
+   "spurious": [],
+   "stepsOk": false,
+   "stepsNote": "yapılışa karışan: pişme esnasında tereyağ",
+   "extrasMissing": [],
+   "correct": false
+  },
+  "strictSame": {
+   "accept": false,
+   "reasons": [
+    "miktarsız malzeme oranı 5/11",
+    "miktarsız uzun parça: \"Birer yemek kaşığı domates ve biber salç\"",
+    "miktarsız uzun parça: \"Tuz, karabiber, kırmızı toz biber, zerde\"",
+    "büyük harften tahmin edilen 3 sınır",
+    "yapılışta eklenen, listede olmayan: \"baharatları\""
+   ]
+  },
+  "lenientSame": {
+   "accept": false,
+   "reasons": [
+    "miktarsız malzeme oranı 5/11",
+    "miktarsız uzun parça: \"Birer yemek kaşığı domates ve biber salç\"",
+    "miktarsız uzun parça: \"Tuz, karabiber, kırmızı toz biber, zerde\"",
+    "yapılışta eklenen, listede olmayan: \"baharatları\""
+   ]
+  },
+  "strictTr": {
+   "accept": false,
+   "reasons": [
+    "miktarsız malzeme oranı 5/11",
+    "miktarsız uzun parça: \"Birer yemek kaşığı domates ve biber salç\"",
+    "miktarsız uzun parça: \"Tuz, karabiber, kırmızı toz biber, zerde\"",
+    "büyük harften tahmin edilen 3 sınır",
+    "yapılışta eklenen, listede olmayan: \"baharatları\""
+   ]
+  },
+  "title": "“Kıymalı Tel Şehriye Çorbası” ✅",
+  "ingredients": [
+   [
+    "Bir adet",
+    "soğan",
+    ""
+   ],
+   [
+    "150 gram",
+    "kıyma",
+    ""
+   ],
+   [
+    "2 adet",
+    "havuç",
+    ""
+   ],
+   [
+    "",
+    "Bir küçük patates",
+    ""
+   ],
+   [
+    "",
+    "Birer yemek kaşığı domates ve biber salçası",
+    ""
+   ],
+   [
+    "",
+    "Tuz, karabiber, kırmızı toz biber, zerdeçal, kimyon",
+    ""
+   ],
+   [
+    "Bir çay bardağı",
+    "domates püresi",
+    ""
+   ],
+   [
+    "Bir avuç",
+    "tel şehriye",
+    ""
+   ],
+   [
+    "5-6 dal",
+    "maydanoz",
+    ""
+   ],
+   [
+    "",
+    "Yarım limon suyu",
+    ""
+   ],
+   [
+    "",
+    "Kaynar su",
+    ""
+   ]
+  ],
+  "instructions": [
+   "Soğanları yemeklik doğrayıp tencereye alıyoruz ve bir kaç dakika kavuruyoruz, kıymayı ilave edip kavurmaya devam ediyoruz, salça ve baharatları ekliyoruz, domates püresi ve ya rendelenmiş domatesi de ekledikten sonra kaynar su ilave ediyoruz",
+   "Rendelenmiş havucu ekliyoruz biraz piştikten sonra rendelenmiş patatesi ilave ediyoruz (çorbamız kıvam alsın diye), bunlar da pişip yumuşadıktan sonra tel şehriye ilave ediyoruz",
+   "Son olarak ince kıyılmış maydanoz ve limon suyunu da ekleyip ocağın altını kapatıyoruz",
+   "Not",
+   "Pişme esnasında tereyağ da ekleyebilirsiniz ve ya varsa tavuk ve ya et suyu, ben eklemedim"
+  ]
+ },
+ {
+  "id": "t13",
+  "kind": "list",
+  "lang": "tr",
+  "ms": 1.3937,
+  "s": {
+   "recall": 0.2222222222222222,
+   "misses": [
+    "1 yemek kaşığı tereyağ",
+    "1 yemek kaşığı salça",
+    "2 yemek kaşığı un",
+    "5 su bardağı tavuk suyu",
+    "1-1,5 tatlı kaşığı tuz",
+    "2-3 yemek kaşığı limon suyu",
+    "1 diş sarımsak"
+   ],
+   "spurious": [
+    "1|yemek kaşığı tereyağ",
+    "1|yemek kaşığı dolusu domates salçası",
+    "2|yemek kaşığı dolusu un",
+    "5|su bardağı tavuk suyu",
+    "1-1,5|tatlı kaşığı tuz",
+    "2-3|yemek kaşığı limon suyu",
+    "1|diş sarımsak",
+    "|Hazırlanışı: Tavukların üzerine",
+    "5|su bardağı kadar soğuk su ilave edin ve yaklaşık",
+    "45-50|dak. haşlayın. Haşladıktan sonra tavukları didikleyin ve suyunu bir kenara alın. Tencerenin içerisine tereyağını alın ve ezilmiş sarımsağı kısaca kavurun. Üzerine un ilave ederek köpürene kadar kavurmaya devam edin. Salçayıda ekleyip birlikte devam kavurun",
+    "|Ardından üzerine",
+    "5|su bardağı tavuk suyunu ekleyip karıştırın. Limon suyunu ,tavukları ve şehriyeyi ilave edip birlikte",
+    "10|dakika pişirmeye devam edin.Afiyet olsun:)"
+   ],
+   "stepsOk": false,
+   "stepsNote": "eksik adım: soğuk su ilave; pişirmeye devam edin ",
+   "extrasMissing": [],
+   "correct": false
+  },
+  "strictSame": {
+   "accept": false,
+   "reasons": [
+    "uzun malzeme (birleşmiş olabilir): \"45-50 dak. haşlayın. Haşladıktan sonra…\"",
+    "uzun malzeme (birleşmiş olabilir): \"5 su bardağı tavuk suyunu ekleyip karıs…\"",
+    "büyük harften tahmin edilen 1 sınır"
+   ]
+  },
+  "lenientSame": {
+   "accept": false,
+   "reasons": [
+    "uzun malzeme (birleşmiş olabilir): \"45-50 dak. haşlayın. Haşladıktan sonra…\"",
+    "uzun malzeme (birleşmiş olabilir): \"5 su bardağı tavuk suyunu ekleyip karıs…\""
+   ]
+  },
+  "strictTr": {
+   "accept": false,
+   "reasons": [
+    "uzun malzeme (birleşmiş olabilir): \"45-50 dak. haşlayın. Haşladıktan sonra…\"",
+    "uzun malzeme (birleşmiş olabilir): \"5 su bardağı tavuk suyunu ekleyip karıs…\"",
+    "büyük harften tahmin edilen 1 sınır"
+   ]
+  },
+  "title": null,
+  "ingredients": [
+   [
+    "4",
+    "tavuk but",
+    ""
+   ],
+   [
+    "1",
+    "yemek kaşığı tereyağ",
+    ""
+   ],
+   [
+    "1",
+    "yemek kaşığı dolusu domates salçası",
+    ""
+   ],
+   [
+    "2",
+    "yemek kaşığı dolusu un",
+    ""
+   ],
+   [
+    "1 yemek kaşığı",
+    "şehriye",
+    ""
+   ],
+   [
+    "5",
+    "su bardağı tavuk suyu",
+    ""
+   ],
+   [
+    "1-1,5",
+    "tatlı kaşığı tuz",
+    ""
+   ],
+   [
+    "2-3",
+    "yemek kaşığı limon suyu",
+    ""
+   ],
+   [
+    "1",
+    "diş sarımsak",
+    ""
+   ],
+   [
+    "",
+    "Hazırlanışı: Tavukların üzerine",
+    ""
+   ],
+   [
+    "5",
+    "su bardağı kadar soğuk su ilave edin ve yaklaşık",
+    ""
+   ],
+   [
+    "45-50",
+    "dak. haşlayın. Haşladıktan sonra tavukları didikleyin ve suyunu bir kenara alın. Tencerenin içerisine tereyağını alın ve ezilmiş sarımsağı kısaca kavurun. Üzerine un ilave ederek köpürene kadar kavurmaya devam edin. Salçayıda ekleyip birlikte devam kavurun",
+    ""
+   ],
+   [
+    "",
+    "Ardından üzerine",
+    ""
+   ],
+   [
+    "5",
+    "su bardağı tavuk suyunu ekleyip karıştırın. Limon suyunu ,tavukları ve şehriyeyi ilave edip birlikte",
+    ""
+   ],
+   [
+    "10",
+    "dakika pişirmeye devam edin.Afiyet olsun:)",
+    ""
+   ]
+  ],
+  "instructions": []
+ },
+ {
+  "id": "t14",
+  "kind": "list",
+  "lang": "tr",
+  "ms": 1.3106,
+  "s": {
+   "recall": 1,
+   "misses": [],
+   "spurious": [],
+   "stepsOk": false,
+   "stepsNote": "yapılışa karışan: doktorum",
+   "extrasMissing": [],
+   "correct": false
+  },
+  "strictSame": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok",
+    "yapılış başlıksız (sınırı tahmin)",
+    "büyük harften tahmin edilen 2 sınır"
+   ]
+  },
+  "lenientSame": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok"
+   ]
+  },
+  "strictTr": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok",
+    "yapılış başlıksız (sınırı tahmin)",
+    "büyük harften tahmin edilen 2 sınır"
+   ]
+  },
+  "title": "Beğenmeyi unutmayın Kilo aldıran un çorbası",
+  "ingredients": [
+   [
+    "1 yemek kaşığı",
+    "tambuğday unu",
+    ""
+   ],
+   [
+    "1 yemek kaşığı",
+    "bebek irmiği",
+    ""
+   ],
+   [
+    "1 tatlı kaşığı",
+    "bebek salçası",
+    ""
+   ],
+   [
+    "1 bardak",
+    "tavuk suyu (isteğe bağlı)",
+    ""
+   ],
+   [
+    "2 bardak",
+    "normal su",
+    ""
+   ],
+   [
+    "2 yemek kaşığı",
+    "zeytinyağ",
+    ""
+   ]
+  ],
+  "instructions": [
+   "Zeytinyağ da un ve irmiği az çevirelim salçayı ekleyip az daha çevirelim suyu yavaşça ekleyelim karıştıralım topaklanmasın tavuk suyunu ekleyelim pişmeye bırakalım yoğunluğa göre su ekleyebilirsiniz",
+   "doktorum bu çorbayı yedirmemi önerdi"
+  ]
+ },
+ {
+  "id": "t15",
+  "kind": "fetch_failed",
+  "lang": "tr",
+  "ms": 3.6361,
+  "s": null,
+  "strictSame": {
+   "accept": false,
+   "reasons": [
+    "dil unknown ≠ uygulama tr (çeviri gerekir)",
+    "malzeme başlığı/madde işareti yok",
+    "malzeme sayısı 0 < 3"
+   ]
+  },
+  "lenientSame": {
+   "accept": false,
+   "reasons": [
+    "dil unknown ≠ uygulama tr (çeviri gerekir)",
+    "malzeme başlığı/madde işareti yok",
+    "malzeme sayısı 0 < 3"
+   ]
+  },
+  "strictTr": {
+   "accept": false,
+   "reasons": [
+    "dil unknown ≠ uygulama tr (çeviri gerekir)",
+    "malzeme başlığı/madde işareti yok",
+    "malzeme sayısı 0 < 3"
+   ]
+  },
+  "title": null,
+  "ingredients": [],
+  "instructions": []
+ },
+ {
+  "id": "t16",
+  "kind": "list",
+  "lang": "tr",
+  "ms": 1.3339,
+  "s": {
+   "recall": 1,
+   "misses": [],
+   "spurious": [
+    "|Baharatlar",
+    "|Ölçülerini kendi damak tadınıza göre ayarlaya bilirsiniz “"
+   ],
+   "stepsOk": false,
+   "stepsNote": "eksik adım: küçük küçük doğrayıp; yemeğimiz hazır ",
+   "extrasMissing": [],
+   "correct": false
+  },
+  "strictSame": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok",
+    "miktarsız malzeme oranı 11/14",
+    "miktarsız uzun parça: \"Ölçülerini kendi damak tadınıza göre aya\""
+   ]
+  },
+  "lenientSame": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok",
+    "miktarsız malzeme oranı 11/14",
+    "miktarsız uzun parça: \"Ölçülerini kendi damak tadınıza göre aya\""
+   ]
+  },
+  "strictTr": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok",
+    "miktarsız malzeme oranı 11/14",
+    "miktarsız uzun parça: \"Ölçülerini kendi damak tadınıza göre aya\""
+   ]
+  },
+  "title": null,
+  "ingredients": [
+   [
+    "700 gr",
+    "tavuk göğüs",
+    ""
+   ],
+   [
+    "",
+    "İki adet kapya biber",
+    ""
+   ],
+   [
+    "",
+    "İki adet yeşil biber",
+    ""
+   ],
+   [
+    "",
+    "Bir baş soğan",
+    ""
+   ],
+   [
+    "",
+    "İki adet domates",
+    ""
+   ],
+   [
+    "Bir fincan",
+    "sıvıyağ bir tik fazla yağ kullandım",
+    ""
+   ],
+   [
+    "Bir tatlı kaşığı",
+    "tuz",
+    ""
+   ],
+   [
+    "",
+    "Baharatlar",
+    ""
+   ],
+   [
+    "",
+    "Kimyon",
+    ""
+   ],
+   [
+    "",
+    "Karabiber",
+    ""
+   ],
+   [
+    "",
+    "Toz tatlı biber",
+    ""
+   ],
+   [
+    "",
+    "Pulbiber",
+    ""
+   ],
+   [
+    "",
+    "Kekik",
+    ""
+   ],
+   [
+    "",
+    "Ölçülerini kendi damak tadınıza göre ayarlaya bilirsiniz “",
+    ""
+   ]
+  ],
+  "instructions": []
+ },
+ {
+  "id": "t17",
+  "kind": "list",
+  "lang": "tr",
+  "ms": 1.2809,
+  "s": {
+   "recall": 0.7,
+   "misses": [
+    "1 tatlı kaşığı kırmızı toz biber",
+    "1 çay kaşığı karabiber",
+    "1 tatlı kaşığı kekik"
+   ],
+   "spurious": [
+    "yaklaşık 5|dakika soteleyin.Mantarlar piştikten sonra domates ve baharatları da ekleyip",
+    "10|dakika pişmeye bırakın.Domatesler suyunu çektiğinde yemeğiniz hazır olmuş demektir.Afiyet olsun"
+   ],
+   "stepsOk": false,
+   "stepsNote": "eksik adım: julyen doğrayın; hazır olmuş demektir ",
+   "extrasMissing": [],
+   "correct": false
+  },
+  "strictSame": {
+   "accept": false,
+   "reasons": [
+    "uzun malzeme (birleşmiş olabilir): \"1 tatlı kaşığı tuz,1 tatlı kaşığı kırmız…\"",
+    "adın içinde ikinci miktar: \"1 tatlı kaşığı tuz,1 tatlı kaşığı kırmız\"",
+    "uzun malzeme (birleşmiş olabilir): \"yaklaşık 5 dakika soteleyin.Mantarlar pi…\"",
+    "uzun malzeme (birleşmiş olabilir): \"10 dakika pişmeye bırakın.Domatesler suy…\""
+   ]
+  },
+  "lenientSame": {
+   "accept": false,
+   "reasons": [
+    "uzun malzeme (birleşmiş olabilir): \"1 tatlı kaşığı tuz,1 tatlı kaşığı kırmız…\"",
+    "adın içinde ikinci miktar: \"1 tatlı kaşığı tuz,1 tatlı kaşığı kırmız\"",
+    "uzun malzeme (birleşmiş olabilir): \"yaklaşık 5 dakika soteleyin.Mantarlar pi…\"",
+    "uzun malzeme (birleşmiş olabilir): \"10 dakika pişmeye bırakın.Domatesler suy…\""
+   ]
+  },
+  "strictTr": {
+   "accept": false,
+   "reasons": [
+    "uzun malzeme (birleşmiş olabilir): \"1 tatlı kaşığı tuz,1 tatlı kaşığı kırmız…\"",
+    "adın içinde ikinci miktar: \"1 tatlı kaşığı tuz,1 tatlı kaşığı kırmız\"",
+    "uzun malzeme (birleşmiş olabilir): \"yaklaşık 5 dakika soteleyin.Mantarlar pi…\"",
+    "uzun malzeme (birleşmiş olabilir): \"10 dakika pişmeye bırakın.Domatesler suy…\""
+   ]
+  },
+  "title": "Mantarlı Tavuk Sote",
+  "ingredients": [
+   [
+    "400 gr",
+    "tavuk göğsü (1 adet)",
+    ""
+   ],
+   [
+    "2-3 yemek kaşığı",
+    "zeytinyağı",
+    ""
+   ],
+   [
+    "2 adet",
+    "yeşil biber",
+    ""
+   ],
+   [
+    "2 adet",
+    "kırmızı kapya biber",
+    ""
+   ],
+   [
+    "350 gr",
+    "mantar",
+    ""
+   ],
+   [
+    "1 adet",
+    "domates",
+    ""
+   ],
+   [
+    "1 tatlı kaşığı",
+    "tuz,1 tatlı kaşığı kırmızı toz biber,1 çay kaşığı karabiber,1 tatlı kaşığı kekik Tavuk göğsünü ve biberleri julyen doğrayın.Domatesin kabuğunu soyup küp küp doğrayın.Tavaya yağı ekleyin ve tavukları kızgın ateşte soteleyin.Ardından biberleri de ekleyip sotelemeye devam edin.İri iri doğradığınız mantarları da ekleyip suyunu çekip pişene kadar",
+    ""
+   ],
+   [
+    "yaklaşık 5",
+    "dakika soteleyin.Mantarlar piştikten sonra domates ve baharatları da ekleyip",
+    ""
+   ],
+   [
+    "10",
+    "dakika pişmeye bırakın.Domatesler suyunu çektiğinde yemeğiniz hazır olmuş demektir.Afiyet olsun",
+    ""
+   ]
+  ],
+  "instructions": []
+ },
+ {
+  "id": "t18",
+  "kind": "list",
+  "lang": "tr",
+  "ms": 0.6119,
+  "s": {
+   "recall": 0.3333333333333333,
+   "misses": [
+    "köri",
+    "yarım çay bardağı soda",
+    "2 yemek kaşığı sirke",
+    "krema"
+   ],
+   "spurious": [],
+   "stepsOk": true,
+   "stepsNote": "",
+   "extrasMissing": [
+    "zeytinyağ"
+   ],
+   "correct": false
+  },
+  "strictSame": {
+   "accept": false,
+   "reasons": [
+    "malzeme sayısı 2 < 3",
+    "miktarsız malzeme oranı 1/2",
+    "uzun malzeme (birleşmiş olabilir): \"yarım kilo göğüs -tuz, kırmızı toz biber…\"",
+    "adın içinde ikinci miktar: \"yarım kilo göğüs -tuz, kırmızı toz biber\"",
+    "yapılışta eklenen, listede olmayan: \"baharatları\""
+   ]
+  },
+  "lenientSame": {
+   "accept": false,
+   "reasons": [
+    "malzeme sayısı 2 < 3",
+    "miktarsız malzeme oranı 1/2",
+    "uzun malzeme (birleşmiş olabilir): \"yarım kilo göğüs -tuz, kırmızı toz biber…\"",
+    "adın içinde ikinci miktar: \"yarım kilo göğüs -tuz, kırmızı toz biber\"",
+    "yapılışta eklenen, listede olmayan: \"baharatları\""
+   ]
+  },
+  "strictTr": {
+   "accept": false,
+   "reasons": [
+    "malzeme sayısı 2 < 3",
+    "miktarsız malzeme oranı 1/2",
+    "uzun malzeme (birleşmiş olabilir): \"yarım kilo göğüs -tuz, kırmızı toz biber…\"",
+    "adın içinde ikinci miktar: \"yarım kilo göğüs -tuz, kırmızı toz biber\"",
+    "yapılışta eklenen, listede olmayan: \"baharatları\""
+   ]
+  },
+  "title": "Bizim evin vazgeçilmezi Tavuk sote",
+  "ingredients": [
+   [
+    "yarım kilo",
+    "göğüs -tuz, kırmızı toz biber,kekik, köri -yarım çay bardağı soda -2 yemek kaşığı sirke -krema",
+    ""
+   ],
+   [
+    "",
+    "Tam buğdaylı makarna",
+    ""
+   ]
+  ],
+  "instructions": [
+   "Tavukları küçük küçük doğruyoruz",
+   "Zeytinyağ ile orta ateşte kavurmaya alıyoruz",
+   "Daha sonra baharatları ekliyoruz",
+   "Ardından sirke ve sodasını ekliyoruz",
+   "Kapağını kapatıp suyu salana ve suyunu çekene kadar pişiriyoruz",
+   "Piştikten sonra kremasını ekliyoruz ve bir fincana yakın makarna suyundan ekliyoruz.( şart değil) Makarnanın üzerinde servis yapabilirsiniz"
+  ]
+ },
+ {
+  "id": "t19",
+  "kind": "list",
+  "lang": "tr",
+  "ms": 2.0931,
+  "s": {
+   "recall": 1,
+   "misses": [],
+   "spurious": [
+    "1 yemek kaşığı|( kontrollü ekleyin)"
+   ],
+   "stepsOk": true,
+   "stepsNote": "",
+   "extrasMissing": [],
+   "correct": false
+  },
+  "strictSame": {
+   "accept": false,
+   "reasons": [
+    "yapılış başlıksız (sınırı tahmin)",
+    "büyük harften tahmin edilen 2 sınır"
+   ]
+  },
+  "lenientSame": {
+   "accept": true,
+   "reasons": []
+  },
+  "strictTr": {
+   "accept": false,
+   "reasons": [
+    "yapılış başlıksız (sınırı tahmin)",
+    "büyük harften tahmin edilen 2 sınır"
+   ]
+  },
+  "title": "Susamlı Kurabiye",
+  "ingredients": [
+   [
+    "125 gr",
+    "tereyağ",
+    ""
+   ],
+   [
+    "1 Çay bardağı",
+    "sıvı yağ",
+    ""
+   ],
+   [
+    "1",
+    "Yumurta",
+    ""
+   ],
+   [
+    "1",
+    "Yemem kaşığı sirke",
+    ""
+   ],
+   [
+    "2 Yemek kaşığı",
+    "pudra şekeri",
+    ""
+   ],
+   [
+    "1",
+    "Kabartma tozu",
+    ""
+   ],
+   [
+    "1 Çay kaşığı",
+    "tuz",
+    ""
+   ],
+   [
+    "3.5 Su bardağı",
+    "un+",
+    ""
+   ],
+   [
+    "1 yemek kaşığı",
+    "( kontrollü ekleyin)",
+    ""
+   ],
+   [
+    "2 Yemek kaşığı",
+    "pekmez",
+    "Üzeri"
+   ],
+   [
+    "Yarım çay bardağı",
+    "su",
+    "Üzeri"
+   ],
+   [
+    "",
+    "Kavrulmuş susam",
+    "Üzeri"
+   ]
+  ],
+  "instructions": [
+   "Karıştırma kabına kabartma tozu,tuz ve un hariç,tüm malzemeleri karıştıralım.unu,kabartma tozu ve tuzuda ekleyip güzelce karıştıralım.hamurdan cevizden biraz küçük parçalar alıp,avcumuzda yuvarlayalım.yağlı kağıt serdiğimiz fırın tepsisine dizelim.hamur bitene kadar devam edelim.pekmezli suya sonrada susama bulayalım",
+   "Videodaki gibi.bütün kurabiyeleri tamamladıktan sonra önceden ısıtılmış",
+   "180 derece alt üst ayarda kızarana kadar pişirelim.pişen kurabiyeleri fırından alıp soğumasını bekleyelim.soğuduktan sonra isteğe bağlı çay ile servis yapalım"
+  ]
+ },
+ {
+  "id": "t20",
+  "kind": "list",
+  "lang": "tr",
+  "ms": 1.5877,
+  "s": {
+   "recall": 1,
+   "misses": [],
+   "spurious": [
+    "|(1paket)"
+   ],
+   "stepsOk": false,
+   "stepsNote": "eksik adım: kontrol edip çıkarabilirsiniz ",
+   "extrasMissing": [],
+   "correct": false
+  },
+  "strictSame": {
+   "accept": false,
+   "reasons": [
+    "yapılış başlıksız (sınırı tahmin)",
+    "büyük harften tahmin edilen 1 sınır",
+    "yapılışta eklenen, listede olmayan: \"yağı\""
+   ]
+  },
+  "lenientSame": {
+   "accept": false,
+   "reasons": [
+    "yapılışta eklenen, listede olmayan: \"yağı\""
+   ]
+  },
+  "strictTr": {
+   "accept": false,
+   "reasons": [
+    "yapılış başlıksız (sınırı tahmin)",
+    "büyük harften tahmin edilen 1 sınır",
+    "yapılışta eklenen, listede olmayan: \"yağı\""
+   ]
+  },
+  "title": "Saten kurabiye Saten kurabiye",
+  "ingredients": [
+   [
+    "150gr",
+    "tereyağ",
+    ""
+   ],
+   [
+    "2.5 su bardağı",
+    "un",
+    ""
+   ],
+   [
+    "1 su bardağı",
+    "pudra şekeri",
+    ""
+   ],
+   [
+    "3 yemek kaşığı",
+    "kakao",
+    ""
+   ],
+   [
+    "1 paket",
+    "kabartma tozu",
+    ""
+   ],
+   [
+    "1 paket",
+    "vanilya",
+    ""
+   ],
+   [
+    "2 adet",
+    "yumurta",
+    ""
+   ],
+   [
+    "80gram",
+    "çikolata",
+    "Üzeri"
+   ],
+   [
+    "",
+    "(1paket)",
+    "Üzeri"
+   ]
+  ],
+  "instructions": [
+   "Hazırlanışı(Bardak ölçüm 200ml); Tereyağını eritip mutlaka soğutalım",
+   "Fırını",
+   "170 derece alt üst fansız ayarda ısıtalım",
+   "Kuru malzemeleri bir kapta karıştıralım",
+   "Yumurta ve yağı ekleyip karıştıralım",
+   "Kıvamı cıvık gelse bile un eklemeyin buzdolabında",
+   "15-20 dk bekletin öyle şekil verin",
+   "Benmari usulü erittiğimiz çikolataya kurabiyeleri batırıp tepsiye dizelim çikolata kalırsa kaşıkla hepsine paylaştırabilirsiniz ne kadar çok okadar güzel durur",
+   "Isıttığımız fırına kurabiyeleri verelim",
+   "Ortalama"
+  ]
+ },
+ {
+  "id": "t21",
+  "kind": "list",
+  "lang": "tr",
+  "ms": 1.431,
+  "s": {
+   "recall": 1,
+   "misses": [],
+   "spurious": [
+    "|Sonradan sade hamura",
+    "|Bardak ölçüleri; Su bardağı",
+    "|200ml",
+    "|Çay bardağı",
+    "|100ml"
+   ],
+   "stepsOk": true,
+   "stepsNote": "",
+   "extrasMissing": [],
+   "correct": false
+  },
+  "strictSame": {
+   "accept": false,
+   "reasons": [
+    "adın içinde ikinci miktar: \"200ml\"",
+    "adın içinde ikinci miktar: \"100ml\"",
+    "büyük harften tahmin edilen 2 sınır"
+   ]
+  },
+  "lenientSame": {
+   "accept": false,
+   "reasons": [
+    "adın içinde ikinci miktar: \"200ml\"",
+    "adın içinde ikinci miktar: \"100ml\""
+   ]
+  },
+  "strictTr": {
+   "accept": false,
+   "reasons": [
+    "adın içinde ikinci miktar: \"200ml\"",
+    "adın içinde ikinci miktar: \"100ml\"",
+    "büyük harften tahmin edilen 2 sınır"
+   ]
+  },
+  "title": null,
+  "ingredients": [
+   [
+    "250 gr",
+    "tereyağı(margarinde olabilir)",
+    ""
+   ],
+   [
+    "Yarım çay bardağı",
+    "sıvı yağı",
+    ""
+   ],
+   [
+    "1 tane",
+    "yumurta",
+    ""
+   ],
+   [
+    "1 su bardağı",
+    "pudra şekeri",
+    ""
+   ],
+   [
+    "1 paket",
+    "vanilya",
+    ""
+   ],
+   [
+    "Yarım paket",
+    "hamur kabartma tozu",
+    ""
+   ],
+   [
+    "4 su bardağından",
+    "bir parmak eksik un(un kalitesine göre miktarı değişebiliyor. Unu azar azar ilave edin)",
+    ""
+   ],
+   [
+    "",
+    "Sonradan sade hamura",
+    ""
+   ],
+   [
+    "2 yemek kaşığı",
+    "un",
+    "eklemek"
+   ],
+   [
+    "2 yemek kaşığı",
+    "kakao",
+    "Kakaolu kısmı"
+   ],
+   [
+    "",
+    "Bardak ölçüleri; Su bardağı",
+    "Kakaolu kısmı"
+   ],
+   [
+    "",
+    "200ml",
+    "Kakaolu kısmı"
+   ],
+   [
+    "",
+    "Çay bardağı",
+    "Kakaolu kısmı"
+   ],
+   [
+    "",
+    "100ml",
+    "Kakaolu kısmı"
+   ]
+  ],
+  "instructions": [
+   "Önce fırınımızı 180 derecelik alt üst ayarda ısıtalım",
+   "Hamurumuz için, bir kaba tereyağını,sıvı yağını,yumurtayı,pudra şekerini ve vanilyayı koyup elimizle iyice karıştıralım",
+   "Sonra hamur kabartma tozunu ekleyelim",
+   "Unumuzu yavaş yavaş ekleyerek hamurumuzu yoğuralım",
+   "Sonra hamurumuzu ikiye bölelim",
+   "Sade hamura un ekleyip ele yapışmayan hamur elde edelim",
+   "Kakaolu kısmı için, kakaomuzu ekleyip ele yapışmayan hamur elde edelim(Un ve kakao kalitesine göre miktarı değişebiliyor)",
+   "Sade hamurdan videoda görünen boyutta yapalım Kakolu hamurdan videoda görünen boyutta yapalım Yağlı kağıdın üzerine videodaki gibi sırasıyla parçaları birleştirelim 30dk önceden ısıttığımız alt üst ayarlı fırının orta katında 20 dakika pişirelim",
+   "20 dakikanın sonunda fırından çıkarıp",
+   "tepside iyice soğutalım",
+   "Soğuyan kurabiyelerimizi servis tabağına alıp servis edebilirsiniz"
+  ]
+ },
+ {
+  "id": "t22",
+  "kind": "list",
+  "lang": "tr",
+  "ms": 1.0076,
+  "s": {
+   "recall": 1,
+   "misses": [],
+   "spurious": [],
+   "stepsOk": true,
+   "stepsNote": "",
+   "extrasMissing": [],
+   "correct": true
+  },
+  "strictSame": {
+   "accept": true,
+   "reasons": []
+  },
+  "lenientSame": {
+   "accept": true,
+   "reasons": []
+  },
+  "strictTr": {
+   "accept": true,
+   "reasons": []
+  },
+  "title": null,
+  "ingredients": [
+   [
+    "100 gr",
+    "oda sıcaklığında yumuşamış tereyağı",
+    ""
+   ],
+   [
+    "1",
+    "yumurta sarısı",
+    ""
+   ],
+   [
+    "2 yemek kaşığı",
+    "süt",
+    ""
+   ],
+   [
+    "Yarım su bardağı",
+    "pudra şekeri",
+    ""
+   ],
+   [
+    "1 paket",
+    "şekerli vanilya",
+    ""
+   ],
+   [
+    "1",
+    "silme çay kaşığı kabartma tozu",
+    ""
+   ],
+   [
+    "2 su bardağı",
+    "un",
+    ""
+   ],
+   [
+    "3 tane",
+    "elma",
+    "İçi"
+   ],
+   [
+    "1 çay bardağı",
+    "şeker (100 ml)",
+    "İçi"
+   ],
+   [
+    "1,5 çay kaşığı",
+    "tarçın",
+    "İçi"
+   ],
+   [
+    "1 çay bardağı",
+    "ceviz",
+    "İçi"
+   ]
+  ],
+  "instructions": []
+ },
+ {
+  "id": "t23",
+  "kind": "list",
+  "lang": "tr",
+  "ms": 1.109,
+  "s": {
+   "recall": 1,
+   "misses": [],
+   "spurious": [],
+   "stepsOk": true,
+   "stepsNote": "",
+   "extrasMissing": [],
+   "correct": true
+  },
+  "strictSame": {
+   "accept": false,
+   "reasons": [
+    "yapılışta eklenen, listede olmayan: \"eleyerek\""
+   ]
+  },
+  "lenientSame": {
+   "accept": false,
+   "reasons": [
+    "yapılışta eklenen, listede olmayan: \"eleyerek\""
+   ]
+  },
+  "strictTr": {
+   "accept": false,
+   "reasons": [
+    "yapılışta eklenen, listede olmayan: \"eleyerek\""
+   ]
+  },
+  "title": null,
+  "ingredients": [
+   [
+    "250 gram",
+    "tereyağı (125 gramı kahverengi tereyağı)",
+    ""
+   ],
+   [
+    "3/4 su bardağı",
+    "esmer şeker",
+    ""
+   ],
+   [
+    "1/4 su bardağı",
+    "toz şeker",
+    ""
+   ],
+   [
+    "1 adet",
+    "yumurta",
+    ""
+   ],
+   [
+    "2 yemek kaşığı",
+    "pekmez",
+    ""
+   ],
+   [
+    "2 tatlı kaşığı",
+    "tarçın",
+    ""
+   ],
+   [
+    "3–3,5 su bardağı",
+    "un",
+    ""
+   ],
+   [
+    "2 tatlı kaşığı",
+    "mısır nişastası",
+    ""
+   ],
+   [
+    "1 paket",
+    "vanilin",
+    ""
+   ],
+   [
+    "1",
+    "kalıp çikolata",
+    ""
+   ]
+  ],
+  "instructions": [
+   "Tereyağını oda sıcaklığına getirin",
+   "125 gramını kahverengi tereyağı yapmak için tavada kısık ateşte eritip süt katmanları karamelize olana kadar pişirin ( kahverengi tereyağı tatlılarınıza fındıksı, aromatik bir lezzet katacaktır)",
+   "Oda sıcaklığındaki tereyağıyla birlikte bir kaba alın",
+   "Üzerine esmer şeker ve toz şekeri ekleyip iyice karıştırın",
+   "Ardından yumurta, pekmez ve tarçını ekleyip karıştırmaya devam edin",
+   "Unu, mısır nişastasını ve vanilini eleyerek ekleyin",
+   "Hamur toparlanınca yarım saat buzdolabında dinlendirin",
+   "Dinlenen hamuru açıp kalıpla kesin ve yağlı kağıt serili tepsiye dizin",
+   "Üzerine çikolata parçalarını serpin",
+   "Önce 15 dakika daha buzdolabında bekletin, sonra önceden ısıtılmış 175 derece fırında yaklaşık 15-20 dakika kontrollü pişirin",
+   "İçi yumuşak, dışı çıtır kurabiyeleriniz hazır"
+  ]
+ },
+ {
+  "id": "t24",
+  "kind": "list",
+  "lang": "tr",
+  "ms": 0.9318,
+  "s": {
+   "recall": 1,
+   "misses": [],
+   "spurious": [],
+   "stepsOk": true,
+   "stepsNote": "",
+   "extrasMissing": [],
+   "correct": true
+  },
+  "strictSame": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok"
+   ]
+  },
+  "lenientSame": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok"
+   ]
+  },
+  "strictTr": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok"
+   ]
+  },
+  "title": "Harf kurabiye",
+  "ingredients": [
+   [
+    "125 gr",
+    "margarin veya tereyağı",
+    ""
+   ],
+   [
+    "1 Çay bardağı",
+    "sıvı yağı",
+    ""
+   ],
+   [
+    "1",
+    "Yumurta",
+    ""
+   ],
+   [
+    "1 Su bardağı",
+    "pudra şekeri",
+    ""
+   ],
+   [
+    "1 Paket",
+    "vanilya",
+    ""
+   ],
+   [
+    "Yarım paket",
+    "kabartma tozu",
+    ""
+   ],
+   [
+    "3.5 Su bardağı",
+    "un",
+    ""
+   ],
+   [
+    "150 gr",
+    "bitter çikolata",
+    "üzeri"
+   ],
+   [
+    "",
+    "Pasta süsü",
+    "üzeri"
+   ]
+  ],
+  "instructions": []
+ },
+ {
+  "id": "t25",
+  "kind": "list",
+  "lang": "tr",
+  "ms": 1.196,
+  "s": {
+   "recall": 1,
+   "misses": [],
+   "spurious": [],
+   "stepsOk": true,
+   "stepsNote": "",
+   "extrasMissing": [],
+   "correct": true
+  },
+  "strictSame": {
+   "accept": false,
+   "reasons": [
+    "yapılışta eklenen, listede olmayan: \"kadar\""
+   ]
+  },
+  "lenientSame": {
+   "accept": false,
+   "reasons": [
+    "yapılışta eklenen, listede olmayan: \"kadar\""
+   ]
+  },
+  "strictTr": {
+   "accept": false,
+   "reasons": [
+    "yapılışta eklenen, listede olmayan: \"kadar\""
+   ]
+  },
+  "title": "Damla Çikolatalı Kurabiye",
+  "ingredients": [
+   [
+    "200 g",
+    "Milkten Tereyağı",
+    ""
+   ],
+   [
+    "1 su bardağı",
+    "Vera Ayçiçek Yağı",
+    ""
+   ],
+   [
+    "1 adet",
+    "Yumurta",
+    ""
+   ],
+   [
+    "1 su bardağı",
+    "Buğday Nişastası",
+    ""
+   ],
+   [
+    "1 su bardağı",
+    "Petek Pudra Şekeri",
+    ""
+   ],
+   [
+    "1 paket",
+    "Dorbi Hamur Kabartma Tozu",
+    ""
+   ],
+   [
+    "1 paket",
+    "Dorbi Şekerli Vanilin",
+    ""
+   ],
+   [
+    "4 su bardağı",
+    "Yeğenler Un",
+    ""
+   ],
+   [
+    "1 paket",
+    "Dorbi Damla Çikolata",
+    ""
+   ]
+  ],
+  "instructions": [
+   "Yoğurma kabına oda sıcaklığında beklettiğimiz tereyağını, ayçiçek yağını, pudra şekerini, nişastayı ve yumurtayı koyup güzelce karıştırıyoruz",
+   "Daha sonra unu hamurumuz yavaş yavaş kulak memesi kıvamına gelene kadar ilave edelim",
+   "Daha sonra kabartma tozu ve şekerli vanilini de ilave edelim ve hamuru güzelce yoğuralım",
+   "En son olarak damla çikolatayı ilave edelim",
+   "İsterseniz elinizle isterseniz mama kaşığı ile şekil verip 175 derece fırında 30 dk pişirelim",
+   "Kurabiyemiz hazır"
+  ]
+ },
+ {
+  "id": "t26",
+  "kind": "insufficient",
+  "lang": "tr",
+  "ms": 0.223,
+  "s": null,
+  "strictSame": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok",
+    "malzeme sayısı 0 < 3"
+   ]
+  },
+  "lenientSame": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok",
+    "malzeme sayısı 0 < 3"
+   ]
+  },
+  "strictTr": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok",
+    "malzeme sayısı 0 < 3"
+   ]
+  },
+  "title": "Yumuşacık poğaça hazırladım tadına bayılacaksınız",
+  "ingredients": [],
+  "instructions": []
+ },
+ {
+  "id": "t27",
+  "kind": "insufficient",
+  "lang": "tr",
+  "ms": 0.2053,
+  "s": null,
+  "strictSame": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok",
+    "malzeme sayısı 0 < 3"
+   ]
+  },
+  "lenientSame": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok",
+    "malzeme sayısı 0 < 3"
+   ]
+  },
+  "strictTr": {
+   "accept": false,
+   "reasons": [
+    "malzeme başlığı/madde işareti yok",
+    "malzeme sayısı 0 < 3"
+   ]
+  },
+  "title": "Kaşarlı Domates Çorbası",
+  "ingredients": [],
+  "instructions": []
+ }
+]

@@ -22,7 +22,7 @@ import {
 const MODEL = "claude-sonnet-5";
 const MAX_TOKENS = 16000;
 
-const RECIPE_SCHEMA = {
+export const RECIPE_SCHEMA = {
   type: "object",
   properties: {
     title: { type: "string" },
@@ -99,7 +99,8 @@ export async function extractRecipeFromCaption({ link, caption, timeoutMs, langu
 
 // language: tarifin kullanıcıya görünen metinlerinin dili (uygulama dili); sayılar/şema değişmez.
 // images: [{ mediaType, data }] — çağıran taraf shared/imageLimits.js ile doğrulamış olmalı.
-export async function extractRecipe({ link, caption = "", notes = "", images = [], timeoutMs, language = DEFAULT_CONTENT_LANG }) {
+// DENEME (experiment/cheap-extraction): model ve düşünme/effort ayarı dışarıdan verilebilir; varsayılan davranış değişmez.
+export async function extractRecipe({ link, caption = "", notes = "", images = [], timeoutMs, language = DEFAULT_CONTENT_LANG, model = MODEL, thinking, effort }) {
   const lang = isContentLanguage(language) ? language : DEFAULT_CONTENT_LANG;
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new ExtractError("Sunucu yapılandırması eksik: ANTHROPIC_API_KEY tanımlı değil.", "config");
@@ -123,11 +124,12 @@ export async function extractRecipe({ link, caption = "", notes = "", images = [
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: MODEL,
+        model,
+        ...(thinking ? { thinking } : {}),
         max_tokens: MAX_TOKENS,
         system: recipeSystemPrompt(lang),
         messages: [{ role: "user", content }],
-        output_config: { format: { type: "json_schema", schema: RECIPE_SCHEMA } },
+        output_config: { format: { type: "json_schema", schema: RECIPE_SCHEMA }, ...(effort ? { effort } : {}) },
       }),
     });
     data = await response.json().catch(() => null);
@@ -143,8 +145,9 @@ export async function extractRecipe({ link, caption = "", notes = "", images = [
     err.providerStatus = response.status;
     throw err;
   }
-  if (data.stop_reason === "max_tokens") throw new ExtractError("Tarif çok uzun olduğu için tamamlanamadı.", "too_long");
-  if (data.stop_reason === "refusal") throw new ExtractError("Bu içerikten tarif oluşturulamadı.", "refused");
+  const withUsage = (err) => Object.assign(err, { usage: data.usage, stopReason: data.stop_reason }); // DENEME: faturalanan kullanım kaybolmasın
+  if (data.stop_reason === "max_tokens") throw withUsage(new ExtractError("Tarif çok uzun olduğu için tamamlanamadı.", "too_long"));
+  if (data.stop_reason === "refusal") throw withUsage(new ExtractError("Bu içerikten tarif oluşturulamadı.", "refused"));
 
   const text = (data.content || [])
     .map((b) => (b.type === "text" ? b.text : ""))
@@ -154,10 +157,10 @@ export async function extractRecipe({ link, caption = "", notes = "", images = [
   try {
     recipe = JSON.parse(text);
   } catch (e) {
-    throw new ExtractError("Tarif ayrıştırılamadı.", "parse");
+    throw withUsage(new ExtractError("Tarif ayrıştırılamadı.", "parse"));
   }
   if (!recipe || typeof recipe.title !== "string" || !Array.isArray(recipe.ingredients)) {
-    throw new ExtractError("Tarif ayrıştırılamadı.", "parse");
+    throw withUsage(new ExtractError("Tarif ayrıştırılamadı.", "parse"));
   }
   return { recipe: { ...applyPortionEstimate(recipe), content_lang: lang }, usage: data.usage, stopReason: data.stop_reason };
 }
