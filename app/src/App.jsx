@@ -4174,6 +4174,7 @@ function formatServings(t, n, unit = "porsiyon") {
 // aralık yalnızca malzemelerden hesaplanan (servings_basis "hesap") tariflerde kayıtlıdır.
 function servingsLabel(t, recipe) {
   const n = recipe.servings;
+  if (isSuggestedServings(recipe)) return t(n === 1 ? "detail.servingsSuggestedOne" : "detail.servingsSuggested", { n });
   if (!isEstimatedServings(recipe)) return formatServings(t, n, servingsUnitOf(recipe));
   const range = recipe.servings_basis === "hesap" && Array.isArray(recipe.servings_range) ? recipe.servings_range : null;
   return range ? t("detail.servingsEstimatedRange", { n, lo: range[0], hi: range[1] }) : t("detail.servingsEstimated", { n });
@@ -4182,11 +4183,14 @@ function servingsLabel(t, recipe) {
 // Porsiyon kesin değilse "Tahmini" gösterilir: malzemelerden hesaplandıysa (shared/portionEstimate.js)
 // ya da servings_basis hiç yoksa (eski tarifler — AI o dönem kaynağa bakmadan sayı uydurmak zorundaydı).
 // Sadece gösterim: eski kayıtlara yazılmaz. "kaynak"/"kullanici" düz, "bilinmiyor"da sayı yok.
-const isEstimatedServings = (recipe) => !!recipe && (recipe.servings_basis === "hesap" || recipe.servings_basis == null);
+// "oneri": kaynakta porsiyon ve (bazı) miktarlar yok; kayıtlı sayı önerilen miktarların tabanıdır
+// (shared/portionEstimate.js applyPortionEstimate). O da tahmindir.
+const isSuggestedServings = (recipe) => !!recipe && recipe.servings_basis === "oneri" && baseServingsOf(recipe) != null;
+const isEstimatedServings = (recipe) => !!recipe && (recipe.servings_basis === "hesap" || recipe.servings_basis == null || isSuggestedServings(recipe));
 
 // Pişirme modunun ilk ekranındaki porsiyon seçici: − 4 +. Seçim yalnızca o pişirme
 // oturumunda (CookMode state'i) yaşar; kayıtlı porsiyon değişmez (o Tarifi Düzenle'den değişir).
-function ServingsStepper({ base, value, onChange, estimated, unit }) {
+function ServingsStepper({ base, value, onChange, estimated, suggested, unit }) {
   const { t } = useLanguage();
   const min = Math.min(MIN_SERVINGS, base);
   const max = maxServingsFor(base);
@@ -4217,7 +4221,7 @@ function ServingsStepper({ base, value, onChange, estimated, unit }) {
         </button>
       </div>
       <div style={{ fontSize: "12px", color: COLORS.inkSoft, marginTop: "12px", minHeight: "16px" }}>
-        {value !== base ? t(estimated ? "servings.originalEstimated" : "servings.original", { count: formatServings(t, base, unit) }) : ""}
+        {value !== base ? t(suggested ? "servings.originalSuggested" : estimated ? "servings.originalEstimated" : "servings.original", { count: formatServings(t, base, unit) }) : ""}
       </div>
     </div>
   );
@@ -4312,13 +4316,19 @@ function IngredientGroupTitle({ children, first }) {
 }
 
 // Tahmini miktar içeren tarifte listenin altında tek, kısa ortak not (satır satır açıklama yok).
-function EstimatedAmountsNote({ ingredients }) {
+// Öneri tabanlı tarifte (servings_basis "oneri") not, önerinin kaç kişilik olduğunu da söyler.
+function EstimatedAmountsNote({ ingredients, recipe }) {
   const { t } = useLanguage();
   if (!hasEstimatedAmounts(ingredients)) return null;
-  return <p style={{ fontSize: "12px", lineHeight: 1.45, color: COLORS.inkSoft, margin: "12px 0 0" }}>{t("detail.estimatedNote")}</p>;
+  let text = t("detail.estimatedNote");
+  if (isSuggestedServings(recipe)) {
+    const count = formatServings(t, recipe.servings, "porsiyon");
+    text = recipe.servings === 1 ? t("detail.suggestedNoteOne") : t("detail.suggestedNote", { count });
+  }
+  return <p style={{ fontSize: "12px", lineHeight: 1.45, color: COLORS.inkSoft, margin: "12px 0 0" }}>{text}</p>;
 }
 
-function IngredientList({ ingredients, language }) {
+function IngredientList({ ingredients, language, recipe }) {
   // Bir bölümden sonra gelen bölümsüz satırlar o bölüme aitmiş gibi görünmesin.
   const { t } = useLanguage();
   return (
@@ -4337,7 +4347,7 @@ function IngredientList({ ingredients, language }) {
         }),
       ])}
     </ul>
-    <EstimatedAmountsNote ingredients={ingredients} />
+    <EstimatedAmountsNote ingredients={ingredients} recipe={recipe} />
     </>
   );
 }
@@ -4631,7 +4641,7 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
             {ingredients.length === 0 ? (
               <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: 0 }}>{t("detail.noIngredients")}</p>
             ) : (
-              <IngredientList ingredients={ingredients} language={language} />
+              <IngredientList ingredients={ingredients} language={language} recipe={recipe} />
             )}
           </ExpandableSection>
 
@@ -5344,7 +5354,7 @@ function CookMode({ recipe, onFinish }) {
               {t(servingsUnit === "adet" ? "cook.piecesQuestion" : servingsUnit === "dilim" ? "cook.slicesQuestion" : "cook.servingsQuestion")}
             </h2>
             {baseServings ? (
-              <ServingsStepper base={baseServings} value={selectedServings} onChange={changeServings} estimated={isEstimatedServings(recipe)} unit={servingsUnit} />
+              <ServingsStepper base={baseServings} value={selectedServings} onChange={changeServings} estimated={isEstimatedServings(recipe)} suggested={isSuggestedServings(recipe)} unit={servingsUnit} />
             ) : (
               <p style={{ fontSize: "15px", color: COLORS.inkSoft, margin: 0, lineHeight: 1.5 }}>{t("cook.servingsUnknown")}</p>
             )}
@@ -5424,7 +5434,7 @@ function CookMode({ recipe, onFinish }) {
                 ])}
               </ul>
             )}
-            {ingredients.length > 0 && <EstimatedAmountsNote ingredients={ingredients} />}
+            {ingredients.length > 0 && <EstimatedAmountsNote ingredients={ingredients} recipe={recipe} />}
             {someNotScaled && <p style={{ fontSize: "12px", color: COLORS.inkSoft, margin: "14px 0 0" }}>{t("servings.someNotScaled")}</p>}
           </div>
         )}
@@ -5696,7 +5706,7 @@ function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setS
     const prevServings = initial?.servings != null ? Number(initial.servings) : undefined;
     const servingsFields =
       isNew || nextServings !== prevServings
-        ? { servings_basis: nextServings ? "kullanici" : undefined, servings_calc: undefined, servings_note: undefined, servings_range: undefined }
+        ? { servings_basis: nextServings ? "kullanici" : undefined, servings_calc: undefined, servings_note: undefined, servings_range: undefined, servings_oneri: undefined }
         : {};
 
     Promise.resolve(onSave({

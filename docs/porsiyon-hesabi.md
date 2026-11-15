@@ -113,6 +113,20 @@ Aşağıdaki sayılar, `app/scripts/portion-validation.mjs` doğrulama setinde e
 - Kaynakta yazmayıp AI'ın tamamladığı miktarlar hesaba girmez. Bunların verimdeki payı %25'i aşarsa sayı üretilmez. AI'ın tamamladığı ana malzeme de sayılmaz.
 - `belirsiz` birimler ("1 paket", "1 demet", "biraz"), yoğunluğu bilinmeyen hacimler ve ağırlığı bilinmeyen adetler grama **sessizce çevrilmez**. Gerekçede "hesaba katılamayanlar" diye listelenir.
 
+### 4.6 Öneri tabanı (`servings_basis: "oneri"`, `2026-11-15.1`)
+
+Sorun: kaynakta porsiyon da ana malzemenin miktarı da yoksa (ör. steak sandviç: yalnız soğan/sos miktarları var, et yok) 4.5 gereği sayı üretilmiyordu. Model eksik miktarları yine öneriyordu (`estimated: true`, "Yaklaşık"), ama bu önerilerin **kaç kişilik** olduğu kaydedilmediği için `servings: null` kalıyor, Pişirme modu oran kuramıyor ve porsiyon seçicisini gizliyordu ("Bu tarifte porsiyon bilgisi yok…").
+
+Sıra: kaynak > hesap (4.1–4.5, değişmedi) > **öneri** > bilinmiyor. Öneri yalnızca tarifte en az bir tahmini miktar varsa uygulanır:
+- **Kaynakta hiç sayısal miktar yok** (`servings_oneri: "tamami"`): prompt bütün miktarları 1 kişilik ister; `servings: 1`. Model geçerli başka bir sayı (1–20 tam sayı) yazdıysa önerileri ona göredir, o kullanılır.
+- **Kaynakta bazı miktarlar var** (`servings_oneri: "eksikler"`): kaynak miktarları aynen kalır ve tarifin ölçüsünü belirler; tarif 1 kişilik **sayılmaz**. Model eksikleri bu miktarlarla aynı tarif için önerir ve tarifin yaklaşık kaç kişilik olduğunu `suggested_servings` olarak yazar; `servings` = bu sayı. Model sayı vermezse/geçersizse sayı üretilmez (bilinmiyor). Kaynaktaki oranlar ("her 2 kuşkonmaza 1 dilim bacon") önerilerde korunur; ölçekleme her malzemeyi aynı katsayıyla çarptığı için oran her porsiyonda kalır.
+- Ana malzeme kaynakta ölçülüyse deterministik hesap önceliklidir; modelin sayısı kullanılmaz.
+- "Kaynak miktarı" = tahmin olmayan ve sayı içeren miktar ("damak zevkine göre", "kızartmak için" sayılmaz) ya da porsiyon öğesinde `quantity_in_source: true` olan sayı.
+- `suggested_servings` kayda yazılmaz; `servings_note` yazılmaz (arayüz kısa not gösterir). Gösterim: "1 kişilik öneri" / "Yaklaşık 4 kişilik öneri", malzeme listesinin altında kısa not; Pişirme modunda seçici açılır, tahminler her porsiyonda "Yaklaşık" kalır, kaynak miktarları etiketsiz ölçeklenir.
+- Tarifi Düzenle'de porsiyon değiştirilirse `kullanici` olur, `servings_oneri` silinir.
+- Eski kayıtlar değişmez: sayısı olmayan tarife gösterimde sayı uydurulmaz. Ya yeniden paylaşılır/çıkarılır, ya da Tarifi Düzenle'den porsiyon elle girilir (o zaman mevcut miktarlar ölçeklenir; boş miktarlar boş kalır).
+- Testler: `app/test/suggestedServings.test.mjs` (miktarsız, kısmen miktarlı, tam miktarlı, eski kayıt, çeviri).
+
 ## 5. Tablolar
 
 ### 5.1 A — kişi başı çiğ miktar (g)
@@ -318,6 +332,7 @@ Hepsine 2026-09-28'de erişildi.
 
 ## 9. Değişiklik geçmişi
 
+- `2026-11-15.1`: öneri tabanı (4.6) — tahmini miktarlı tarifte porsiyon bilinmiyorsa önerilerin kişi sayısı (`servings_basis: "oneri"`); miktarsızda 1 kişilik. Hesap kuralları değişmedi.
 - `2026-09-28.1`:
   - İki yöntemli aralık modeli (A ana malzeme + B toplam verim).
   - Yeni yemek türleri: `sebze_yemegi`, `bakliyat_yemegi`. Yeni malzeme türleri: `yaprakli_sebze`, `kizartma_yagi`. Yeni alanlar: `main`, `servings_unit` (`adet`/`dilim`), `servings_range`.

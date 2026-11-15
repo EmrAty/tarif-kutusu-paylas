@@ -30,6 +30,9 @@ const RECIPE_SCHEMA = {
     title: { type: "string" },
     servings: { anyOf: [{ type: "integer" }, { type: "null" }] },
     servings_unit: { type: "string", enum: SERVINGS_UNITS },
+    // Modelin önerdiği miktarların kişi sayısı (yalnız tahmini miktar varsa); kayda yazılmaz,
+    // shared/portionEstimate.js applyPortionEstimate "oneri" tabanında kullanır.
+    suggested_servings: { anyOf: [{ type: "integer" }, { type: "null" }] },
     prep_time_minutes: { type: "number" },
     difficulty: { type: "string", enum: ["Kolay", "Orta", "Zor"] },
     ingredients: {
@@ -84,7 +87,7 @@ const RECIPE_SCHEMA = {
       additionalProperties: false,
     },
   },
-  required: ["title", "servings", "servings_unit", "prep_time_minutes", "difficulty", "ingredients", "instructions", "nutrition", "assumptions", "portion"],
+  required: ["title", "servings", "servings_unit", "suggested_servings", "prep_time_minutes", "difficulty", "ingredients", "instructions", "nutrition", "assumptions", "portion"],
   additionalProperties: false,
 };
 

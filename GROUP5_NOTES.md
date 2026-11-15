@@ -190,6 +190,11 @@ Tarif TEST APK, `preview.tarifkutusu.app` (Grup 5 dalı). Gerçek Upstash/Fireba
 - Geri dönüş uyumu: yeni tariflerin malzemelerinde ek alanlar var (`group`, `estimated`; boş/false ise yazılmaz). Grup 5 ya da main sunucusu/istemcisi bunları yok sayar: liste bölümsüz ve "Yaklaşık" etiketsiz görünür, eski düzenleme formu kaydederken bu alanları düşürebilir; miktar ve ad korunur. Veri kaybı yok.
 - ✅ **Kapandı (15 Kasım, [kullanıcı]):** steak sandviçteki kuşkonmaz–bacon oranı. Yeniden paylaşılan tarifte kullanıcı hem malzeme miktarını (8 kuşkonmaz, 4 dilim bacon) hem "2 kuşkonmazı 1 dilim bacon ile sar" adımını doğruladı. İlk çıkarmadaki "her kuşkonmazı bir dilim bacon ile sarın" hatası tekrarlanmadı; steak testi yeniden istenmeyecek.
 
+### Miktarı/porsiyonu eksik tarifte porsiyon seçimi (15 Kasım 2026)
+- Kök neden: kaynakta porsiyon ve ana malzeme miktarı yoksa porsiyon hesabı sayı üretmiyordu (`servings: null`); modelin önerdiği "Yaklaşık" miktarların kaç kişilik olduğu kaydedilmediğinden Pişirme modu seçiciyi gizliyordu.
+- Çözüm: öneri tabanı (`servings_basis: "oneri"`), ayrıntı `docs/porsiyon-hesabi.md` §4.6. Miktarsız tarif 1 kişilik öneri; kısmen miktarlı tarifte kaynak miktarları aynen, taban modelin tahmini (1 kişilik sayılmaz). Şemaya `suggested_servings` (kayda yazılmaz), prompt'a kural; yeni APK gerekmez.
+- Eski kayıtlar değişmez (yeniden paylaş ya da Tarifi Düzenle'den porsiyon gir).
+
 ### Preview doğrulaması (15 Kasım 2026)
 - `preview.tarifkutusu.app` → `b1467e6` yayınına sabitlendi (kullanıcı). `verify:deploy --commit b1467e6` **15/15**, model `claude-haiku-5-5`, korumasız istek 302.
 - Redis: geçici anonim hesapla profil + kova okuma/yazma/geri okuma 200, sonra `DELETE /api/account` 200 ve Firebase'den silindi. Redis erişilebilir (eski test DB `ENOTFOUND` veriyordu). Bağlı DB'nin tam olarak `tk-preview-test` olduğu Upstash konsolundan henüz parmak iziyle doğrulanmadı.

@@ -15,7 +15,7 @@
 // Aynı normalize girdi + aynı kural sürümü => her zaman aynı sonuç. Tüm adımlar çarpımsal
 // olduğu için malzemeler k katına çıkınca yuvarlanmamış aralık da k katına çıkar.
 
-export const PORTION_RULES_VERSION = "2026-09-28.1";
+export const PORTION_RULES_VERSION = "2026-11-15.1";
 
 // --- Ölçüler -------------------------------------------------------------------
 // Ev ölçüsü hacimleri (mL). Türkiye'de standart değildir (TÜBER 2022: su bardakları
@@ -565,41 +565,74 @@ export function servingsUnitOf(recipe) {
   return u === "adet" || u === "dilim" ? u : "porsiyon";
 }
 
-// Tarif objesine uygular: kaynaktaki porsiyon > hesap > bilinmiyor.
+// Kaynakta yazan (modelin tahmini olmayan) sayısal bir miktar var mı? Malzeme listesinde
+// estimated olmayan ve sayı içeren bir miktar ya da porsiyon öğelerinde kaynakta yazan bir sayı.
+// "damak zevkine göre", "kızartmak için" gibi sayısız ifadeler kaynak miktarı sayılmaz.
+const DIGIT_RE = /[\d½¼¾⅓⅔⅛]|(^|\s)yarım(?![\p{L}])/u;
+export function hasSourceAmounts(recipe) {
+  const ings = Array.isArray(recipe && recipe.ingredients) ? recipe.ingredients : [];
+  if (ings.some((i) => i && i.estimated !== true && DIGIT_RE.test(String(i.amount ?? "")))) return true;
+  const items = recipe && recipe.portion && Array.isArray(recipe.portion.items) ? recipe.portion.items : [];
+  return items.some((it) => it && it.quantity_in_source === true && Number(it.quantity) > 0);
+}
+export function hasEstimatedIngredientAmounts(recipe) {
+  const ings = Array.isArray(recipe && recipe.ingredients) ? recipe.ingredients : [];
+  return ings.some((i) => i && i.estimated === true && String(i.amount ?? "").trim() !== "");
+}
+export const MAX_SUGGESTED_SERVINGS = 20;
+function suggestedCount(v) {
+  return typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= MAX_SUGGESTED_SERVINGS ? v : null;
+}
+
+// Tarif objesine uygular: kaynaktaki porsiyon > hesap > öneri > bilinmiyor.
 // servings_basis: "kaynak" (kaynakta yazıyor) | "hesap" (tahmini) | "bilinmiyor" (sayı yok)
+//                 | "oneri" (kaynakta porsiyon ve bazı/tüm miktarlar yok; önerilen miktarların tabanı)
 //                 | "kullanici" (Tarifi Düzenle'den elle girildi — bkz. App.jsx RecipeEditor).
 // servings_unit: yalnızca kaynakta adet/dilim yazıyorsa kaydedilir ("porsiyon" varsayılandır).
 // servings_range: hesaplanan tahminin makul aralığı [alt, üst] (tam sayı; alt ≠ üst ise).
+// servings_oneri: "tamami" (kaynakta hiç miktar yok → 1 kişilik öneri) | "eksikler" (kaynaktaki
+//                 miktarlar korunur; eksikler onlarla aynı tarif miktarına göre önerilir).
 // Gerekçe `assumptions`'a karıştırılmaz, ayrı `servings_note` alanında durur; böylece
 // kullanıcı porsiyonu değiştirince yalnızca bu alan silinir, AI'ın diğer varsayımları kalır.
+// `suggested_servings` (modelin önerdiği taban) kayda yazılmaz; yalnızca "oneri"de kullanılır.
 export function applyPortionEstimate(recipe) {
   if (!recipe || typeof recipe !== "object") return recipe;
-  const { portion, servings_unit, ...rest } = recipe;
+  const { portion, servings_unit, suggested_servings, ...rest } = recipe;
   const stated = Number(rest.servings);
   if (Number.isFinite(stated) && stated > 0) {
     const unit = servingsUnitOf({ servings_unit });
     return { ...rest, servings: Math.max(1, Math.round(stated)), ...(unit !== "porsiyon" ? { servings_unit: unit } : {}), servings_basis: "kaynak" };
   }
-  if (!portion) return { ...rest, servings: null, servings_basis: "bilinmiyor" };
-  const r = estimateServings(portion);
-  const servings_note = describeEstimate(r);
-  if (r.status !== "hesaplandi") {
-    return { ...rest, servings: null, servings_basis: "bilinmiyor", servings_note };
+  const r = portion ? estimateServings(portion) : null;
+  if (r && r.status === "hesaplandi") {
+    return {
+      ...rest,
+      servings: r.servings,
+      servings_basis: "hesap",
+      ...(r.loInt !== r.hiInt ? { servings_range: [r.loInt, r.hiInt] } : {}),
+      servings_calc: {
+        v: PORTION_RULES_VERSION,
+        dish_type: r.dishType,
+        method: r.method,
+        raw: Number(r.raw.toFixed(2)),
+        range: [Number(r.lo.toFixed(2)), Number(r.hi.toFixed(2))],
+        ...(r.anchor ? { anchor_amount: Number(r.anchor.amount.toFixed(1)), anchor_per_person: [r.anchor.entry.lo, r.anchor.entry.hi] } : {}),
+        ...(r.yield ? { yield_g: [Math.round(r.yield.lo), Math.round(r.yield.hi)], per_serving_g: [r.yield.consumed.lo, r.yield.consumed.hi] } : {}),
+      },
+      servings_note: describeEstimate(r),
+    };
   }
-  return {
-    ...rest,
-    servings: r.servings,
-    servings_basis: "hesap",
-    ...(r.loInt !== r.hiInt ? { servings_range: [r.loInt, r.hiInt] } : {}),
-    servings_calc: {
-      v: PORTION_RULES_VERSION,
-      dish_type: r.dishType,
-      method: r.method,
-      raw: Number(r.raw.toFixed(2)),
-      range: [Number(r.lo.toFixed(2)), Number(r.hi.toFixed(2))],
-      ...(r.anchor ? { anchor_amount: Number(r.anchor.amount.toFixed(1)), anchor_per_person: [r.anchor.entry.lo, r.anchor.entry.hi] } : {}),
-      ...(r.yield ? { yield_g: [Math.round(r.yield.lo), Math.round(r.yield.hi)], per_serving_g: [r.yield.consumed.lo, r.yield.consumed.hi] } : {}),
-    },
-    servings_note,
-  };
+  // Öneri tabanı: yalnızca model miktar önerdiyse (estimated). Önerilen miktarlar bir kişi
+  // sayısına göre yazıldı; o sayı kaydedilmezse Pişirme modu oran kuramaz.
+  //  - Kaynakta hiç sayısal miktar yok → prompt 1 kişilik öneri ister; taban 1 (model başka
+  //    geçerli bir sayı yazdıysa miktarlar ona göredir, o kullanılır).
+  //  - Kaynakta bazı miktarlar var → o miktarlar AYNEN kalır; tarif 1 kişilik sayılmaz. Taban,
+  //    modelin kaynaktaki miktarların yettiği kişi sayısı tahminidir; yoksa sayı üretilmez.
+  if (hasEstimatedIngredientAmounts(rest)) {
+    const partial = hasSourceAmounts({ ingredients: rest.ingredients, portion });
+    const n = suggestedCount(suggested_servings) ?? (partial ? null : 1);
+    if (n) return { ...rest, servings: n, servings_basis: "oneri", servings_oneri: partial ? "eksikler" : "tamami" };
+  }
+  if (!r) return { ...rest, servings: null, servings_basis: "bilinmiyor" };
+  return { ...rest, servings: null, servings_basis: "bilinmiyor", servings_note: describeEstimate(r) };
 }
