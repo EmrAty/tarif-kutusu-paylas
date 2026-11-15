@@ -65,10 +65,16 @@ export function splitCompoundAmount(text) {
 
 function cleanOne(ing, lang) {
   const canon = ing._canon;
-  const { amount, estimated } = cleanAmount(canon ? canon.amount : ing.amount, ing.estimated === true);
+  // Kayıtta `approx: true` varsa (kaynak "yaklaşık" diyor) metindeki önek de kaynağındır; eski
+  // bayraksız kayıtlarda önek eski kuralla tahmin sayılır (bkz. shared/ingredientText.js).
+  const sourceApprox = ing.approx === true && ing.estimated !== true;
+  const cleaned = cleanAmount(canon ? canon.amount : ing.amount, ing.estimated === true, { sourcePrefixIsApprox: sourceApprox });
+  const { amount, estimated } = cleaned;
+  const approx = !estimated && (cleaned.approx === true || (sourceApprox && amount !== ""));
   // Ad yalnızca Türkçe gösterimde sadeleşir ("(veya tercih edilen ekmek)" → "(tercihen)").
-  const out = { ...ing, name: simplifyIngredientName(ing.name, lang), ...(estimated ? { estimated: true } : {}) };
+  const out = { ...ing, name: simplifyIngredientName(ing.name, lang), ...(estimated ? { estimated: true } : {}), ...(approx ? { approx: true } : {}) };
   if (!estimated) delete out.estimated;
+  if (!approx) delete out.approx;
   if (canon) {
     out._canon = { ...canon, amount };
     out._aiAmount = ing._aiAmount ? cleanAmount(ing._aiAmount).amount || null : null;
@@ -147,6 +153,7 @@ export function groupRuns(ingredients) {
 }
 
 // Listede gösterilecek tahmini miktar var mı (ortak "Yaklaşık … önerildi" notu için).
+// Yalnızca `estimated` (model önerdi); kaynağın kendi "yaklaşık"ı (`approx`) not üretmez.
 export function hasEstimatedAmounts(ingredients) {
   return (ingredients || []).some((i) => i && i.estimated === true && str(i._canon ? i._canon.amount : i.amount).trim() !== "");
 }
