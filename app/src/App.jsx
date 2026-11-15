@@ -42,6 +42,7 @@ import { localizeRecipe, displayIngredient, contentFingerprint, localizeAmount, 
 import { presentRecipe, presentIngredients, groupRuns, hasEstimatedAmounts } from "./ingredientPresentation.js";
 import { servingsUnitOf } from "../shared/portionEstimate.js";
 import { safeRecipeLink } from "../shared/safeLink.js";
+import { amountFlagsAfterEdit } from "../shared/ingredientText.js";
 import { normalizeSuggestion, normalizeSuggestions } from "../shared/pantrySuggestions.js";
 import { saveRecipeToTargets, extractionSignature } from "./saveTargets.js";
 import { saveTicket as saveGuestMergeTicket, clearTicket as clearGuestMergeTicket, syncGuestMerge } from "./guestMergeClient.js";
@@ -4790,7 +4791,8 @@ function mergeIngredients(chosenRecipes, servingsMap = {}, lang = "tr") {
       if (!map.has(key)) map.set(key, { name: ing.name, parts: [], rounded: [] });
       const entry = map.get(key);
       const shown = displayIngredient(ing, factor, lang);
-      entry.parts.push({ canon: shown.canonText, from: shown.from, display: shown.text, estimated: !!shown.estimated });
+      // approx: toplamın başına "Yaklaşık" gelsin mi (tahmini ya da kaynağın kendi "yaklaşık"ı).
+      entry.parts.push({ canon: shown.canonText, from: shown.from, display: shown.text, approx: !!shown.estimated || !!shown.approx });
       if (shown.rounded) entry.rounded.push({ exact: shown.exactText, shown: shown.text });
     });
   });
@@ -4803,10 +4805,10 @@ function mergeIngredients(chosenRecipes, servingsMap = {}, lang = "tr") {
       const parsed = parseAmount(p.canon);
       if (parsed) {
         const k = `${p.from}|${parsed.unit}`;
-        const g = byUnit.get(k) || { from: p.from, unit: parsed.unit, sum: 0, displays: [], estimated: false };
+        const g = byUnit.get(k) || { from: p.from, unit: parsed.unit, sum: 0, displays: [], approx: false };
         g.sum += parsed.num;
         g.displays.push(p.display);
-        if (p.estimated) g.estimated = true;
+        if (p.approx) g.approx = true;
         byUnit.set(k, g);
       } else if ((p.display || "").trim()) {
         others.push(p.display.trim());
@@ -4817,8 +4819,8 @@ function mergeIngredients(chosenRecipes, servingsMap = {}, lang = "tr") {
         if (g.displays.length === 1) return g.displays[0].trim();
         const canonText = `${Number.isInteger(g.sum) ? g.sum : g.sum.toFixed(1)}${g.unit ? " " + g.unit : ""}`;
         const total = localizeAmount(canonText, g.from, lang) ?? canonText;
-        // Toplama tahmini bir miktar girdiyse toplam da tahminidir.
-        return g.estimated ? approxText(total, lang) : total;
+        // Toplama tahmini ya da yaklaşık bir miktar girdiyse toplam da yaklaşıktır.
+        return g.approx ? approxText(total, lang) : total;
       }),
       ...others,
     ];
@@ -5629,6 +5631,7 @@ function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setS
           // Formda düzenlenmez ama kaydedilirken kaybolmaz (bkz. cleanIngredients).
           _group: typeof ing.group === "string" ? ing.group : "",
           _estimated: ing.estimated === true,
+          _approx: ing.approx === true,
           _origAmount: ing.amount || "",
         }))
       : [{ _key: uid(), name: "", amount: "" }]
@@ -5697,15 +5700,15 @@ function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setS
     }
     setError("");
 
-    // Bölüm adı korunur; "tahmini" işareti yalnızca miktar elle değiştirilmediyse kalır
-    // (kullanıcının yazdığı miktar artık tahmin değildir).
+    // Bölüm adı korunur; "tahmini" (estimated) ve "kaynak yaklaşık diyor" (approx) işaretleri
+    // yalnızca miktar elle değiştirilmediyse kalır (kullanıcının yazdığı miktar artık ikisi de değildir).
     const cleanIngredients = ingredients
       .filter((i) => i.name.trim())
       .map((i) => ({
         name: i.name.trim(),
         amount: i.amount.trim(),
         ...(i._group && i._group.trim() ? { group: i._group.trim() } : {}),
-        ...(i._estimated && i.amount.trim() && i.amount.trim() === String(i._origAmount || "").trim() ? { estimated: true } : {}),
+        ...amountFlagsAfterEdit({ amount: i.amount, origAmount: i._origAmount, estimated: i._estimated, approx: i._approx }),
       }));
     const cleanInstructions = instructions.filter((s) => s.text.trim()).map((s) => s.text.trim());
 

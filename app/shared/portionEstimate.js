@@ -15,7 +15,7 @@
 // Aynı normalize girdi + aynı kural sürümü => her zaman aynı sonuç. Tüm adımlar çarpımsal
 // olduğu için malzemeler k katına çıkınca yuvarlanmamış aralık da k katına çıkar.
 
-export const PORTION_RULES_VERSION = "2026-11-15.1";
+export const PORTION_RULES_VERSION = "2026-11-15.2";
 
 // --- Ölçüler -------------------------------------------------------------------
 // Ev ölçüsü hacimleri (mL). Türkiye'de standart değildir (TÜBER 2022: su bardakları
@@ -568,6 +568,7 @@ export function servingsUnitOf(recipe) {
 // Kaynakta yazan (modelin tahmini olmayan) sayısal bir miktar var mı? Malzeme listesinde
 // estimated olmayan ve sayı içeren bir miktar ya da porsiyon öğelerinde kaynakta yazan bir sayı.
 // "damak zevkine göre", "kızartmak için" gibi sayısız ifadeler kaynak miktarı sayılmaz.
+// Kaynağın kendi "yaklaşık 1 kg"ı (`approx: true`) kaynak miktarıdır (estimated değildir).
 const DIGIT_RE = /[\d½¼¾⅓⅔⅛]|(^|\s)yarım(?![\p{L}])/u;
 export function hasSourceAmounts(recipe) {
   const ings = Array.isArray(recipe && recipe.ingredients) ? recipe.ingredients : [];

@@ -30,7 +30,12 @@ const tidy = (s) =>
     .replace(/^[\s,;:–—-]+|[\s,;:–—-]+$/g, "")
     .trim();
 
-// Tek bir miktar metni → { amount, estimated }.
+// İki ayrı işaret (Audit F5, 15 Kasım 2026):
+//   estimated: true → miktar KAYNAKTA YOK, modeli önerdi ("Yaklaşık …" + "kaynakta yok" notu).
+//   approx: true    → miktar KAYNAKTA VAR ve kaynak kendisi "yaklaşık" diyor ("Yaklaşık …", not YOK).
+// İkisi birlikte olmaz (estimated kazanır). Kayda yalnızca true iken yazılır.
+//
+// Tek bir miktar metni → { amount, estimated } (+ approx: true yalnızca kaynağın "yaklaşık"ı ise).
 //   "belirtilmemiş"                         → { amount: "",          estimated: false }
 //   "belirtilmemiş, tahminen 45 g"          → { amount: "45 g",      estimated: true }
 //   "tahminen 2 yemek kaşığı"               → { amount: "2 yemek kaşığı", estimated: true }
@@ -38,11 +43,20 @@ const tidy = (s) =>
 //   "Derin kızartma için (miktar belirtilmemiş)" → { amount: "Derin kızartma için", estimated: false }
 //   "2 lb (yaklaşık 907 g)"                 → değişmez (kaynakta verilmiş miktar + dönüşüm notu)
 // `estimated` girdisi (yeni şemadaki bayrak) korunur.
-export function cleanAmount(amount, estimated = false) {
+// sourcePrefixIsApprox: baştaki "yaklaşık/tahminen/about/~" öneki KAYNAĞIN ifadesi sayılır →
+// approx (estimated değil). Yalnızca miktarın kaynakta olduğu bilindiğinde verilir: yeni
+// çıkarmada model `estimated: false` dediyse ya da kayıt zaten `approx: true` taşıyorsa.
+// Verilmezse (eski, bayraksız kayıtlar) önek eski kuralla estimated sayılır — eski prompt
+// modelin tahminini böyle yazıyordu. Metinde "belirtilmemiş" de geçiyorsa (kaynakta miktar
+// yok dediği için) her durumda estimated.
+export function cleanAmount(amount, estimated = false, { sourcePrefixIsApprox = false } = {}) {
   const raw = str(amount).trim();
   let est = estimated === true;
-  if (!raw) return { amount: "", estimated: false };
-  if (ONLY_UNSPECIFIED_RE.test(raw)) return { amount: "", estimated: false };
+  let approx = false;
+  const none = { amount: "", estimated: false };
+  if (!raw) return none;
+  if (ONLY_UNSPECIFIED_RE.test(raw)) return none;
+  const saidUnspecified = ANY_UNSPECIFIED_RE.test(raw);
   let text = raw.replace(PAREN_UNSPECIFIED_RE, "");
   text = tidy(text.replace(LEADING_UNSPECIFIED_RE, ""));
   // Ortada kalmış "belirtilmemiş" ("belirtilmemiş (soğan için) ve 2 çay kaşığı (sos için)").
@@ -52,10 +66,23 @@ export function cleanAmount(amount, estimated = false) {
   text = tidy(text.replace(/^(?:ve|and)\s+/iu, ""));
   if (LEADING_ESTIMATE_RE.test(text)) {
     text = tidy(text.replace(LEADING_ESTIMATE_RE, ""));
-    est = true;
+    if (sourcePrefixIsApprox && !saidUnspecified) approx = true;
+    else est = true;
   }
-  if (!text) return { amount: "", estimated: false };
-  return { amount: text, estimated: est && /[\d½¼¾⅓⅔⅛]|yarım/iu.test(text) };
+  if (!text) return none;
+  const numeric = /[\d½¼¾⅓⅔⅛]|yarım/iu.test(text);
+  const isEstimated = est && numeric;
+  return { amount: text, estimated: isEstimated, ...(approx && numeric && !isEstimated ? { approx: true } : {}) };
+}
+
+// Tarifi Düzenle formu: işaret yalnızca miktar elle değiştirilmediyse kalır (kullanıcının
+// yazdığı miktar artık ne öneri ne de kaynağın "yaklaşık" ifadesidir). Kayda girecek alanlar.
+export function amountFlagsAfterEdit({ amount, origAmount, estimated, approx }) {
+  const now = str(amount).trim();
+  if (!now || now !== str(origAmount).trim()) return {};
+  if (estimated === true) return { estimated: true };
+  if (approx === true) return { approx: true };
+  return {};
 }
 
 // Malzeme ADININ sadeleştirilmesi (yalnız Türkçe metin; genel dil kuralı, tek kelimeye özel değil).
@@ -79,8 +106,10 @@ export function simplifyIngredientName(name, lang = "tr") {
 }
 
 // Yeni çıkarılan tarifin malzemeleri (sunucu, kayıttan önce). Şema alanları:
-// { name, amount, group, estimated }. Kayda yalnızca dolu `group` ve `estimated: true` yazılır
-// (eski kayıtlarla aynı biçim kalsın, boş alan birikmesin).
+// { name, amount, group, estimated }. Kayda yalnızca dolu `group`, `estimated: true` ve
+// `approx: true` yazılır (eski kayıtlarla aynı biçim kalsın, boş alan birikmesin). Model
+// `estimated: false` dediyse miktar kaynaktandır: baştaki "yaklaşık 1 kg" kaynağın ifadesi →
+// "1 kg" + approx (bkz. cleanAmount).
 export function normalizeExtractedIngredients(ingredients, lang = "tr") {
   if (!Array.isArray(ingredients)) return [];
   const out = [];
@@ -88,9 +117,9 @@ export function normalizeExtractedIngredients(ingredients, lang = "tr") {
     if (!ing || typeof ing !== "object") continue;
     const name = simplifyIngredientName(ing.name, lang);
     if (!name) continue;
-    const { amount, estimated } = cleanAmount(ing.amount, ing.estimated === true);
+    const { amount, estimated, approx } = cleanAmount(ing.amount, ing.estimated === true, { sourcePrefixIsApprox: ing.estimated === false });
     const group = str(ing.group).replace(/\s+/g, " ").trim().replace(/[:：]$/, "").trim();
-    out.push({ name, amount, ...(group ? { group } : {}), ...(estimated ? { estimated: true } : {}) });
+    out.push({ name, amount, ...(group ? { group } : {}), ...(estimated ? { estimated: true } : {}), ...(approx ? { approx: true } : {}) });
   }
   return out;
 }

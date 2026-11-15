@@ -193,7 +193,12 @@ export function contentFingerprint(recipe) {
   const text = JSON.stringify([
     recipe.content_lang || "",
     recipe.title || "",
-    (recipe.ingredients || []).map((i) => (i && (i.group || i.estimated) ? [i.name, i.amount, i.group || "", !!i.estimated] : [i && i.name, i && i.amount])),
+    // approx yalnızca true iken eklenir: bayraksız/bölümsüz tariflerin anahtarı değişmez.
+    (recipe.ingredients || []).map((i) =>
+      i && (i.group || i.estimated || i.approx === true)
+        ? [i.name, i.amount, i.group || "", !!i.estimated, ...(i.approx === true ? [true] : [])]
+        : [i && i.name, i && i.amount]
+    ),
     recipe.instructions || [],
     recipe.assumptions || "",
     recipe.servings_note || "",
@@ -240,6 +245,10 @@ export function displayIngredient(ing, factor, lang) {
   // (alışveriş listesinde toplama için) öneksiz kalır.
   if (ing && ing.estimated && String(shown.text || "").trim()) {
     return { ...shown, text: approxText(shown.text, lang), estimated: true };
+  }
+  // Kaynağın kendi "yaklaşık"ı (approx): aynı önek, ama tahmin değil (not üretmez).
+  if (ing && ing.approx === true && String(shown.text || "").trim()) {
+    return { ...shown, text: approxText(shown.text, lang), approx: true };
   }
   return shown;
 }

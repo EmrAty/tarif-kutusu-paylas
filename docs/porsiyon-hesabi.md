@@ -1,6 +1,6 @@
 # Porsiyon hesabı — araştırma, kurallar ve kaynaklar
 
-Kural sürümü: **`2026-09-28.1`** (`app/shared/portionEstimate.js` → `PORTION_RULES_VERSION`). Önceki sürüm `2026-09-27.3`.
+Kural sürümü: **`2026-11-15.2`** (`app/shared/portionEstimate.js` → `PORTION_RULES_VERSION`). Önceki sürüm `2026-11-15.1`.
 
 Bu hesap bir **tarif verimi tahminidir**. Kişiye özel diyet ya da tıbbi beslenme önerisi değildir. Bir öğünde ne kadar yenildiği kişiye, yaşa, cinsiyete, iştaha ve öğünün geri kalanına göre değişir. Bu yüzden hiçbir kural her kişi için %100 doğru porsiyon veremez. Uygulama bunu gizlemez: kesin bilinen (kaynakta yazan) sayıyı ayrı tutar, hesapladığı sayıyı "Tahmini" olarak gösterir ve makul bir aralık verir. Hesaplanamayan tarifte sayı üretmez.
 
@@ -121,7 +121,7 @@ Sıra: kaynak > hesap (4.1–4.5, değişmedi) > **öneri** > bilinmiyor. Öneri
 - **Kaynakta hiç sayısal miktar yok** (`servings_oneri: "tamami"`): prompt bütün miktarları 1 kişilik ister; `servings: 1`. Model geçerli başka bir sayı (1–20 tam sayı) yazdıysa önerileri ona göredir, o kullanılır.
 - **Kaynakta bazı miktarlar var** (`servings_oneri: "eksikler"`): kaynak miktarları aynen kalır ve tarifin ölçüsünü belirler; tarif 1 kişilik **sayılmaz**. Model eksikleri bu miktarlarla aynı tarif için önerir ve tarifin yaklaşık kaç kişilik olduğunu `suggested_servings` olarak yazar; `servings` = bu sayı. Model sayı vermezse/geçersizse sayı üretilmez (bilinmiyor). Kaynaktaki oranlar ("her 2 kuşkonmaza 1 dilim bacon") önerilerde korunur; ölçekleme her malzemeyi aynı katsayıyla çarptığı için oran her porsiyonda kalır.
 - Ana malzeme kaynakta ölçülüyse deterministik hesap önceliklidir; modelin sayısı kullanılmaz.
-- "Kaynak miktarı" = tahmin olmayan ve sayı içeren miktar ("damak zevkine göre", "kızartmak için" sayılmaz) ya da porsiyon öğesinde `quantity_in_source: true` olan sayı.
+- "Kaynak miktarı" = tahmin olmayan ve sayı içeren miktar ("damak zevkine göre", "kızartmak için" sayılmaz) ya da porsiyon öğesinde `quantity_in_source: true` olan sayı. Kaynağın kendisi "yaklaşık 1 kg" diyorsa (`approx: true`, `2026-11-15.2`) bu da kaynak miktarıdır; öneri sayılmaz ve "kaynakta yok" notu üretmez.
 - `suggested_servings` kayda yazılmaz; `servings_note` yazılmaz (arayüz kısa not gösterir). Gösterim: "1 kişilik öneri" / "Yaklaşık 4 kişilik öneri", malzeme listesinin altında kısa not; Pişirme modunda seçici açılır, tahminler her porsiyonda "Yaklaşık" kalır, kaynak miktarları etiketsiz ölçeklenir.
 - Tarifi Düzenle'de porsiyon değiştirilirse `kullanici` olur, `servings_oneri` silinir.
 - Eski kayıtlar değişmez: sayısı olmayan tarife gösterimde sayı uydurulmaz. Ya yeniden paylaşılır/çıkarılır, ya da Tarifi Düzenle'den porsiyon elle girilir (o zaman mevcut miktarlar ölçeklenir; boş miktarlar boş kalır).
@@ -332,6 +332,7 @@ Hepsine 2026-09-28'de erişildi.
 
 ## 9. Değişiklik geçmişi
 
+- `2026-11-15.2`: kaynağın kendi "yaklaşık" miktarı (`approx: true`) kaynak miktarı sayılır, öneri (`estimated`) sayılmaz; yeni çıkarmada model `estimated: false` dediyse baştaki "yaklaşık/about/~" kaynağın ifadesidir. Hesap kuralları değişmedi.
 - `2026-11-15.1`: öneri tabanı (4.6) — tahmini miktarlı tarifte porsiyon bilinmiyorsa önerilerin kişi sayısı (`servings_basis: "oneri"`); miktarsızda 1 kişilik. Hesap kuralları değişmedi.
 - `2026-09-28.1`:
   - İki yöntemli aralık modeli (A ana malzeme + B toplam verim).
