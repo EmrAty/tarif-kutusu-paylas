@@ -198,7 +198,7 @@ Tarif TEST APK, `preview.tarifkutusu.app` (Grup 5 dalı). Gerçek Upstash/Fireba
 ### Preview doğrulaması (15 Kasım 2026)
 - `preview.tarifkutusu.app` → `b1467e6` yayınına sabitlendi (kullanıcı). `verify:deploy --commit b1467e6` **15/15**, model `claude-haiku-5-5`, korumasız istek 302.
 - Redis: geçici anonim hesapla profil + kova okuma/yazma/geri okuma 200, sonra `DELETE /api/account` 200 ve Firebase'den silindi. Redis erişilebilir (eski test DB `ENOTFOUND` veriyordu). Bağlı DB'nin tam olarak `tk-preview-test` olduğu Upstash konsolundan henüz parmak iziyle doğrulanmadı.
-- ⚠️ Alan adının **Git Branch ayarı hâlâ `trial/haiku-extraction`**: Vercel → Domains'ten `rc/haiku-group5` yapılmalı. Bu not commit'i (`b1467e6` sonrası, yalnız doküman) yayına sabitli alan adına yansımaz; branch ayarı değişince son commit `verify:deploy` ile yeniden doğrulanmalı.
+- ✅ Alan adının Git Branch ayarı `rc/haiku-group5` yapıldı (15 Kasım, Claude, Vercel → Domains); artık dalın son derlemesini sunar. `05bbbee` (öneri tabanı) `verify:deploy` **15/15**, CI `check` yeşil.
 
 ### Telefon testi durumu (15 Kasım 2026, kullanıcı bildirdi — [kullanıcı])
 **Geçenler (yeniden yapılmayacak):**
