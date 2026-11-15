@@ -300,7 +300,7 @@ test("Redis'e ulaşılamazsa koruma gerçek kullanıcıyı durdurmaz (fail-open)
 // ---------- diğer AI uçları ----------
 
 test("suggest-recipes: aşırı uzun malzeme listesi reddedilir, burst 429 döner", async () => {
-  await reset([[ANTHROPIC, () => json(200, { content: [{ type: "text", text: '{"suggestions":[]}' }] })]]);
+  await reset([[ANTHROPIC, () => json(200, { content: [{ type: "text", text: '{"suggestions":[{"title":"Menemen","why":"Yumurta ve domates var","extra_needed":[],"ingredients":[{"name":"yumurta","amount":"2 adet"}],"instructions":["Pişir."],"nutrition":{"calories":300,"protein_g":15,"carbs_g":10,"fat_g":20}}]}' }] })]]);
   const tooMany = await invoke(suggest, { body: { items: Array.from({ length: 81 }, (_, i) => `malzeme ${i}`) } });
   assert.equal(tooMany.status, 400);
   const statuses = [];

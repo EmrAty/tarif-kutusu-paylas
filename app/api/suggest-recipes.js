@@ -1,5 +1,9 @@
 import { requireUser } from "./_lib/auth.js";
 import { guardAiRequest, sendGuardError, deferResponse } from "./_lib/aiGuard.js";
+import { isProviderUnavailable, isProviderBusy } from "./_lib/extractRecipe.js";
+import { SUGGESTIONS_SCHEMA, normalizeSuggestions } from "../shared/pantrySuggestions.js";
+
+export { normalizeSuggestions };
 
 export const config = { maxDuration: 90 };
 
@@ -8,6 +12,9 @@ export const config = { maxDuration: 90 };
 const MAX_ITEMS = 80;
 const MAX_ITEM_CHARS = 80;
 const CLAUDE_TIMEOUT_MS = 75_000;
+// extractRecipe.js ile aynı gerekçe: model (adaptive düşünme) önce düşünüyor ve
+// düşünme token'ları da bu bütçeden düşüyor; 4096'da 3–5 tam tarif kesilebiliyordu.
+const MAX_TOKENS = 16000;
 
 export default async function handler(req, res) {
   let user;
@@ -91,9 +98,10 @@ Tüm metinler Türkçe olsun. Gerçekçi ve ev mutfağında yapılabilecek yemek
       },
       body: JSON.stringify({
         model: "claude-sonnet-5",
-        max_tokens: 4096,
+        max_tokens: MAX_TOKENS,
         system,
         messages: [{ role: "user", content: `Elimdeki malzemeler: ${items.join(", ")}` }],
+        output_config: { format: { type: "json_schema", schema: SUGGESTIONS_SCHEMA } },
       }),
     });
 
@@ -101,12 +109,30 @@ Tüm metinler Türkçe olsun. Gerçekçi ve ev mutfağında yapılabilecek yemek
     if (!anthropicRes.ok || !data) {
       // Sağlayıcının hata gövdesi istemciye iletilmiyor (hesap/anahtar ayrıntısı içerebilir).
       console.log(JSON.stringify({ tag: "suggest-recipes", providerStatus: anthropicRes.status }));
-      const busy = anthropicRes.status === 429 || anthropicRes.status === 529;
+      const unavailable = !anthropicRes.ok && isProviderUnavailable(anthropicRes.status, data?.error?.message);
+      if (unavailable) {
+        // Anahtar/kredi değeri yazılmaz; yalnızca durum ve sağlayıcının hata türü (bkz. extractRecipe.js).
+        console.error(JSON.stringify({ tag: "ai-provider-unavailable", endpoint: "suggest", status: anthropicRes.status, type: data?.error?.type || null }));
+        out.res.status(503).json({ error: "Tarif servisi şu anda kullanılamıyor. Lütfen daha sonra tekrar dene.", code: "ai_unavailable" });
+        return;
+      }
+      const busy = isProviderBusy(anthropicRes.status);
       out.res.status(busy ? 503 : 502).json(
         busy
           ? { error: "Tarif servisi şu anda çok yoğun. Lütfen biraz sonra tekrar dene.", code: "ai_capacity" }
           : { error: "Öneriler alınamadı, tekrar dener misin?" }
       );
+      return;
+    }
+    // Kesilmiş ya da reddedilmiş yanıtın kısmi içeriği asla dönülmez.
+    if (data.stop_reason === "max_tokens") {
+      console.log(JSON.stringify({ tag: "suggest-recipes", stopReason: data.stop_reason }));
+      out.res.status(502).json({ error: "Öneriler tamamlanamadı, tekrar dener misin?" });
+      return;
+    }
+    if (data.stop_reason === "refusal") {
+      console.log(JSON.stringify({ tag: "suggest-recipes", stopReason: data.stop_reason }));
+      out.res.status(422).json({ error: "Bu malzemelerle öneri oluşturulamadı." });
       return;
     }
     const text = (data.content || []).map((b) => (b.type === "text" ? b.text : "")).join("").trim();
@@ -118,7 +144,13 @@ Tüm metinler Türkçe olsun. Gerçekçi ve ev mutfağında yapılabilecek yemek
       out.res.status(502).json({ error: "Öneriler ayrıştırılamadı, tekrar dener misin?" });
       return;
     }
-    out.res.status(200).json(parsed);
+    // Model çıktısı istemciye doğrulanmadan gitmez (bkz. shared/pantrySuggestions.js).
+    const suggestions = normalizeSuggestions(parsed);
+    if (suggestions.length === 0) {
+      out.res.status(502).json({ error: "Öneriler ayrıştırılamadı, tekrar dener misin?" });
+      return;
+    }
+    out.res.status(200).json({ suggestions });
   } catch (e) {
     out.res.status(502).json({ error: "Anthropic API isteği başarısız oldu." });
   } finally {

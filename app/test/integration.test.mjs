@@ -403,7 +403,7 @@ test("entegrasyon 8: extract/suggest/recipe-jobs yanıtı yazıldığı anda kir
   assert.equal(x.r.status, 502);
   assert.equal(x.atResponse, 0, "extract sağlayıcı hatası: yanıt anında kira bırakılmış");
 
-  reset(() => json(200, { content: [{ type: "text", text: '{"suggestions":[]}' }] }));
+  reset(() => json(200, { content: [{ type: "text", text: '{"suggestions":[{"title":"Menemen","why":"Yumurta ve domates var","extra_needed":[],"ingredients":[{"name":"yumurta","amount":"2 adet"}],"instructions":["Pişir."],"nutrition":{"calories":300,"protein_g":15,"carbs_g":10,"fat_g":20}}]}' }] }));
   x = await leaseAtResponse(suggest, { uid: "I8C", body: { items: ["yumurta", "domates"] } }, "suggest");
   assert.equal(x.r.status, 200, JSON.stringify(x.r.body));
   assert.equal(x.atResponse, 0, "suggest: yanıt anında kira bırakılmış");

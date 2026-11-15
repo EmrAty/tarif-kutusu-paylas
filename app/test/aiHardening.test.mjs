@@ -37,7 +37,7 @@ const RECIPE = {
 };
 const okClaude = () => json(200, { stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify(RECIPE) }], usage: { output_tokens: 10 } });
 
-// Tek sahte Anthropic: çeviri isteğine kimlik çevirisi, öneriye boş liste, tarif çıkarmaya RECIPE.
+// Tek sahte Anthropic: çeviri isteğine kimlik çevirisi, öneriye tek geçerli öneri, tarif çıkarmaya RECIPE.
 function anthropic(url, init) {
   const body = JSON.parse(init.body);
   const system = typeof body.system === "string" ? body.system : "";
@@ -47,7 +47,7 @@ function anthropic(url, init) {
     const out = data.titles ? { titles: data.titles.map((t) => `EN ${t}`) } : data;
     return json(200, { stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify(out) }], usage: { output_tokens: 5 } });
   }
-  if (system.startsWith("Sen bir yemek önerisi")) return json(200, { content: [{ type: "text", text: '{"suggestions":[]}' }] });
+  if (system.startsWith("Sen bir yemek önerisi")) return json(200, { content: [{ type: "text", text: '{"suggestions":[{"title":"Menemen","why":"Yumurta ve domates var","extra_needed":[],"ingredients":[{"name":"yumurta","amount":"2 adet"}],"instructions":["Pişir."],"nutrition":{"calories":300,"protein_g":15,"carbs_g":10,"fat_g":20}}]}' }] });
   return okClaude();
 }
 const anthropicCalls = () => calls.filter((c) => c.url === ANTHROPIC);
