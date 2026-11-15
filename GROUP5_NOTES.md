@@ -224,7 +224,7 @@ Tarif TEST APK, `preview.tarifkutusu.app` (Grup 5 dalı). Gerçek Upstash/Fireba
 - Sağlayıcı hata mesajı (§10) telefonda kasıtlı tetiklenemez (kredi/anahtar bozmak gerekir); testle doğrulandı.
 
 ## 12. Son Fable denetimi (F1–F5) — 15 Kasım 2026
-Taban `04b380e`. Fable (denetçi/koordinatör) tüm uygulamayı inceledi; düzeltmeleri yan terminallerdeki Opus 5.5 ve Sonnet 5.5 ayrı worktree'lerde yaptı, Fable her birini bağımsız doğruladı (diff incelemesi + yeni testlerin eski kodda kırmızı, yeni kodda yeşil olduğu + tam `npm run check`). Sonuç: lint temiz, **496/496**, build temiz.
+Taban `04b380e`. Fable (denetçi/koordinatör) tüm uygulamayı inceledi; düzeltmeleri yan terminallerdeki Opus 5.5 ve Sonnet 5.5 ayrı worktree'lerde yaptı, Fable her birini bağımsız doğruladı (diff incelemesi + yeni testlerin eski kodda kırmızı, yeni kodda yeşil olduğu + tam `npm run check`). Sonuç: lint temiz, **511/511**, build temiz.
 
 | # | Bulgu | Düzelten | Commit | Doğrulama |
 |---|---|---|---|---|
@@ -232,7 +232,7 @@ Taban `04b380e`. Fable (denetçi/koordinatör) tüm uygulamayı inceledi; düzel
 | F2 | İngilizce arayüzde liste başlıkları çevirisi ilk 60 başlıkta kalıyordu (istemci hepsini "soruldu" sayıp yeniden istemiyordu). | Sonnet | `58ce8fb` | `src/titleTranslation.js`: ilerleme oldukça yeniden ister (≤10 tur). 150 başlık → 3 istek; ilerleme yoksa tek istek. |
 | F3 | Paylaşım job'u push bildirimleri İngilizce kullanıcıya Türkçe gidiyordu. | Sonnet | `7411c5d` | `api/_lib/jobNotifyText.js` (tr/en; Türkçe metin birebir aynı). 4 yeni test eski kodda kırmızı. "Canı çekti" bildirimi kapsam dışı (hâlâ Türkçe). |
 | F4 | Misafirken başlatılan paylaşım job'u, kullanıcı hesaba geçtikten sonra BAŞARISIZ olursa sessizce atılıyordu (bildirim yok). | Opus | `dad189e` | Geçerli taşıma hedefi varsa "oluşturulamadı" bildirimi hedefe gider; gerçek silmede davranış aynı. 2 yeni test eski kodda kırmızı. |
-| F5 | Kaynakta "yaklaşık 1 kg" yazan miktar `estimated` sayılıyor; ekranda miktar doğru ("Yaklaşık 1 kg") ama dipnot "kaynakta yok" diyor. | — | düzeltilmedi | Düşük; eski kayıtlarla aynı temizlik kuralını paylaştığı için ayrım kayıt biçimi değişikliği ister. |
+| F5 | Kaynakta "yaklaşık 1 kg" yazan miktar `estimated` sayılıyor, dipnot yanlışlıkla "kaynakta yok" diyordu; öneri tabanı da yanlış tetiklenebiliyordu. | Opus | `21fc908` | Yeni `approx: true` işareti (kaynak yaklaşık diyor): "Yaklaşık …" gösterilir ve ölçeklenir, not yalnız `estimated` için. Prompt/şema değişmedi; `PORTION_RULES_VERSION` 2026-11-15.2. 15 yeni testin 10'u eski kodda kırmızı. Eski bayraksız kayıtlar ayırt edilemez, eski kuralla gösterilir. |
 
 Bu turda ayrıca doğrulananlar: Preview/production veritabanı ayrımı (geçici anonim hesapla Preview'a yazılan işaret production'da yok; production'a yalnız GET; hesap silindi), Preview koruması (anahtarsız 302), `verify:deploy` 15/15.
 
