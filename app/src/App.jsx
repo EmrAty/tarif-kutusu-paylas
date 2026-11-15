@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef, useSyncExternalStore } from "react";
+import { fetchAllTitles } from "./titleTranslation.js";
 import { createPortal } from "react-dom";
 import {
   ChefHat, Plus, Minus, Link2, ExternalLink, Trash2, Loader2, ArrowLeft, ArrowRight, AlertCircle,
@@ -2060,8 +2061,12 @@ export default function TarifKutusu() {
     const timer = setTimeout(async () => {
       fresh.forEach((r) => asked.add(r.title));
       try {
-        const data = await authedFetch("/api/translate-recipe", { method: "POST", body: { mode: "titles", target: language } });
-        setTitleTranslations((prev) => ({ ...prev, [language]: { ...(prev[language] || {}), ...(data.titles || {}) } }));
+        // Sunucu istek başına sınırlı sayıda başlık çevirir; kalanlar için ilerleme oldukça yeniden sorulur.
+        const { titles } = await fetchAllTitles({
+          wanted: fresh.map((r) => r.title),
+          request: () => authedFetch("/api/translate-recipe", { method: "POST", body: { mode: "titles", target: language } }),
+        });
+        setTitleTranslations((prev) => ({ ...prev, [language]: { ...(prev[language] || {}), ...titles } }));
       } catch (e) {
         // başlıklar asıl haliyle kalır; tarif açılınca tam çeviri başlığı da getirir
       }

@@ -11,6 +11,7 @@ import { assertFamilyMember, familyRecipesKey } from "./_lib/families.js";
 import { isAccountDeleted, accountDeletedError } from "./_lib/accountDeletion.js";
 import { mergeRedirectTarget, isGuestBound } from "./_lib/guestMerge.js";
 import { isTikTokLink, tiktokTranscript } from "./_lib/tiktok.js";
+import { notifyText, failedBody } from "./_lib/jobNotifyText.js";
 import { parseSocialUrl, SUPPORTED_LINK_MESSAGE } from "./_lib/socialUrl.js";
 import { guardAiRequest, reserveAiBudget, sendGuardError, deferResponse } from "./_lib/aiGuard.js";
 import { CATEGORIES } from "../shared/recipeExtraction.js";
@@ -77,6 +78,7 @@ function captionLooksSufficient(caption) {
 function insufficientSourceError() {
   const err = new Error(INSUFFICIENT_MESSAGE);
   err.notifyBody = INSUFFICIENT_MESSAGE;
+  err.notifyKind = "insufficient";
   return err;
 }
 
@@ -309,7 +311,10 @@ async function runRecipeJob({ uid, jobId, sourceUrl, caption, category, addedBy,
     }
     timings.total = Date.now() - startedAt;
     const serviceSide = isServiceSideError(e);
-    if (serviceSide) e.notifyBody = SERVICE_UNAVAILABLE_MESSAGE;
+    if (serviceSide) {
+      e.notifyBody = SERVICE_UNAVAILABLE_MESSAGE;
+      e.notifyKind = "service";
+    }
     logStep(jobId, "failed", timings.total, { error: e.message, kind: e.kind, transcriptMeta });
     await patchJob(uid, jobId, {
       status: "failed",
@@ -323,8 +328,8 @@ async function runRecipeJob({ uid, jobId, sourceUrl, caption, category, addedBy,
     await waitForSharePanelToClose(startedAt);
     const t = Date.now();
     const notify = await notifyUserDevices(uid, {
-      title: "Tarif oluşturulamadı",
-      body: e.notifyBody || "Paylaştığın videodan tarif çıkarılamadı. Dokun, uygulamada tekrar deneyelim.",
+      title: notifyText(language).failedTitle,
+      body: failedBody(language, e.notifyKind),
       data: { type: "recipe_failed", link: sourceUrl },
     }, { dedupeKey: `${jobId}:failed` }).catch((err) => ({ sent: 0, attempted: 0, error: err.message }));
     // Başarısız job'da da bildirim sonucu kayda yazılıyor (önceden yalnızca
@@ -379,8 +384,8 @@ async function runRecipeJob({ uid, jobId, sourceUrl, caption, category, addedBy,
   await waitForSharePanelToClose(startedAt);
   const t = Date.now();
   const notify = await notifyUserDevices(ownerUid, {
-    title: "Tarifin hazır 🍝",
-    body: recipe.title ? `${recipe.title} tarifin hazır.` : "Tarifin hazır.",
+    title: notifyText(language).readyTitle,
+    body: notifyText(language).readyBody(recipe.title),
     // Aile tarifinde uygulama doğru listeyi tazeleyebilsin diye kapsam da
     // gidiyor; kişisel bildirimin payload'ı eskisiyle aynı.
     data:
