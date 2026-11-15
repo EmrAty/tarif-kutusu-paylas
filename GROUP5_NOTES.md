@@ -162,12 +162,13 @@ Kontrol edilip sağlam bulunanlar (testli): her yazım adımında kesinti + deva
 - `android:allowBackup="true"`. WebView verisi (Firebase oturumu, `localStorage` dahil taşıma biletleri) Google yedeğine girer ve yeni kurulumda geri gelir. Artısı: yeniden kurulumda misafir hesabı geri bulunabilir. Eksisi: yedekten gelen anonim oturum aynı misafiri iki cihazda açabilir (bağlıysa donuk, zararsız); bilet kullanıcının kendi yedeğinde durur ve yalnızca giriş yapmış bir hesapça talep edilebilir. Öneri: şimdilik **true kalsın**. `false` ya da `dataExtractionRules` ile hariç tutma yeni AAB ister ve misafir veri kurtarma yolunu kapatır — ürün kararı.
 - CSP `script-src`: eklenmedi (§7: rapor ucu yok, Firebase popup/iframe, yanlış ayarın girişi bozma riski). Mevcut başlıklar (`object-src 'none'`, `base-uri`, `frame-ancestors`, `form-action`) yerinde. Öneri: rapor ucu kurulmadan eklenmesin.
 
-### Telefonda doğrulanacaklar (güncel; hiçbiri yapılmadı)
+### Telefonda doğrulanacaklar
+> **Durum (15 Kasım 2026, kullanıcı bildirdi — [kullanıcı]):** geçen/kısmen geçen maddeler aşağıda işaretli; ayrıntı ve kalanlar §11 "Telefon testi durumu".
 Tarif TEST APK, `preview.tarifkutusu.app` (Grup 5 dalı). Gerçek Upstash/Firebase üzerinde taşıma hiç denenmedi; bu liste onu da kapsar.
-1. Misafir → Giriş Yap (mevcut hesap; e-posta ve Google) → onay → üst bantta "taşınıyor/taşındı"; tarifler, kiler, alışveriş listesi (birleşmiş), aile hedefte.
-2. Onaydan hemen sonra interneti kes + uygulamayı kapat → tekrar aç: taşıma kendiliğinden bitiyor.
-3. Aynı hedef hesapla ikinci cihazdan açılış: yarım taşıma orada bitiyor (biletsiz).
-4. Aile sahibi misafirle geçiş: sahiplik hedefte, diğer üye aileyi ve tarifleri görüyor, davet kodu hedefte yenilenebiliyor.
+1. ✅ **Geçti** (e-posta ve Google). Misafir → Giriş Yap (mevcut hesap; e-posta ve Google) → onay → üst bantta "taşınıyor/taşındı"; tarifler, kiler, alışveriş listesi (birleşmiş), aile hedefte.
+2. 🟡 **Kısmen:** kapatıp açınca tarifler görüldü, ama taşımanın gerçekten yarıda kesildiği kanıtlanmadı. Onaydan hemen sonra interneti kes + uygulamayı kapat → tekrar aç: taşıma kendiliğinden bitiyor.
+3. 🟡 **Kısmen:** ikinci cihazda tarifler görüldü, ama yarım taşıma olduğu kanıtlanmadı. Aynı hedef hesapla ikinci cihazdan açılış: yarım taşıma orada bitiyor (biletsiz).
+4. ✅ **Büyük ölçüde geçti:** aile ve tarifler korundu, sahiplik hedefte göründü (diğer üyenin görünümü ve davet kodu yenileme bildirilmedi). Aile sahibi misafirle geçiş: sahiplik hedefte, diğer üye aileyi ve tarifleri görüyor, davet kodu hedefte yenilenebiliyor.
 5. Misafirken TikTok paylaş → panel kapanınca hemen mevcut hesaba geç: tarif hedef hesapta, "Tarifin hazır" bildirimi geliyor (yeni düzeltme).
 6. Google girişini iptal et: misafir verisi değişmedi, misafir olarak devam.
 7. Eski cihazdaki donmuş misafir oturumunda "Hesabı sil" reddediliyor (şimdilik genel hata metniyle), veri hedefte.
@@ -189,12 +190,25 @@ Tarif TEST APK, `preview.tarifkutusu.app` (Grup 5 dalı). Gerçek Upstash/Fireba
 - Geri dönüş uyumu: yeni tariflerin malzemelerinde ek alanlar var (`group`, `estimated`; boş/false ise yazılmaz). Grup 5 ya da main sunucusu/istemcisi bunları yok sayar: liste bölümsüz ve "Yaklaşık" etiketsiz görünür, eski düzenleme formu kaydederken bu alanları düşürebilir; miktar ve ad korunur. Veri kaybı yok.
 - Açık: Haiku steak tarifinde "her 2 kuşkonmaza 1 dilim bacon"u "her kuşkonmazı bir dilim bacon ile sarın" yazdı (yapılışta sayı hatası; uydurma değil ama yanlış). Tek örnek; telefon testinde yapılış adımlarına özellikle bakılmalı.
 
-### Telefonda doğrulanacaklar (yalnız yeni/henüz denenmemiş akışlar)
-Tarif TEST APK, `preview.tarifkutusu.app` (`rc/haiku-group5`). Haiku paylaşım paneli yolu, yeni malzeme görünümü/tahminler ve "Tarifin hazır" bildirimi denemede doğrulandı; tekrar gerekmez.
-1. **Uygulama içi "Yeni Tarif Çıkar"** (açıklama + ekran görüntüsüyle) Haiku ile — denemede yalnız paylaşım paneli denendi.
-2. Steak videosunu yeniden paylaş: miktarlar "Yaklaşık" önerili mi, yapılıştaki adet/oran kaynakla aynı mı.
-3. İngilizce arayüzde bölümlü bir tarifi aç: bölüm başlıkları ve malzemeler çevriliyor, sayılar değişmiyor (çeviri gerçek hesapla uçtan uca hiç denenmedi).
-4. Bölümlü/"Yaklaşık" tarifi düzenle-kaydet; alışveriş listesine ekle (aynı malzeme toplanıyor, "Yaklaşık" kalıyor); "Elimde Bunlar Var" eşleşmesi.
-5. Porsiyon ölçekleme (×2) bölümlü tarifte; Pişirme modunda bölüm başlıkları.
-6. §9'daki Grup 5 listesinin 10 maddesi (misafir → hesap taşıma vb.) — hâlâ hiçbiri yapılmadı.
-- Sağlayıcı hata mesajı (§10) telefonda kasıtlı tetiklenemez (kredi/anahtar bozmak gerekir); testle doğrulandı, telefonda test edilmeyecek.
+### Telefon testi durumu (15 Kasım 2026, kullanıcı bildirdi — [kullanıcı])
+**Geçenler (yeniden yapılmayacak):**
+- Misafir → mevcut hesaba taşıma, hem **Google** hem **e-posta** ile (§9/1).
+- Misafir **aile sahibinin** hesaba geçişi: aile ve tarifler korundu, sahiplik hedef hesapta (§9/4).
+- **Haiku ile paylaşım paneli** (TikTok → Tarif Kutusu) tarif oluşturdu ve **Android "Tarifin hazır" bildirimi** geldi. Yeni malzeme görünümü ve "Yaklaşık" tahminleri beğenildi.
+
+**Kısmen (eksik kanıt):**
+- Kapatıp açınca (§9/2) ve ikinci cihazda (§9/3) tarifler göründü, ama **taşımanın gerçekten yarıda kesildiği kanıtlanmadı** — taşıma o anda zaten bitmiş olabilir. Kanıt için: onaydan hemen sonra uçak modu + uygulamayı zorla kapat; tekrar açınca üst bantta "taşınıyor" görülmeli (ya da Redis'te `guest-merge` kaydının yarım durumda olduğu doğrulanmalı).
+
+**Kalanlar (henüz yapılmadı):**
+1. Uygulama içi **"Yeni Tarif Çıkar"** (açıklama + ekran görüntüsüyle) Haiku ile.
+2. Steak videosunu yeniden paylaş: eksik miktarlar "Yaklaşık" öneriyle mi, yapılıştaki adet/oran kaynakla aynı mı.
+3. İngilizce arayüzde bölümlü tarif: bölüm başlıkları ve malzemeler çevriliyor, sayılar değişmiyor.
+4. Bölümlü/"Yaklaşık" tarifi düzenle-kaydet; alışveriş listesine ekle; "Elimde Bunlar Var"; ×2 ölçekleme ve Pişirme modunda bölüm başlıkları.
+5. §9/4'ün eksik kısmı: ailenin **diğer üyesi** aileyi ve tarifleri görüyor, davet kodu hedefte yenilenebiliyor.
+6. §9/5: misafirken TikTok paylaş → panel kapanınca hemen hesaba geç → tarif hedef hesapta, bildirim geliyor.
+7. §9/6: Google girişini iptal et → misafir verisi değişmedi.
+8. §9/7: eski cihazdaki donmuş misafirde "Hesabı sil" reddediliyor.
+9. §9/8: iki misafirden art arda geçiş; mümkünse 6. misafirde sıra bandı (TR/EN).
+10. §9/9: alışveriş listesinde hızlı işaretlemede 429 yok.
+11. §9/10: RELEASE.md duman testinin kalanı — liste ekle/düzenle/sil, aile "Canım çekti", Plus test düğmesi (paylaşım + bildirim geçti).
+- Sağlayıcı hata mesajı (§10) telefonda kasıtlı tetiklenemez (kredi/anahtar bozmak gerekir); testle doğrulandı.
