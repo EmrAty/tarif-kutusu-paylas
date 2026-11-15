@@ -305,15 +305,40 @@ async function runRecipeJob({ uid, jobId, sourceUrl, caption, category, addedBy,
     timings.save = Date.now() - t;
     logStep(jobId, "save", timings.save);
   } catch (e) {
-    if (e.accountDeleted || (await isAccountDeleted(uid).catch(() => false))) {
-      await discardJobOfDeletedAccount(uid, jobId, lockKey);
-      return;
-    }
     timings.total = Date.now() - startedAt;
     const serviceSide = isServiceSideError(e);
     if (serviceSide) {
       e.notifyBody = SERVICE_UNAVAILABLE_MESSAGE;
       e.notifyKind = "service";
+    }
+    const failedNotification = {
+      title: notifyText(language).failedTitle,
+      body: failedBody(language, e.notifyKind),
+      data: { type: "recipe_failed", link: sourceUrl },
+    };
+    if (e.accountDeleted || (await isAccountDeleted(uid).catch(() => false))) {
+      // e.accountDeleted: recipeOwnerFor hesabı silinmiş ve hedefsiz buldu (gerçek silme).
+      // Aksi hâlde misafir bir hesaba taşınmış olabilir: başarılı yoldaki gibi misafirin
+      // job kaydı atılır, ama kullanıcı gelmeyecek tarifi beklemesin diye başarısızlık
+      // bildirimi hedefe gider. Hedef yoksa / silinmişse / okunamazsa (null) bugünkü gibi
+      // sessizce atılır.
+      const moved = e.accountDeleted ? null : await redirectTargetOf(uid);
+      if (!moved) {
+        await discardJobOfDeletedAccount(uid, jobId, lockKey);
+        return;
+      }
+      logStep(jobId, "failed-redirected", timings.total, { error: e.message, kind: e.kind, transcriptMeta });
+      await redisDel(jobKey(uid, jobId)).catch(() => {});
+      await redisDel(lockKey).catch(() => {});
+      await waitForSharePanelToClose(startedAt);
+      const t = Date.now();
+      const notify = await notifyUserDevices(moved, failedNotification, { dedupeKey: `${jobId}:failed` }).catch((err) => ({
+        sent: 0,
+        attempted: 0,
+        error: err.message,
+      }));
+      logStep(jobId, "fcm", Date.now() - t, { sent: notify.sent, attempted: notify.attempted, kind: "failed-redirected" });
+      return;
     }
     logStep(jobId, "failed", timings.total, { error: e.message, kind: e.kind, transcriptMeta });
     await patchJob(uid, jobId, {
@@ -327,11 +352,7 @@ async function runRecipeJob({ uid, jobId, sourceUrl, caption, category, addedBy,
     await redisDel(lockKey).catch(() => {});
     await waitForSharePanelToClose(startedAt);
     const t = Date.now();
-    const notify = await notifyUserDevices(uid, {
-      title: notifyText(language).failedTitle,
-      body: failedBody(language, e.notifyKind),
-      data: { type: "recipe_failed", link: sourceUrl },
-    }, { dedupeKey: `${jobId}:failed` }).catch((err) => ({ sent: 0, attempted: 0, error: err.message }));
+    const notify = await notifyUserDevices(uid, failedNotification, { dedupeKey: `${jobId}:failed` }).catch((err) => ({ sent: 0, attempted: 0, error: err.message }));
     // Başarısız job'da da bildirim sonucu kayda yazılıyor (önceden yalnızca
     // başarılı yolda vardı; "bildirim geldi mi" sorusu yanıtsız kalıyordu).
     logStep(jobId, "fcm", Date.now() - t, { sent: notify.sent, attempted: notify.attempted, kind: "failed" });
