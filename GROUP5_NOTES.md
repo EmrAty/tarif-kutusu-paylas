@@ -222,3 +222,18 @@ Tarif TEST APK, `preview.tarifkutusu.app` (Grup 5 dalı). Gerçek Upstash/Fireba
 9. §9/9: alışveriş listesinde hızlı işaretlemede 429 yok.
 10. §9/10: RELEASE.md duman testinin kalanı — liste ekle/düzenle/sil, aile "Canım çekti", Plus test düğmesi (paylaşım + bildirim geçti).
 - Sağlayıcı hata mesajı (§10) telefonda kasıtlı tetiklenemez (kredi/anahtar bozmak gerekir); testle doğrulandı.
+
+## 12. Son Fable denetimi (F1–F5) — 15 Kasım 2026
+Taban `04b380e`. Fable (denetçi/koordinatör) tüm uygulamayı inceledi; düzeltmeleri yan terminallerdeki Opus 5.5 ve Sonnet 5.5 ayrı worktree'lerde yaptı, Fable her birini bağımsız doğruladı (diff incelemesi + yeni testlerin eski kodda kırmızı, yeni kodda yeşil olduğu + tam `npm run check`). Sonuç: lint temiz, **496/496**, build temiz.
+
+| # | Bulgu | Düzelten | Commit | Doğrulama |
+|---|---|---|---|---|
+| F1 | "Elimde Bunlar Var" (`api/suggest-recipes.js`) model çıktısını doğrulamadan istemciye iletiyordu; `stop_reason` kontrolü yoktu, `max_tokens` 4096'ydı. Biçimsiz çıktı ekranı çökertebilir, kaydedilirse bozuk tarifi kalıcı yazabilirdi. | Opus | `298c704` | json_schema + `max_tokens` 16000 + `stop_reason` + `shared/pantrySuggestions.js` (sunucu ve istemci aynı normalizer). Yeni 16 testin 10'u eski uçta kırmızı. |
+| F2 | İngilizce arayüzde liste başlıkları çevirisi ilk 60 başlıkta kalıyordu (istemci hepsini "soruldu" sayıp yeniden istemiyordu). | Sonnet | `58ce8fb` | `src/titleTranslation.js`: ilerleme oldukça yeniden ister (≤10 tur). 150 başlık → 3 istek; ilerleme yoksa tek istek. |
+| F3 | Paylaşım job'u push bildirimleri İngilizce kullanıcıya Türkçe gidiyordu. | Sonnet | `7411c5d` | `api/_lib/jobNotifyText.js` (tr/en; Türkçe metin birebir aynı). 4 yeni test eski kodda kırmızı. "Canı çekti" bildirimi kapsam dışı (hâlâ Türkçe). |
+| F4 | Misafirken başlatılan paylaşım job'u, kullanıcı hesaba geçtikten sonra BAŞARISIZ olursa sessizce atılıyordu (bildirim yok). | Opus | `dad189e` | Geçerli taşıma hedefi varsa "oluşturulamadı" bildirimi hedefe gider; gerçek silmede davranış aynı. 2 yeni test eski kodda kırmızı. |
+| F5 | Kaynakta "yaklaşık 1 kg" yazan miktar `estimated` sayılıyor; ekranda miktar doğru ("Yaklaşık 1 kg") ama dipnot "kaynakta yok" diyor. | — | düzeltilmedi | Düşük; eski kayıtlarla aynı temizlik kuralını paylaştığı için ayrım kayıt biçimi değişikliği ister. |
+
+Bu turda ayrıca doğrulananlar: Preview/production veritabanı ayrımı (geçici anonim hesapla Preview'a yazılan işaret production'da yok; production'a yalnız GET; hesap silindi), Preview koruması (anahtarsız 302), `verify:deploy` 15/15.
+
+Bilinen, düzeltilmeyen küçük noktalar: taşıma adımı tam "yazıldı ama işaretlenmedi" anında kesilir ve hedef o tarifi düzenlerse yeniden denemede tarifin kopyası oluşabilir (kayıp değil, çok dar pencere); yayından sonra mevcut kullanıcılar ana uygulamayı bir kez açana kadar bildirim almaz (Grup 3 kayıt biçimi); F1'in gerçek sağlayıcıyla denemesi (ücretli tek çağrı) yapılmadı.
