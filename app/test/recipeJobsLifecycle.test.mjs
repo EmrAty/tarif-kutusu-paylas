@@ -407,3 +407,98 @@ test(
     }
   })
 );
+
+// ---------- bildirim dili (yalnızca push title/body) ----------
+const TR_READY = { title: "Tarifin hazır 🍝", body: "Tenekede Tavuk tarifin hazır." };
+const TR_FAILED_DEFAULT = "Paylaştığın videodan tarif çıkarılamadı. Dokun, uygulamada tekrar deneyelim.";
+const TR_INSUFFICIENT = "Bu videodan yeterli tarif bilgisi çıkaramadık.";
+const TR_SERVICE = "Tarif servisi şu anda çalışmıyor; sorun videoda değil. Biraz sonra tekrar dene.";
+const pushText = () => ({ title: fcmMessages[0]?.notification?.title, body: fcmMessages[0]?.notification?.body });
+
+for (const [label, extra] of [["language yok", { language: undefined }], ["tr", { language: "tr" }], ["bilinmeyen dil", { language: "xx" }]]) {
+  test(
+    `N1) Başarılı job bildirimi Türkçe kalır (${label})`,
+    quiet(async () => {
+      seed();
+      const r = await post(body(extra));
+      await waitForSettledJob(r.body.jobId);
+      assert.deepEqual(pushText(), TR_READY);
+    })
+  );
+}
+
+test(
+  "N2) language en: başarılı job İngilizce bildirim alır, payload aynı",
+  quiet(async () => {
+    seed();
+    const r = await post(body({ language: "en" }));
+    const job = await waitForSettledJob(r.body.jobId);
+    assert.deepEqual(pushText(), { title: "Your recipe is ready 🍝", body: "Tenekede Tavuk is ready." });
+    assert.deepEqual(fcmMessages[0].data, { type: "recipe_ready", recipeId: job.recipeId });
+  })
+);
+
+test(
+  "N3) language en: ai_unavailable İngilizce bildirim; job kaydı (error/errorCode) değişmez",
+  quiet(async () => {
+    seed();
+    claudeMode = "401";
+    const r = await post(body({ language: "en" }));
+    const job = await waitForSettledJob(r.body.jobId);
+    assert.equal(job.errorCode, "ai_unavailable");
+    assert.match(job.error, /401/);
+    assert.deepEqual(pushText(), {
+      title: "Couldn't create the recipe",
+      body: "The recipe service isn't working right now; it's not the video. Please try again in a bit.",
+    });
+    assert.equal(fcmMessages[0].data.type, "recipe_failed");
+  })
+);
+
+test(
+  "N4) Türkçe ai_unavailable ve genel hata bildirimi aynen kalır",
+  quiet(async () => {
+    seed();
+    claudeMode = "401";
+    const r = await post(body());
+    await waitForSettledJob(r.body.jobId);
+    assert.deepEqual(pushText(), { title: "Tarif oluşturulamadı", body: TR_SERVICE });
+    seed();
+    claudeMode = "parse";
+    const r2 = await post(body());
+    await waitForSettledJob(r2.body.jobId);
+    assert.deepEqual(pushText(), { title: "Tarif oluşturulamadı", body: TR_FAILED_DEFAULT });
+  })
+);
+
+test(
+  "N5) language en: genel hata İngilizce varsayılan metne düşer",
+  quiet(async () => {
+    seed();
+    claudeMode = "parse";
+    const r = await post(body({ language: "en" }));
+    const job = await waitForSettledJob(r.body.jobId);
+    assert.match(job.error, /ayrıştırılamadı/);
+    assert.deepEqual(pushText(), {
+      title: "Couldn't create the recipe",
+      body: "We couldn't extract a recipe from the video you shared. Tap to try again in the app.",
+    });
+  })
+);
+
+test(
+  "N6) Yetersiz kaynak: Türkçe aynen, en İngilizce",
+  quiet(async () => {
+    for (const [language, expected] of [
+      ["tr", { title: "Tarif oluşturulamadı", body: TR_INSUFFICIENT }],
+      ["en", { title: "Couldn't create the recipe", body: "We couldn't get enough recipe details from this video." }],
+    ]) {
+      seed();
+      const r = await post(body({ language, caption: "kısa" }));
+      const job = await waitForSettledJob(r.body.jobId);
+      assert.equal(job.status, "failed");
+      assert.equal(job.error, TR_INSUFFICIENT, "job kaydındaki hata dilden bağımsız");
+      assert.deepEqual(pushText(), expected);
+    }
+  })
+);
