@@ -77,6 +77,7 @@ Kaynak (kaithompson "STEAK SANDWICH" açıklaması, uygulamanın caption okuyucu
 bir önceki düzeltmede prompt "kaynakta yoksa boş bırak, tahmini yalnız kaynak açıkça ima ediyorsa ver" diyordu
 (fazla katı). "Ciabatta ekmeği ya da başka bir ekmek" adı da o prompt'taki örnekten geldi.
 Ayrıca Haiku hatası: kaynak "Wrap 2 asparagus with 1 slice of bacon", kayıtlı adım "Her kuşkonmazı bir dilim bacon ile sarın".
+**Kapandı (15 Kasım):** yeniden paylaşılan tarifte kullanıcı 8 kuşkonmaz / 4 dilim bacon miktarını ve "2 kuşkonmazı 1 dilim bacon ile sar" adımını doğruladı.
 
 Değişiklik:
 - Prompt: kaynak miktarı aynen (estimated false); kaynakta yoksa bağlamdan pratik/yuvarlak öneri + `estimated: true`

@@ -188,12 +188,13 @@ Tarif TEST APK, `preview.tarifkutusu.app` (Grup 5 dalı). Gerçek Upstash/Fireba
 - Deneyden yayına girmeyenler (doğrulandı): `/api/experiment` ucu, `experiments/` karşılaştırma betikleri/sonuçları, `exp.tarifkutusu.app` ve deneyin env/dağıtım ayarları — hepsi yalnız `experiment/cheap-extraction` dalında. Bu dalda `vercel.json`, `package.json`, CI değişmedi.
 - Maliyet notu: çeviri prompt'u v2 olduğu için yayından sonra İngilizce arayüzde açılan her tarif bir kez yeniden çevrilir (Sonnet, ücretli, yalnız açılınca).
 - Geri dönüş uyumu: yeni tariflerin malzemelerinde ek alanlar var (`group`, `estimated`; boş/false ise yazılmaz). Grup 5 ya da main sunucusu/istemcisi bunları yok sayar: liste bölümsüz ve "Yaklaşık" etiketsiz görünür, eski düzenleme formu kaydederken bu alanları düşürebilir; miktar ve ad korunur. Veri kaybı yok.
-- Açık: Haiku steak tarifinde "her 2 kuşkonmaza 1 dilim bacon"u "her kuşkonmazı bir dilim bacon ile sarın" yazdı (yapılışta sayı hatası; uydurma değil ama yanlış). Tek örnek; telefon testinde yapılış adımlarına özellikle bakılmalı.
+- ✅ **Kapandı (15 Kasım, [kullanıcı]):** steak sandviçteki kuşkonmaz–bacon oranı. Yeniden paylaşılan tarifte kullanıcı hem malzeme miktarını (8 kuşkonmaz, 4 dilim bacon) hem "2 kuşkonmazı 1 dilim bacon ile sar" adımını doğruladı. İlk çıkarmadaki "her kuşkonmazı bir dilim bacon ile sarın" hatası tekrarlanmadı; steak testi yeniden istenmeyecek.
 
 ### Telefon testi durumu (15 Kasım 2026, kullanıcı bildirdi — [kullanıcı])
 **Geçenler (yeniden yapılmayacak):**
 - Misafir → mevcut hesaba taşıma, hem **Google** hem **e-posta** ile (§9/1).
 - Misafir **aile sahibinin** hesaba geçişi: aile ve tarifler korundu, sahiplik hedef hesapta (§9/4).
+- Steak sandviç yeniden paylaşımı: kuşkonmaz–bacon miktarı ve adımı doğru (yukarıdaki kapanan madde).
 - **Haiku ile paylaşım paneli** (TikTok → Tarif Kutusu) tarif oluşturdu ve **Android "Tarifin hazır" bildirimi** geldi. Yeni malzeme görünümü ve "Yaklaşık" tahminleri beğenildi.
 
 **Kısmen (eksik kanıt):**
@@ -201,14 +202,13 @@ Tarif TEST APK, `preview.tarifkutusu.app` (Grup 5 dalı). Gerçek Upstash/Fireba
 
 **Kalanlar (henüz yapılmadı):**
 1. Uygulama içi **"Yeni Tarif Çıkar"** (açıklama + ekran görüntüsüyle) Haiku ile.
-2. Steak videosunu yeniden paylaş: eksik miktarlar "Yaklaşık" öneriyle mi, yapılıştaki adet/oran kaynakla aynı mı.
-3. İngilizce arayüzde bölümlü tarif: bölüm başlıkları ve malzemeler çevriliyor, sayılar değişmiyor.
-4. Bölümlü/"Yaklaşık" tarifi düzenle-kaydet; alışveriş listesine ekle; "Elimde Bunlar Var"; ×2 ölçekleme ve Pişirme modunda bölüm başlıkları.
-5. §9/4'ün eksik kısmı: ailenin **diğer üyesi** aileyi ve tarifleri görüyor, davet kodu hedefte yenilenebiliyor.
-6. §9/5: misafirken TikTok paylaş → panel kapanınca hemen hesaba geç → tarif hedef hesapta, bildirim geliyor.
-7. §9/6: Google girişini iptal et → misafir verisi değişmedi.
-8. §9/7: eski cihazdaki donmuş misafirde "Hesabı sil" reddediliyor.
-9. §9/8: iki misafirden art arda geçiş; mümkünse 6. misafirde sıra bandı (TR/EN).
-10. §9/9: alışveriş listesinde hızlı işaretlemede 429 yok.
-11. §9/10: RELEASE.md duman testinin kalanı — liste ekle/düzenle/sil, aile "Canım çekti", Plus test düğmesi (paylaşım + bildirim geçti).
+2. İngilizce arayüzde bölümlü tarif: bölüm başlıkları ve malzemeler çevriliyor, sayılar değişmiyor.
+3. Bölümlü/"Yaklaşık" tarifi düzenle-kaydet; alışveriş listesine ekle; "Elimde Bunlar Var"; ×2 ölçekleme ve Pişirme modunda bölüm başlıkları.
+4. §9/4'ün eksik kısmı: ailenin **diğer üyesi** aileyi ve tarifleri görüyor, davet kodu hedefte yenilenebiliyor.
+5. §9/5: misafirken TikTok paylaş → panel kapanınca hemen hesaba geç → tarif hedef hesapta, bildirim geliyor.
+6. §9/6: Google girişini iptal et → misafir verisi değişmedi.
+7. §9/7: eski cihazdaki donmuş misafirde "Hesabı sil" reddediliyor.
+8. §9/8: iki misafirden art arda geçiş; mümkünse 6. misafirde sıra bandı (TR/EN).
+9. §9/9: alışveriş listesinde hızlı işaretlemede 429 yok.
+10. §9/10: RELEASE.md duman testinin kalanı — liste ekle/düzenle/sil, aile "Canım çekti", Plus test düğmesi (paylaşım + bildirim geçti).
 - Sağlayıcı hata mesajı (§10) telefonda kasıtlı tetiklenemez (kredi/anahtar bozmak gerekir); testle doğrulandı.
