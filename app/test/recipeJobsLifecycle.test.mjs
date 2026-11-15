@@ -82,10 +82,11 @@ globalThis.fetch = async (input, init = {}) => {
   }
   if (url === "https://api.anthropic.com/v1/messages") {
     claudeCalls++;
+    // Kapı mod kontrolünden önce: test, Claude beklerken modu (hata türünü) değiştirebilir.
+    if (claudeGate) await claudeGate.promise;
     if (claudeMode === "401") return json(401, { error: { message: "invalid x-api-key" } });
     if (claudeMode === "network") throw new TypeError("fetch failed");
     if (claudeMode === "parse") return json(200, { stop_reason: "end_turn", content: [{ type: "text", text: "{bozuk" }] });
-    if (claudeGate) await claudeGate.promise;
     if (claudeMode === "slow") {
       // Sinyale uyan, hiç bitmeyen istek: zaman aşımı yolunu sınar.
       return new Promise((_, reject) => {
@@ -402,6 +403,94 @@ test(
       await waitFor(() => !db.has(`job:A:${r.body.jobId}`), { message: "job atılmalı" });
       assert.deepEqual(read("user:A:recipes"), []);
       assert.equal(fcmMessages.length, 0);
+    } finally {
+      claudeGate = null;
+    }
+  })
+);
+
+// Audit F4: taşınan misafirin BAŞARISIZ job'u sessizce atılıyordu; kullanıcı gelmeyecek
+// tarifi bekliyordu. Artık başarısızlık bildirimi taşıma hedefine gider.
+const lockKeysOf = (uid) => [...db.keys()].filter((k) => k.startsWith(`job-url:${uid}:`));
+function linkGuestToReal({ realDeleted = false } = {}) {
+  db.set("deleted-account:A", String(Date.now()));
+  db.set("guest-merge:moved:A", "REAL");
+  db.set("user:REAL:profile", JSON.stringify({ isPlus: false, families: [] }));
+  db.set("user:REAL:recipes", JSON.stringify([]));
+  db.set("user:REAL:pushTargets", { type: "hash", map: new Map([["device-R", JSON.stringify({ platform: "android", installationId: "install-device-R", updatedAt: 1 })]]) });
+  if (realDeleted) db.set("deleted-account:REAL", String(Date.now()));
+}
+
+for (const [label, mode, language, expected] of [
+  ["Claude yanıtı ayrıştırılamadı, tr", "parse", "tr", { title: "Tarif oluşturulamadı", body: "Paylaştığın videodan tarif çıkarılamadı. Dokun, uygulamada tekrar deneyelim." }],
+  ["sağlayıcı kullanılamıyor, en", "401", "en", { title: "Couldn't create the recipe", body: "The recipe service isn't working right now; it's not the video. Please try again in a bit." }],
+]) {
+  test(
+    `F4) Misafir job sürerken hesaba taşınır, job başarısız olur (${label}): hedefin cihazına "failed" bildirimi gider`,
+    quiet(async () => {
+      seed();
+      claudeGate = makeGate();
+      try {
+        const postedAt = Date.now();
+        const r = await post(body({ language }));
+        assert.equal(r.status, 200, JSON.stringify(r.body));
+        await waitFor(() => claudeCalls === 1, { message: "Claude çağrısı başlamalı" });
+        assert.equal(lockKeysOf("A").length, 1, "job sürerken url kilidi var");
+        linkGuestToReal();
+        claudeMode = mode;
+        claudeGate.open();
+        await waitFor(() => fcmMessages.length === 1, { message: "hedefe başarısızlık bildirimi gitmeli" });
+        const msg = fcmMessages[0];
+        assert.equal(msg.token, "device-R");
+        assert.deepEqual({ title: msg.notification.title, body: msg.notification.body }, expected);
+        assert.deepEqual(msg.data, { type: "recipe_failed", link: URL_A });
+        assert.ok(msg.at - postedAt >= NOTIFY_DELAY, "bildirim paylaşım paneli kapanma beklemesinden sonra");
+        assert.equal(db.has(`job:A:${r.body.jobId}`), false, "misafirin job kaydı yok (yeniden oluşmadı)");
+        assert.deepEqual(lockKeysOf("A"), [], "misafirin url kilidi yok");
+        assert.deepEqual(read("user:REAL:recipes"), [], "hedefte tarif yok");
+        assert.deepEqual(read("user:A:recipes"), []);
+      } finally {
+        claudeGate = null;
+      }
+    })
+  );
+}
+
+test(
+  "F4) Gerçekten silinen (taşınmayan) hesabın başarısız job'u: bildirim yok, job ve kilit atılır",
+  quiet(async () => {
+    seed();
+    claudeGate = makeGate();
+    try {
+      const r = await post(body());
+      await waitFor(() => claudeCalls === 1, { message: "Claude çağrısı başlamalı" });
+      db.set("deleted-account:A", String(Date.now()));
+      claudeMode = "parse";
+      claudeGate.open();
+      await waitFor(() => !db.has(`job:A:${r.body.jobId}`) && lockKeysOf("A").length === 0, { message: "job atılmalı" });
+      await new Promise((resolve) => setTimeout(resolve, NOTIFY_DELAY + 100));
+      assert.equal(fcmMessages.length, 0);
+    } finally {
+      claudeGate = null;
+    }
+  })
+);
+
+test(
+  "F4) Taşıma hedefi de silinmişse başarısız job için bildirim gönderilmez",
+  quiet(async () => {
+    seed();
+    claudeGate = makeGate();
+    try {
+      const r = await post(body());
+      await waitFor(() => claudeCalls === 1, { message: "Claude çağrısı başlamalı" });
+      linkGuestToReal({ realDeleted: true });
+      claudeMode = "parse";
+      claudeGate.open();
+      await waitFor(() => !db.has(`job:A:${r.body.jobId}`) && lockKeysOf("A").length === 0, { message: "job atılmalı" });
+      await new Promise((resolve) => setTimeout(resolve, NOTIFY_DELAY + 100));
+      assert.equal(fcmMessages.length, 0);
+      assert.deepEqual(read("user:REAL:recipes"), []);
     } finally {
       claudeGate = null;
     }
