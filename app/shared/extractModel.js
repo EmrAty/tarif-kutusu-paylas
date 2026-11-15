@@ -1,14 +1,22 @@
-// HAIKU DENEMESİ (trial/haiku-extraction): tarif çıkarma modeli ortama göre seçilir.
-// - Vercel Preview (VERCEL_ENV === "preview"): Claude Haiku 5.5, varsayılan ayar (adaptive düşünme,
-//   effort medium). 14–15 Kasım ücretli karşılaştırmada en iyi sonuç veren ayar budur; düşünmesiz
-//   sürüm kullanılmaz (kaynakta olmayan yapılış üretti, hata oranı iki katıydı).
-// - Diğer her yerde (production, yerel, testler): bugünkü Claude Sonnet 5.
-// Bu dal yanlışlıkla production'a çıksa bile model değişmez. Hem sunucu (_lib/extractRecipe.js) hem
-// derleme (vite.config.js → /version.json "extractModel") bu fonksiyonu kullanır; yayından sonra hangi
-// modelin seçildiği ücretli çağrı yapmadan /version.json'dan okunabilir.
-export const PRODUCTION_EXTRACT_MODEL = "claude-sonnet-5";
-export const TRIAL_EXTRACT_MODEL = "claude-haiku-5-5";
+// Tarif çıkarma modeli — TEK kaynak. Her ortamda (Production, Preview, yerel, testler) aynı model.
+//
+// Karar (15 Kasım 2026): yayın adayında Claude Haiku 5.5. Dayanak: ücretli karşılaştırma
+// (experiment/cheap-extraction, Haiku varsayılan ayar 48/51 liste tarifi tam doğru, uydurma adım/porsiyon
+// yok, ~%96 ucuz) ve kullanıcının Preview'daki telefon denemesi (trial/haiku-extraction). Deneme dalındaki
+// "yalnız VERCEL_ENV=preview iken Haiku" kuralı kaldırıldı: Preview'da test edilen model, onaydan sonra
+// Production'da çalışacak modelin aynısı olmalı.
+//
+// Haiku varsayılan ayarla çağrılır (adaptive düşünme, effort medium). thinking/effort parametresi
+// gönderilmez; düşünmesiz sürüm kullanılmaz (karşılaştırmada kaynakta olmayan yapılış üretti).
+//
+// YALNIZCA tarif çıkarma (/api/extract + paylaşım job'u, _lib/extractRecipe.js). Çeviri
+// (api/translate-recipe.js) ve kiler önerileri (api/suggest-recipes.js) kendi modelinde (Sonnet 5) kalır;
+// test/extractModel.test.mjs bunu da sabitler.
+//
+// Gözlem: /version.json → "extractModel" (derleme bu fonksiyonu çağırır; verify:deploy beklenenle karşılaştırır),
+// job kaydı timings.extractModel, loglarda "model".
+export const EXTRACT_MODEL = "claude-haiku-5-5";
 
-export function extractionModel(env = process.env) {
-  return env.VERCEL_ENV === "preview" ? TRIAL_EXTRACT_MODEL : PRODUCTION_EXTRACT_MODEL;
+export function extractionModel() {
+  return EXTRACT_MODEL;
 }

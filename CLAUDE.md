@@ -48,7 +48,7 @@ Kullanıcı TikTok/Instagram/YouTube yemek videosunun linkini/açıklamasını v
 
 **Vercel fonksiyonları**
 - `export const config = { maxDuration }` değerini plan sınırının altına çekme: süre aşılınca `waitUntil` iptal olur, `catch` hiç çalışmaz, job sonsuza dek `processing` kalır (17 Eylül'deki hatanın kök sebebi). Uzun işlerde `getDeadline()` ile kalan süreyi okuyup alt çağrılara zaman aşımı ver.
-- `claude-sonnet-5` adaptive thinking kullanır; düşünme token'ları `max_tokens`'tan düşer → sunucu çıkarmasında `max_tokens: 16000`, json_schema ve `stop_reason` kontrolü.
+- Tarif çıkarma `claude-haiku-5-5` (yayın adayında; main'de hâlâ `claude-sonnet-5`), adaptive thinking; düşünme token'ları `max_tokens`'tan düşer → sunucu çıkarmasında `max_tokens: 16000`, json_schema ve `stop_reason` kontrolü. Anthropic kredi/anahtar hatası `ai_unavailable` olarak ayrı raporlanır (log tag `ai-provider-unavailable`).
 - Hobby planda log aralığı en fazla "Last hour"; Request Logs için URL'ye `&datasource=legacy-logs`.
 
 **Veri ve sürümlü kovalar** (main'de, `049df70` → merge `52e04fd`) **[repo]**
@@ -105,13 +105,14 @@ Kullanıcı TikTok/Instagram/YouTube yemek videosunun linkini/açıklamasını v
 
 **Dallar (Grup çalışması)** **[repo]**
 - main `52e04fd` = Grup 1 (sürümlü veri) + Grup 2 (AI güvenlikleri). Grup 3 (`group-3-legacy-fcm`), Grup 4 (`group-4-family`, canlı aile yenileme `071fec2`) ve Grup 5 (`group-5-ci-release`: testler, CI, yayın araçları, dayanıklı misafir→hesap taşıma, kova boyut/hız sınırları; Fable denetim turları B1–B6, K1–K3 ve telefon öncesi hazırlık) main'de **değil**. Grup 5 dalı Grup 4'ün üstünde ve Grup 3'ü de içeriyor.
-- `preview.tarifkutusu.app` → `group-5-ci-release` (13 Kasım). Sıradaki: kullanıcının telefon testi (`GROUP5_NOTES.md` §9 listesi), bağımsız Fable denetimi, sonra `RELEASE.md` akışı. Main'e push/merge yapılmadı.
+- **Yayın adayı `rc/haiku-group5` (15 Kasım):** Grup 5 (+ sağlayıcı hata düzeltmesi `baa0b81`) + Haiku denemesi. `preview.tarifkutusu.app` → bu dal. Tarif çıkarma modeli **her ortamda Claude Haiku 5.5** (`app/shared/extractModel.js`, tek kaynak; çeviri ve kiler Sonnet 5'te kalır); `verify:deploy` `/version.json` → `extractModel`'i kontrol eder. Sıradaki: telefon testi (`GROUP5_NOTES.md` §11 + §9), bağımsız Fable denetimi, sonra `RELEASE.md` akışı. Main'e push/merge yapılmadı. Deneme kaydı `docs/history/08-haiku-denemesi.md`; deney ucu/betikleri yalnız `experiment/cheap-extraction` dalında.
+- Preview Redis: yeni **`tk-preview-test`** (Upstash Free, yalnız Preview env); eski test verisi yok. Production `cyclamen-island` ayrı.
 - Misafir→hesap taşıma: aynı hedefe 30 günde en çok **5** farklı misafirin taşıması başlar (`GUEST_MERGE_LIMIT`; fazlası silinmez, sıraya girer, sırada en çok 10). Bağlanan misafir donar; misafirken başlamış paylaşım job'unun tarifi hedefe yazılır (`guest-merge:moved:`); bağlı misafir kendini silemez (409). Ayrıntı ve geri dönüş: `GROUP5_NOTES.md` §7–§9, `RELEASE.md`.
 
 **iOS:** Tamamlanmadı. Proje + `GoogleService-Info.plist` repoda; Apple Developer, Xcode imzalama, Push capability, Google URL scheme, APNs↔FCM, Share Extension, TestFlight yapılacak. Ayrıntı: `docs/history/03-ios.md`.
 
 ## Açık işler — öncelik sırası
-0. Grup 5 dalını (Grup 3–4 dahil) Preview'da telefonla test et (`GROUP5_NOTES.md` §9), bağımsız Fable denetimi, sonra `RELEASE.md` akışıyla main'e al.
+0. Yayın adayı `rc/haiku-group5`'i (Grup 3–5 + Haiku) Preview'da telefonla test et (`GROUP5_NOTES.md` §11 + §9), bağımsız Fable denetimi, sonra `RELEASE.md` akışıyla main'e al.
 1. Telefonda Plus modalı: görünüm, tutamaçla sürükleyerek kapatma, Android geri tuşu, alt güvenli alan, test CTA ile Plus aç/kapat → kilitler açılıp kapanıyor mu.
 2. Telefonda TikTok → Paylaş → Tarif Kutusu: başarı ve (hatalı linkle) hata bildirimi görünüyor mu; job kaydındaki `notify` alanıyla karşılaştır.
 3. ⚠️ **Play App Signing SHA-1/SHA-256'sını Firebase Android app'ine ekle** (upload SHA'sıyla karıştırma; debug SHA `12:A0:B0…` ayrı), yeni `google-services.json`'ı `app/android/app/`'e koy, Play sürümünde Google Sign-In'i dene. Yapılmadı.

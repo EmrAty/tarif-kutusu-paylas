@@ -14,5 +14,6 @@
 | [05-mobil-ekranlar-ve-pisirme-modu.md](05-mobil-ekranlar-ve-pisirme-modu.md) | Mobil tam ekran geçişleri, AI kiler önerisini kaydetme, Pişirmeye Başla modu ve yerleşim düzeltmeleri, geri alınan ilk arka plan job denemesi |
 | [06-capacitor-gecisi.md](06-capacitor-gecisi.md) | TWA → Capacitor, native Google Sign-In, splash ekranı (v7–v12) |
 | [07-temel-mimari-twa-ikonlar-hesap-bildirim.md](07-temel-mimari-twa-ikonlar-hesap-bildirim.md) | İlk mimari ve klasör yapısı, TWA, ikon revizyonları, güncelleme bandı, Instagram, Firebase Auth, aile/Plus sistemi, "canı çekti" bildirimi (v13), eski yapılacaklar listesi |
+| [08-haiku-denemesi.md](08-haiku-denemesi.md) | 15 Kasım Haiku 5.5 telefon denemesi (`trial/haiku-extraction`): bildirim kök nedeni, malzeme listesi okunabilirliği (bölümler, "Yaklaşık" tahminler, dar ekran), açık Haiku hatası |
 
 Diğer notlar: `RELEASE.md` (yayın akışı), `GROUP5_NOTES.md` (Grup 5 ayrıntısı), `docs/porsiyon-hesabi.md` (porsiyon kuralları).

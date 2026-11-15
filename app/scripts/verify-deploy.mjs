@@ -7,7 +7,8 @@
 //
 // Ne yapar: yalnızca GET/OPTIONS benzeri, kimliksiz istekler atar. Hiçbir veri
 // yazmaz, AI/ücretli servis çağırmaz, giriş yapmaz.
-//  1. /version.json → 200 ve (verildiyse) commit onaylanan commit ile aynı
+//  1. /version.json → 200, (verildiyse) commit onaylanan commit ile aynı,
+//     extractModel = shared/extractModel.js (Preview'da test edilen model)
 //  2. Ana sayfa ve JS paketi açılıyor
 //  3. Yasal sayfalar (/privacy, /terms, /delete-account) 200
 //  4. API fonksiyonları ayakta: kimliksiz istek 401 (404/500 değil)
@@ -18,6 +19,7 @@
 // PREVIEW_BYPASS=... satırı olan dosya) ya da VERCEL_PROTECTION_BYPASS ortam
 // değişkeniyle verilir. Anahtar hiçbir çıktıya yazılmaz.
 import fs from "node:fs";
+import { EXTRACT_MODEL } from "../shared/extractModel.js";
 
 function parseArgs(argv) {
   const out = {};
@@ -96,6 +98,14 @@ await check("onaylanan commit yayında", async () => {
   expect(version?.commit, "version.json commit içermiyor (bu sürüm Grup 5 öncesi derlenmiş olabilir)");
   expect(version.commit.toLowerCase().startsWith(expectedCommit), `yayında ${version.commit.slice(0, 12)}, beklenen ${expectedCommit}`);
   return version.commit.slice(0, 12);
+});
+
+// Tarif çıkarma modeli: derleme /version.json'a shared/extractModel.js'in seçtiği modeli yazar.
+// Preview'da test edilen modelle yayındaki model aynı olmalı. Alanı olmayan eski derlemede (geri dönüş) atlanır.
+await check("tarif çıkarma modeli", async () => {
+  if (!version || !("extractModel" in version)) return "atlandı (bu derlemede extractModel alanı yok)";
+  expect(version.extractModel === EXTRACT_MODEL, `yayında ${version.extractModel}, beklenen ${EXTRACT_MODEL}`);
+  return version.extractModel;
 });
 
 let bundlePath = null;

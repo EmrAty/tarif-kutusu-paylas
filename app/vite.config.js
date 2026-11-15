@@ -20,7 +20,7 @@ const buildVersion = String(Date.now());
 function gitInfo() {
   const sha = process.env.VERCEL_GIT_COMMIT_SHA || safeGit("git rev-parse HEAD");
   const ref = process.env.VERCEL_GIT_COMMIT_REF || safeGit("git rev-parse --abbrev-ref HEAD");
-  // HAIKU DENEMESİ: sunucunun bu ortamda kullanacağı tarif çıkarma modeli (shared/extractModel.js ile aynı kural)
+  // Sunucunun kullanacağı tarif çıkarma modeli (shared/extractModel.js); verify:deploy bunu kontrol eder.
   return { commit: sha || null, ref: ref || null, env: process.env.VERCEL_ENV || "local", extractModel: extractionModel() };
 }
 function safeGit(command) {

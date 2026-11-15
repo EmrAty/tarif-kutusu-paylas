@@ -75,7 +75,7 @@ test("extract: normal tarif çıkarma çalışır; model/prompt/şema/token sunu
 
   const [call] = anthropicCalls();
   const sent = JSON.parse(call.init.body);
-  assert.equal(sent.model, "claude-sonnet-5");
+  assert.equal(sent.model, "claude-haiku-5-5");
   assert.equal(sent.max_tokens, 16000);
   assert.equal(sent.system, recipeSystemPrompt("tr"));
   assert.equal(sent.output_config.format.type, "json_schema");

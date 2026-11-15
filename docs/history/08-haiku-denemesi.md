@@ -1,7 +1,11 @@
 # Haiku 5.5 telefon denemesi (trial/haiku-extraction)
 
+> **Arşiv (15 Kasım 2026).** Bu dosya deneme dalındaki `TRIAL_HAIKU_NOTES.md`'nin taşınmış hâlidir; içerik o günkü
+> durumu anlatır. Sonuç: Haiku 5.5 yayın adayına alındı (`rc/haiku-group5`) ve **her ortamda** kullanılır — aşağıdaki
+> "yalnızca Preview'da Haiku" kuralı kaldırıldı. Güncel durum: `GROUP5_NOTES.md` §11.
+
 Bu dosya **yalnızca** Haiku denemesinin kaydıdır; Grup 5 yayın testlerinin kaydı `GROUP5_NOTES.md` §9'da kalır
-ve buraya karışmaz. Kalıcı model kararı bu denemeden sonra verilecek. Main'e merge edilmez.
+ve buraya karışmaz.
 
 ## Ne değişti (Grup 5 `712dfc8` üzerine)
 - `app/shared/extractModel.js`: tarif çıkarma modeli **yalnızca `VERCEL_ENV=preview`** iken `claude-haiku-5-5`,

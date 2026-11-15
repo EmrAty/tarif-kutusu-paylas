@@ -19,10 +19,9 @@ import {
 // belirleniyor; istemci bunların hiçbirini seçemez (Kasım 2026'ya kadar
 // /api/extract istemcinin gönderdiği system/messages/max_tokens'ı olduğu gibi
 // iletiyordu). Çıktı şemaya bağlı (her zaman geçerli JSON); max_tokens yüksek
-// çünkü claude-sonnet-5 önce düşünüyor ve düşünme token'ları da bu bütçeden
-// harcanıyor; zaman aşımı var.
-// HAIKU DENEMESİ: model shared/extractModel.js'te ortama göre seçilir (Preview: Haiku 5.5, diğer: Sonnet 5).
-// İstek gövdesi, prompt, şema, max_tokens ve hata yönetimi değişmedi.
+// çünkü model (adaptive düşünme) önce düşünüyor ve düşünme token'ları da bu
+// bütçeden harcanıyor; zaman aşımı var.
+// Model: shared/extractModel.js (her ortamda aynı; şu an Claude Haiku 5.5).
 const MAX_TOKENS = 16000;
 
 const RECIPE_SCHEMA = {
