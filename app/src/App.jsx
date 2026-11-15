@@ -42,6 +42,7 @@ import { localizeRecipe, displayIngredient, contentFingerprint, localizeAmount, 
 import { presentRecipe, presentIngredients, groupRuns, hasEstimatedAmounts } from "./ingredientPresentation.js";
 import { servingsUnitOf } from "../shared/portionEstimate.js";
 import { safeRecipeLink } from "../shared/safeLink.js";
+import { normalizeSuggestion, normalizeSuggestions } from "../shared/pantrySuggestions.js";
 import { saveRecipeToTargets, extractionSignature } from "./saveTargets.js";
 import { saveTicket as saveGuestMergeTicket, clearTicket as clearGuestMergeTicket, syncGuestMerge } from "./guestMergeClient.js";
 import { useLanguage, LANGUAGES, translate } from "./i18n.jsx";
@@ -1939,15 +1940,19 @@ export default function TarifKutusu() {
       setLimitModalOpen(true);
       throw new Error(t("errors.freeLimit", { limit: FREE_RECIPE_LIMIT }));
     }
-    const n = suggestion.nutrition || {};
+    // Savunma: sunucu zaten normalize ediyor, ama kayıt kalıcı — kişisel listeye
+    // yalnız metin dizisi instructions ve {name, amount} metin satırları girer.
+    const clean = normalizeSuggestion(suggestion);
+    if (!clean) throw new Error(t("pantry.saveError"));
+    const n = clean.nutrition || {};
     const recipe = {
       id: uid(),
       createdAt: Date.now(),
-      title: suggestion.title || t("common.untitledRecipe"),
+      title: clean.title,
       category: category || DEFAULT_PANTRY_CATEGORY,
       link: "",
-      ingredients: (suggestion.ingredients || []).map((i) => ({ name: i.name || "", amount: i.amount || "" })),
-      instructions: suggestion.instructions || [],
+      ingredients: clean.ingredients.map((i) => ({ name: i.name, amount: i.amount })),
+      instructions: clean.instructions,
       nutrition: {
         calories: n.calories,
         protein_g: n.protein_g,
@@ -6088,7 +6093,8 @@ function PantryFinder({ recipes, isPlus, families, isRecipeLocked, onSelectRecip
     setCategoryPromptIndex(null);
     try {
       const data = await suggestFromPantry(items);
-      setSuggestions(data.suggestions || []);
+      // Savunma: biçimsiz öneri render'ı çökertmesin (bkz. shared/pantrySuggestions.js).
+      setSuggestions(normalizeSuggestions(data));
     } catch (e) {
       setSuggestError(e.message || t("pantry.suggestError"));
     } finally {
