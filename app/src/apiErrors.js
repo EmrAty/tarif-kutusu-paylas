@@ -14,6 +14,7 @@ export const SERVER_ERROR_KEYS = {
   rate_limited: "errors.rateLimited",
   too_many_in_flight: "errors.tooManyInFlight",
   ai_capacity: "errors.aiCapacity",
+  ai_unavailable: "errors.aiUnavailable",
   client_update_required: "errors.clientUpdateRequired",
   extract_failed: "errors.extractFailed",
   input_too_long: "errors.inputTooLong",

@@ -125,6 +125,11 @@ export default async function handler(req, res) {
     const kind = e instanceof ExtractError ? e.kind : "unknown";
     console.log(JSON.stringify({ tag: "extract", ms: Date.now() - startedAt, failed: kind, providerStatus: e.providerStatus }));
     if (kind === "config") return bad(out.res, 500, "server_config", "Sunucu yapılandırması eksik.");
+    // Sağlayıcı hesabı kullanılamıyor (kredi bitti / anahtar geçersiz): içerikle ilgisi yok,
+    // kullanıcıya "açıklamayı kontrol et" denmez (bkz. isProviderUnavailable).
+    if (kind === "unavailable") {
+      return bad(out.res, 503, "ai_unavailable", "Tarif servisi şu anda kullanılamıyor. Sorun içerikte değil; lütfen daha sonra tekrar dene.");
+    }
     if (kind === "refused" || kind === "parse" || kind === "too_long") {
       return bad(out.res, 422, "extract_failed", "Bu içerikten tarif çıkarılamadı.");
     }

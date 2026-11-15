@@ -3,7 +3,7 @@ import { waitUntil, getDeadline } from "@vercel/functions";
 import { requireUser } from "./_lib/auth.js";
 import { redisDel, redisGet, redisGetJSON, redisSet, redisSetJSON, redisSetNX } from "./_lib/redis.js";
 import { getProfile, FREE_RECIPE_LIMIT, FREE_LIMIT_ERROR_CODE, FREE_LIMIT_MESSAGE } from "./_lib/profile.js";
-import { extractRecipeFromCaption } from "./_lib/extractRecipe.js";
+import { extractRecipeFromCaption, isServiceSideError } from "./_lib/extractRecipe.js";
 import { collectPushTargets, notifyUserDevices } from "./_lib/fcm.js";
 import { mutateBucket, parseListOrThrow, bucketAuxKeys } from "./_lib/versionedBucket.js";
 import { checkBucketSize } from "./_lib/bucketLimits.js";
@@ -48,6 +48,8 @@ const MAX_TRANSCRIPT_CHARS = 12000;
 const NOTIFY_MIN_DELAY_MS = 5000;
 const LIMIT_MESSAGE = FREE_LIMIT_MESSAGE;
 const INSUFFICIENT_MESSAGE = "Bu videodan yeterli tarif bilgisi çıkaramadık.";
+// Claude hesabı/kapasitesi kaynaklı hata: video ya da açıklamayla ilgisi yok.
+const SERVICE_UNAVAILABLE_MESSAGE = "Tarif servisi şu anda çalışmıyor; sorun videoda değil. Biraz sonra tekrar dene.";
 
 // Caption'ın tek başına tarif için yeterli olup olmadığı: hashtag/mention/link
 // atıldıktan sonraki uzunluk ve ölçü birimi sayısı. Yanlışlıkla "yeterli" demek
@@ -305,10 +307,14 @@ async function runRecipeJob({ uid, jobId, sourceUrl, caption, category, addedBy,
       return;
     }
     timings.total = Date.now() - startedAt;
-    logStep(jobId, "failed", timings.total, { error: e.message, transcriptMeta });
+    const serviceSide = isServiceSideError(e);
+    if (serviceSide) e.notifyBody = SERVICE_UNAVAILABLE_MESSAGE;
+    logStep(jobId, "failed", timings.total, { error: e.message, kind: e.kind, transcriptMeta });
     await patchJob(uid, jobId, {
       status: "failed",
       error: e.message || "Bilinmeyen hata",
+      // Makine-okunur neden: "ai_unavailable" = servis tarafı (kredi/anahtar/yoğunluk), içerikle ilgisiz.
+      ...(serviceSide ? { errorCode: "ai_unavailable" } : {}),
       timings,
       transcriptMeta,
     }).catch(() => {});

@@ -135,11 +135,18 @@ test("extract: görsel sınırları sunucuda da uygulanır", async () => {
 });
 
 test("extract: sağlayıcı hatası istemciye ayrıntı sızdırmadan anlaşılır kodla döner", async () => {
+  // 401 (anahtar geçersiz) = servis tarafı: 503 ai_unavailable (bkz. aiProviderUnavailable.test.mjs).
   await reset([[ANTHROPIC, () => json(401, { error: { message: "invalid x-api-key sk-ant-SECRET" } })]]);
   const r = await invoke(extract, { body: normalBody });
-  assert.equal(r.status, 502);
-  assert.equal(r.body.code, "extract_failed");
+  assert.equal(r.status, 503);
+  assert.equal(r.body.code, "ai_unavailable");
   assert.ok(!JSON.stringify(r.body).includes("x-api-key"));
+  assert.ok(!JSON.stringify(r.body).includes("SECRET"));
+  await reset([[ANTHROPIC, () => json(500, { error: { message: "internal sk-ant-SECRET" } })]]);
+  const generic = await invoke(extract, { body: normalBody });
+  assert.equal(generic.status, 502);
+  assert.equal(generic.body.code, "extract_failed");
+  assert.ok(!JSON.stringify(generic.body).includes("SECRET"));
   await reset([[ANTHROPIC, () => json(529, { error: { message: "overloaded" } })]]);
   assert.equal((await invoke(extract, { body: normalBody })).body.code, "ai_capacity");
 });

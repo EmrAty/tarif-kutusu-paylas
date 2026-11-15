@@ -87,9 +87,32 @@ const RECIPE_SCHEMA = {
 export class ExtractError extends Error {
   constructor(message, kind) {
     super(message);
-    this.kind = kind; // "config" | "timeout" | "network" | "provider" | "too_long" | "refused" | "parse"
+    // "config" | "timeout" | "network" | "provider" | "unavailable" | "too_long" | "refused" | "parse"
+    this.kind = kind;
     this.providerStatus = undefined;
   }
+}
+
+// Sağlayıcı HESABININ kendisi kullanılamıyor: kredi bitti (Anthropic bunu 400
+// invalid_request_error + "Your credit balance is too low…" olarak döndürüyor),
+// anahtar geçersiz (401) ya da yetkisiz (403). Bu durumda HİÇBİR tarif
+// çıkarılamaz; içerikle ilgisi yoktur. 14 Kasım 2026: kredi bitince paylaşım
+// job'u "Paylaştığın videodan tarif çıkarılamadı" bildirimi gönderdi, sorun
+// eksiksiz açıklamalı bir videodaymış gibi göründü. Ayrı tür, ayrı mesaj ve
+// loglarda aranabilir ayrı satır (tag "ai-provider-unavailable") bunun için.
+export function isProviderUnavailable(status, message) {
+  if (status === 401 || status === 403) return true;
+  return status === 400 && /credit balance|billing/i.test(String(message || ""));
+}
+
+// 429/529: sağlayıcı geçici olarak yoğun (yine içerikle ilgisi yok).
+export function isProviderBusy(status) {
+  return status === 429 || status === 529;
+}
+
+// İçerikten bağımsız, servis tarafı hata mı (kullanıcıya "videoda sorun var" denmemeli)?
+export function isServiceSideError(e) {
+  return e instanceof ExtractError && (e.kind === "unavailable" || e.kind === "config" || (e.kind === "provider" && isProviderBusy(e.providerStatus)));
 }
 
 // Paylaşım paneli job'u: yalnızca link + açıklama/transkript.
@@ -139,8 +162,14 @@ export async function extractRecipe({ link, caption = "", notes = "", images = [
   }
 
   if (!response.ok || !data) {
-    const err = new ExtractError(`Claude API hatası (${response.status}): ${data?.error?.message || "bilinmeyen"}`, "provider");
+    const providerMessage = data?.error?.message || "bilinmeyen";
+    const unavailable = !response.ok && isProviderUnavailable(response.status, providerMessage);
+    const err = new ExtractError(`Claude API hatası (${response.status}): ${providerMessage}`, unavailable ? "unavailable" : "provider");
     err.providerStatus = response.status;
+    if (unavailable) {
+      // Anahtar/kredi değeri yazılmaz; yalnızca durum ve sağlayıcının hata türü.
+      console.error(JSON.stringify({ tag: "ai-provider-unavailable", status: response.status, type: data?.error?.type || null }));
+    }
     throw err;
   }
   if (data.stop_reason === "max_tokens") throw new ExtractError("Tarif çok uzun olduğu için tamamlanamadı.", "too_long");
