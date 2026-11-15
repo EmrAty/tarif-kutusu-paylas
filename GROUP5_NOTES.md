@@ -174,3 +174,9 @@ Tarif TEST APK, `preview.tarifkutusu.app` (Grup 5 dalı). Gerçek Upstash/Fireba
 8. İki misafir hesabından art arda geçiş; mümkünse 6. misafirde sıraya alınma bandı ve tarih biçimi (TR/EN).
 9. Alışveriş listesinde hızlı işaretlemede 429 görülmemesi.
 10. RELEASE.md duman testi (giriş, liste, paylaşım, aile "Canım çekti", Plus test düğmesi).
+
+## 10. Telefon testi bulgusu: "tarif oluşturulamadı" = Anthropic kredisi bitmiş — 14 Kasım 2026
+- Örnek: `https://www.tiktok.com/@rainyycook/video/7575869460007947538` (açıklamada malzeme + yapılış eksiksiz); production ve Preview'da başarısız.
+- Kanıt (geçici anonim hesapla, aynı link ve açıklamayla, Preview + production): `/api/fetch-caption` 200, açıklama **2001 karakter, tam**; job kabul ediliyor, açıklama yeterli sayılıyor (fallback yok), Claude çağrısı **400 `invalid_request_error` "Your credit balance is too low…"** ile ~0,2 sn'de düşüyor. `/api/extract` aynı nedenle 502. Yani videoya özgü değil, **o an hiçbir tarif çıkarılamıyor**. Çözüm kullanıcıda: Anthropic Console → Plans & Billing'e kredi yükle (gerekirse auto-reload); redeploy gerekmez.
+- Kod düzeltmesi (bu dal): sağlayıcı hesabı kaynaklı hatalar (400 + "credit balance"/"billing", 401, 403) `ExtractError.kind = "unavailable"`; loga `{"tag":"ai-provider-unavailable","status":…}` (anahtar yazılmaz). `/api/extract` → 503 `ai_unavailable` (TR/EN `errors.aiUnavailable`). Paylaşım job'u bu durumda ve 429/529'da `errorCode: "ai_unavailable"` yazar, bildirim "Tarif servisi şu anda çalışmıyor; sorun videoda değil…" olur (eskiden "Paylaştığın videodan tarif çıkarılamadı"). Test: `app/test/aiProviderUnavailable.test.mjs` (gerçek açıklama + gerçek hata gövdesi); `aiAbuse.test.mjs`'te 401 beklentisi 502 → 503 `ai_unavailable`.
+- Denemeden kalan: Preview koruması yüzünden ilk denemede açılan anonim Firebase hesabı `5me9iVmuxcU8KOYMk6Ti8NgH2AK2` silinemedi (verisi yok). Diğer iki geçici hesap `DELETE /api/account` ile silindi.
