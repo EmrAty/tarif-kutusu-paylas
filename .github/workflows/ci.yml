@@ -4,8 +4,9 @@
 # fork'tan gelen PR'larda da güvenle çalışır ve hiçbir ücretli çağrı yapmaz.
 #
 # Production'a çıkış kuralı (bkz. RELEASE.md): main'e yalnızca bu iş YEŞİL olan
-# commit girer. GitHub'da main için "Require status checks: CI / check" kuralı
-# açıldığında bu zorunlu hâle gelir.
+# commit girer. GitHub ruleset'i (17 Kasım 2026'dan beri açık) bunu zorunlu
+# kılar: bu işin adı ("check") ruleset'te zorunlu kontrol olarak geçer —
+# iş adını değiştirirsen ruleset'i de güncelle, yoksa main'e push kilitlenir.
 name: CI
 
 on:

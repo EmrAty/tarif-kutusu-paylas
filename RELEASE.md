@@ -41,21 +41,25 @@ Kurallar:
 | Her push'ta lint + test + build (GitHub Actions) | **Otomatik** — iş akışı dosyası repoda (`.github/workflows/ci.yml`); main'de olduğu andan itibaren her dalda çalışır |
 | Vercel Preview derlemesi | **Otomatik** (Vercel Git entegrasyonu) |
 | Testler gizli anahtarsız, ağsız | **Zorunlu** — tanımsız dış istek testi düşürür; CI'da hiçbir anahtar yok |
-| CI kırmızıyken main'e girememe | **Henüz elle** — GitHub'da main kuralı (aşağıda öneri) açılınca zorunlu olur |
-| Fast-forward / test edilen SHA | Git fast-forward olmayan push'u reddeder; "Merge düğmesi kullanma" kuralı elle |
-| `release:check` kapısı | Elle çalıştırılır; geçmeden push etmemek elle disiplindir (kural açılınca CI kısmı zorunlu olur) |
+| CI kırmızıyken main'e girememe | **Zorunlu** (GitHub ruleset, 17 Kasım 2026) — `check` bu SHA'da yeşil değilse main'e push reddedilir |
+| main'e force-push / main'i silme | **Zorunlu** (aynı ruleset) |
+| Fast-forward / test edilen SHA | Fast-forward olmayan push ruleset ve git tarafından reddedilir; "Merge düğmesi kullanma" kuralı elle |
+| `release:check` kapısı | Elle çalıştırılır; CI kısmı ruleset ile zaten zorunlu, Preview'ın bu commit'i yayınlaması kontrolü elle disiplindir |
 | Telefon testi, bağımsız denetim | **Elle** |
 | Yayın sonrası kontrol (`verify:deploy`) | Elle başlatılır (production'a otomatik istek atan bir iş yok) |
 
-### Önerilen GitHub ayarı (uygulanmadı — production'a çıkış davranışını değiştirir)
+### GitHub main koruması (açık — 17 Kasım 2026)
 
-GitHub → repo → Settings → Rules → Rulesets → New branch ruleset:
-- Hedef: `main` (Default branch); Enforcement: Active
+GitHub → repo → Settings → Rules → Rulesets → **"main koruması (CI check, force-push/silme yok)"** (id `27491855`), Enforcement: **Active**:
+- Hedef: yalnızca `refs/heads/main`
 - ✔ Restrict deletions, ✔ Block force pushes
-- ✔ Require status checks to pass → `check` (GitHub Actions); "Require branches to be up to date" kapalı kalabilir (fast-forward zaten günceldir)
-- Pull request zorunluluğu **eklenmez** (yayın fast-forward push ile yapılıyor)
+- ✔ Require status checks to pass → `check` (yalnızca GitHub Actions kaynağı); "Require branches to be up to date" kapalı (fast-forward zaten günceldir)
+- Pull request zorunluluğu **yok** (yayın fast-forward push ile yapılıyor)
+- Bypass listesi **boş** — sahibi dahil kimse kuralı aşamaz
 
-Etkisi: CI'ı yeşil olmayan bir commit main'e push edilemez → Vercel production'a da çıkamaz. CI iş akışı main'de bulunmadan (Grup 3+4+5 main'e girmeden) açılırsa bekleyen kontrol hiç gelmez ve main'e push engellenir; bu yüzden **Grup 5 main'e alındıktan hemen sonra** açılmalı. Bypass listesine kendini eklersen acil durumda kural aşılabilir (önerilmez).
+Doğrulama (açıldığı gün, main'e dokunmadan; aynı ruleset geçici olarak bir deneme dalına da uygulanıp sonra geri alındı): CI'sız commit push'u → `Required status check "check" is expected.`; force-push → `Cannot force-push to this branch`; silme → `Cannot delete this branch`. Üçü de reddedildi.
+
+Etkisi: CI'ı yeşil olmayan bir commit main'e push edilemez → Vercel production'a da çıkamaz. Yani yayından önce dalın push'undaki `CI / check` **bitmiş ve yeşil** olmalı (hâlâ çalışıyorsa push reddedilir; bitince tekrar dene). Acil durumda kural yalnızca ruleset'i geçici olarak "Disabled" yapıp sonra yeniden "Active" yaparak aşılabilir — yaparsan hemen geri aç.
 
 ## Telefon testi (Tarif TEST APK, Preview)
 
