@@ -162,6 +162,8 @@ test("Bildirim 1: gönderen adı sunucudaki üye kaydından, başlık ailenin ka
   assert.match(body, /Ad-A/);
   assert.match(body, /Menemen/);
   assert.doesNotMatch(body, /Banka|Bedava/);
+  // Ön plandaki uygulama mesajı türünden tanıyıp uygulama içi bant gösterir.
+  assert.deepEqual(fcmSent[0].data, { type: "family_crave", recipeId: "r1", scope: "family", familyId: "F1" });
 });
 
 test("Bildirim 2: ailede olmayan tarif kimliğiyle serbest metin gönderilemez (404, FCM'e gidilmez)", async () => {

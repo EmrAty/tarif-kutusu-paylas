@@ -886,6 +886,10 @@ export default function TarifKutusu() {
   const [view, setView] = useState("list");
   const [activeId, setActiveId] = useState(null);
   const [pendingRecipeId, setPendingRecipeId] = useState(null);
+  // Uygulama ön plandayken gelen "canı çekti" bildirimi: Android bu durumda
+  // sistem bildirimi göstermez, bu yüzden uygulama içi bant gösterilir.
+  const [craveBanner, setCraveBanner] = useState(null); // { body, recipeId, familyId }
+  const craveBannerTimerRef = useRef(null);
   const [link, setLink] = useState("");
   const [caption, setCaption] = useState("");
   const [notes, setNotes] = useState("");
@@ -1549,6 +1553,14 @@ export default function TarifKutusu() {
     }).then(keep);
     PushNotifications.addListener("pushNotificationReceived", (notification) => {
       const data = notification?.data || {};
+      if (data.type === "family_crave" && data.recipeId) {
+        // Ön planda: sistem bildirimi yok → uygulama içi bant (8 sn).
+        if (data.familyId) refreshRecipeBucket(data.familyId);
+        setCraveBanner({ body: notification?.body || "", recipeId: data.recipeId, familyId: data.familyId || null });
+        if (craveBannerTimerRef.current) clearTimeout(craveBannerTimerRef.current);
+        craveBannerTimerRef.current = setTimeout(() => setCraveBanner(null), 8000);
+        return;
+      }
       if (data.type !== "recipe_ready") return;
       refreshRecipeBucket(data.scope === "family" && data.familyId ? data.familyId : PERSONAL);
     }).then(keep);
@@ -2530,6 +2542,51 @@ export default function TarifKutusu() {
               {t("welcome.continue")}
             </button>
           </div>
+        </div>
+      )}
+
+      {craveBanner && (
+        <div
+          role="status"
+          style={{
+            position: "fixed",
+            left: "50%",
+            top: "calc(env(safe-area-inset-top, 0px) + 12px)",
+            transform: "translateX(-50%)",
+            display: "flex",
+            alignItems: "center",
+            gap: "10px",
+            width: "max-content",
+            maxWidth: "calc(100vw - 32px)",
+            background: COLORS.forestDark,
+            color: "#F3EFE6",
+            padding: "10px 12px 10px 14px",
+            borderRadius: "12px",
+            boxShadow: "0 6px 20px rgba(0,0,0,0.25)",
+            zIndex: 60,
+            fontSize: "14px",
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              pendingRecipeScopeRef.current = craveBanner.familyId || PERSONAL;
+              setPendingRecipeId(craveBanner.recipeId);
+              setCraveBanner(null);
+            }}
+            style={{ display: "flex", alignItems: "center", gap: "8px", background: "none", border: "none", color: "inherit", font: "inherit", textAlign: "left", padding: 0, cursor: "pointer", minWidth: 0 }}
+          >
+            <Bell size={16} style={{ flexShrink: 0 }} />
+            <span style={{ overflowWrap: "anywhere" }}>{craveBanner.body || t("notify.craveFallback")}</span>
+          </button>
+          <button
+            type="button"
+            aria-label={t("common.close")}
+            onClick={() => setCraveBanner(null)}
+            style={{ background: "none", border: "none", color: "inherit", padding: "4px", cursor: "pointer", flexShrink: 0, display: "flex" }}
+          >
+            <X size={16} />
+          </button>
         </div>
       )}
 

@@ -82,12 +82,22 @@ export default async function handler(req, res) {
       const result = await sendToTargets(uid, targets, {
         title: "Tarif Kutusu",
         body,
-        data: { recipeId: String(recipeId) },
+        // type/familyId: uygulama ÖN PLANDAYKEN Android sistem bildirimi
+        // göstermez; istemci mesajı `type` ile tanıyıp uygulama içi bant
+        // gösterir (17 Kasım: alıcının uygulaması açıkken bildirim görünmedi).
+        data: { type: "family_crave", recipeId: String(recipeId), scope: "family", familyId },
       });
       attempted += result.attempted;
       sent += result.sent;
       if (result.error) lastError = result.error;
     })
+  );
+
+  // Teşhis için tek satır (uid/token/ad/başlık YOK): kaç alıcı Plus, kaç
+  // Android kaydına gidildi, FCM kaçını kabul etti. Bu yol daha önce hiç log
+  // yazmıyordu; "ulaşmadı" durumunda sunucu tarafı ayırt edilemiyordu.
+  console.log(
+    JSON.stringify({ tag: "notify", members: others.length, plusRecipients: recipientUids.length, attempted, sent, error: sent === 0 ? lastError : null })
   );
 
   res.status(200).json({
