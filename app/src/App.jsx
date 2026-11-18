@@ -45,6 +45,7 @@ import { safeRecipeLink } from "../shared/safeLink.js";
 import { amountFlagsAfterEdit } from "../shared/ingredientText.js";
 import { normalizeSuggestion, normalizeSuggestions } from "../shared/pantrySuggestions.js";
 import { saveRecipeToTargets, extractionSignature } from "./saveTargets.js";
+import { transferRecipe } from "./recipeTransfer.js";
 import { saveTicket as saveGuestMergeTicket, clearTicket as clearGuestMergeTicket, syncGuestMerge } from "./guestMergeClient.js";
 import { useLanguage, LANGUAGES, translate } from "./i18n.jsx";
 
@@ -1550,6 +1551,7 @@ export default function TarifKutusu() {
     CapacitorApp.addListener("resume", () => {
       refreshRecipeBucket(PERSONAL);
       familiesRef.current.forEach((f) => refreshRecipeBucket(f.id));
+      jobAttentionLoaderRef.current?.();
     }).then(keep);
     PushNotifications.addListener("pushNotificationReceived", (notification) => {
       const data = notification?.data || {};
@@ -1561,8 +1563,19 @@ export default function TarifKutusu() {
         craveBannerTimerRef.current = setTimeout(() => setCraveBanner(null), 8000);
         return;
       }
+      if (data.type === "recipe_failed" && data.saveFailed) {
+        jobAttentionLoaderRef.current?.();
+        return;
+      }
       if (data.type !== "recipe_ready") return;
       refreshRecipeBucket(data.scope === "family" && data.familyId ? data.familyId : PERSONAL);
+      // Birden fazla yere kaydedilen tarif: diğer aile listeleri de tazelenir;
+      // kısmi kayıt olduysa "Tekrar dene" bandı için uyarılar yeniden okunur.
+      String(data.familyIds || "")
+        .split(",")
+        .filter((id) => id && id !== data.familyId)
+        .forEach((id) => refreshRecipeBucket(id));
+      jobAttentionLoaderRef.current?.();
     }).then(keep);
     return () => {
       cancelled = true;
@@ -1732,7 +1745,7 @@ export default function TarifKutusu() {
   // Her hedef ayrı denenir (bkz. saveTargets.js). Hiçbir yere yazılamadıysa ilk
   // hata fırlatılır (form açık kalır); bazı yerlere yazıldıysa kalanlar için
   // "Tekrar dene" bandı açılır ve true döner (çağıran tarif ekranına geçer).
-  const [partialSave, setPartialSave] = useState(null); // { recipe, failed: [scopeKey], limit }
+  const [partialSave, setPartialSave] = useState(null); // { recipe, saved: [scopeKey], failed: [scopeKey], limit }
   const saveNewRecipe = useCallback(
     async (recipe, targets) => {
       const { saved, failed } = await saveRecipeToTargets(recipe, targets, mutateRecipes, PERSONAL);
@@ -1743,14 +1756,16 @@ export default function TarifKutusu() {
       if (!saved.length) throw failed[0].error;
       const limit = failed.some((f) => f.error?.code === FREE_LIMIT_ERROR_CODE);
       if (limit) setLimitModalOpen(true);
-      setPartialSave({ recipe, failed: failed.map((f) => f.scopeKey), limit });
+      setPartialSave({ recipe, saved, failed: failed.map((f) => f.scopeKey), limit });
     },
     [mutateRecipes]
   );
 
+  // Aynı tarif nesnesi (aynı id, kullanıcının verdiği ad) yalnızca başarısız
+  // yerlere yeniden yazılır: AI'a gidilmez, başarılı yerde kopya oluşmaz.
   const retryPartialSave = async () => {
     if (!partialSave) return;
-    const { recipe, failed } = partialSave;
+    const { recipe, failed, saved } = partialSave;
     setPartialSave({ ...partialSave, retrying: true });
     const result = await saveRecipeToTargets(recipe, failed, mutateRecipes, PERSONAL);
     if (!result.failed.length) {
@@ -1759,7 +1774,61 @@ export default function TarifKutusu() {
     }
     const limit = result.failed.some((f) => f.error?.code === FREE_LIMIT_ERROR_CODE);
     if (limit) setLimitModalOpen(true);
-    setPartialSave({ recipe, failed: result.failed.map((f) => f.scopeKey), limit });
+    setPartialSave({ recipe, saved: [...saved, ...result.saved], failed: result.failed.map((f) => f.scopeKey), limit });
+  };
+
+  // Paylaşım panelinden başlayan ve bazı (ya da hiçbir) yere yazılamayan job'lar
+  // (sunucu tarifi saklar). "Tekrar dene" AI'sız aynı tarifi yazar.
+  const [jobAttention, setJobAttention] = useState([]); // [{ id, recipeTitle, targets: [{scope, familyId, status, code}] }]
+  const loadJobAttention = useCallback(async () => {
+    if (!auth.currentUser) return;
+    try {
+      const data = await authedFetch("/api/recipe-jobs?attention=1");
+      setJobAttention(Array.isArray(data?.jobs) ? data.jobs : []);
+    } catch (e) {
+      // Uyarı listesi yalnızca kolaylık; alınamazsa bant gösterilmez.
+    }
+  }, []);
+  // Native dinleyiciler (resume / bildirim) bu fonksiyondan önce tanımlı; ref ile çağırır.
+  const jobAttentionLoaderRef = useRef(null);
+  jobAttentionLoaderRef.current = loadJobAttention;
+  const jobTargetKey = (t) => (t.scope === "family" ? t.familyId : PERSONAL);
+  const retryJobAttention = async (job) => {
+    setJobAttention((prev) => prev.map((j) => (j.id === job.id ? { ...j, retrying: true } : j)));
+    try {
+      const data = await authedFetch("/api/recipe-jobs", { method: "POST", body: { action: "retry", jobId: job.id } });
+      const next = data?.job;
+      (next?.targets || []).filter((t) => t.status === "saved").forEach((t) => refreshRecipeBucket(jobTargetKey(t)));
+      const stillFailed = (next?.targets || []).filter((t) => t.status !== "saved");
+      if (stillFailed.some((t) => t.code === FREE_LIMIT_ERROR_CODE)) setLimitModalOpen(true);
+      setJobAttention((prev) =>
+        stillFailed.length ? prev.map((j) => (j.id === job.id ? { ...next, retrying: false } : j)) : prev.filter((j) => j.id !== job.id)
+      );
+    } catch (e) {
+      setJobAttention((prev) => prev.map((j) => (j.id === job.id ? { ...j, retrying: false } : j)));
+      showSaveError(e);
+    }
+  };
+  const dismissJobAttention = (job) => {
+    setJobAttention((prev) => prev.filter((j) => j.id !== job.id));
+    authedFetch("/api/recipe-jobs", { method: "POST", body: { action: "dismiss", jobId: job.id } }).catch(() => {});
+  };
+  useEffect(() => {
+    if (!authUid) {
+      setJobAttention([]);
+      return;
+    }
+    loadJobAttention();
+  }, [authUid, loadJobAttention]);
+
+  // Kişisel tarifi aileye/ailelere taşı ya da kopyala (bkz. recipeTransfer.js).
+  // Kayıtlı nesne (görünüm/çeviri değil) kullanılır; aile yetkisi sunucuda.
+  const placeName = (scopeKey) => (scopeKey === PERSONAL ? t("saveTarget.personal") : familyNameById[scopeKey] || t("common.family"));
+
+  const handleTransfer = async (id, familyIds, mode) => {
+    const raw = (recipeBuckets[PERSONAL] || []).find((r) => r.id === id);
+    if (!raw) throw new Error(t("transfer.notPersonal"));
+    return transferRecipe({ recipe: raw, familyIds, mode, mutate: mutateRecipes, personalKey: PERSONAL });
   };
 
   // Kayıt hatası: Free sınırıysa uyarı penceresi (true döner), değilse genel
@@ -1793,6 +1862,46 @@ export default function TarifKutusu() {
   );
 
   const lastExtractionRef = useRef(null);
+  // AI'ın çıkardığı, henüz kaydedilmemiş tarif: kullanıcı adını değiştirip
+  // kayıt yerlerini seçer. Ad değişikliği AI'a yeniden gitmez.
+  const [extractReview, setExtractReview] = useState(null); // { recipe, title } | null
+  useEffect(() => {
+    // Ekrandan çıkınca inceleme kapanır; aynı girdilerle tekrar çıkarma yine AI'a gitmez (lastExtractionRef).
+    if (view !== "add") setExtractReview(null);
+  }, [view]);
+
+  const handleConfirmExtract = async () => {
+    if (!extractReview) return;
+    setError("");
+    if (saveTargets.includes(PERSONAL) && !isPlus && (recipeBuckets[PERSONAL] || []).length >= FREE_RECIPE_LIMIT) {
+      setLimitModalOpen(true);
+      return;
+    }
+    const title = extractReview.title.replace(/\s+/g, " ").trim() || extractReview.recipe.title;
+    const recipe = { ...extractReview.recipe, title };
+    setBusy(true);
+    try {
+      try {
+        await saveNewRecipe(recipe, saveTargets);
+      } catch (e) {
+        if (handleSaveFailure(e)) return;
+      }
+      lastExtractionRef.current = null;
+      setExtractReview(null);
+      setLink("");
+      setCaption("");
+      setNotes("");
+      setImages([]);
+      setCategory("");
+      setActiveId(recipe.id);
+      setView("detail");
+    } catch (e) {
+      setError(e.message || t("common.genericError"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleExtract = async () => {
     setError("");
     if (!caption.trim() && !notes.trim() && images.length === 0) {
@@ -1826,19 +1935,8 @@ export default function TarifKutusu() {
         };
         lastExtractionRef.current = { signature, recipe };
       }
-      try {
-        await saveNewRecipe(recipe, saveTargets);
-      } catch (e) {
-        if (handleSaveFailure(e)) return;
-      }
-      lastExtractionRef.current = null;
-      setLink("");
-      setCaption("");
-      setNotes("");
-      setImages([]);
-      setCategory("");
-      setActiveId(recipe.id);
-      setView("detail");
+      // Kaydetmeden önce: ad ve kayıt yerleri (bkz. ExtractReview).
+      setExtractReview({ recipe, title: recipe.title || "" });
     } catch (e) {
       setError(e.message || t("common.genericError"));
     } finally {
@@ -2297,6 +2395,13 @@ export default function TarifKutusu() {
                 families={families}
                 onSubmit={handleExtract}
                 onCancel={() => setView("list")}
+                review={extractReview}
+                onReviewTitle={(title) => setExtractReview((prev) => (prev ? { ...prev, title } : prev))}
+                onConfirmReview={handleConfirmExtract}
+                onBackFromReview={() => {
+                  setError("");
+                  setExtractReview(null);
+                }}
               />
             </div>
           )}
@@ -2348,6 +2453,12 @@ export default function TarifKutusu() {
                 onAddToShopping={() => addRecipeToShoppingList(active)}
                 onSendNotification={() => handleSendNotification(active)}
                 onStartCooking={() => setView("cook")}
+                transferFamilies={
+                  isPlus && active._scopes.includes(PERSONAL) && !isRecipeLocked(active)
+                    ? families.filter((f) => !active._scopes.includes(f.id))
+                    : []
+                }
+                onTransfer={(familyIds, mode) => handleTransfer(active.id, familyIds, mode)}
               />
             </div>
           )}
@@ -2616,52 +2727,26 @@ export default function TarifKutusu() {
       )}
 
       {partialSave && !undoState && (
-        <div
-          role="alert"
-          style={{
-            position: "fixed",
-            left: "50%",
-            bottom: "20px",
-            transform: "translateX(-50%)",
-            display: "flex",
-            alignItems: "center",
-            flexWrap: "wrap",
-            gap: "10px",
-            maxWidth: "calc(100vw - 32px)",
-            background: COLORS.forestDark,
-            color: "#F3EFE6",
-            padding: "12px 16px",
-            borderRadius: "10px",
-            boxShadow: "0 6px 20px rgba(0,0,0,0.25)",
-            zIndex: 51,
-            fontSize: "14px",
-          }}
-        >
-          <AlertCircle size={16} style={{ flexShrink: 0 }} />
-          <span>
-            {t("save.partialFailed", {
-              places: partialSave.failed.map((k) => (k === PERSONAL ? t("saveTarget.personal") : familyNameById[k] || t("common.family"))).join(", "),
-            })}
-          </span>
-          {!partialSave.limit && (
-            <button
-              type="button"
-              onClick={retryPartialSave}
-              disabled={partialSave.retrying}
-              style={{ background: "transparent", border: `1px solid ${COLORS.mustard}`, color: COLORS.mustard, borderRadius: "8px", padding: "4px 10px", fontWeight: 700, cursor: "pointer" }}
-            >
-              {t("common.retry")}
-            </button>
-          )}
-          <button
-            type="button"
-            aria-label={t("common.close")}
-            onClick={() => setPartialSave(null)}
-            style={{ background: "transparent", border: "none", color: "#F3EFE6", cursor: "pointer", padding: "4px" }}
-          >
-            <X size={16} />
-          </button>
-        </div>
+        <SaveResultBanner
+          title={partialSave.recipe?.title}
+          saved={partialSave.saved.map(placeName)}
+          failed={partialSave.failed.map(placeName)}
+          retrying={partialSave.retrying}
+          onRetry={partialSave.limit ? null : retryPartialSave}
+          onClose={() => setPartialSave(null)}
+        />
+      )}
+
+      {!partialSave && !undoState && jobAttention.length > 0 && (
+        <SaveResultBanner
+          title={jobAttention[0].recipeTitle}
+          fromShare
+          saved={jobAttention[0].targets.filter((x) => x.status === "saved").map((x) => placeName(jobTargetKey(x)))}
+          failed={jobAttention[0].targets.filter((x) => x.status !== "saved").map((x) => placeName(jobTargetKey(x)))}
+          retrying={jobAttention[0].retrying}
+          onRetry={() => retryJobAttention(jobAttention[0])}
+          onClose={() => dismissJobAttention(jobAttention[0])}
+        />
       )}
 
       {undoState && (
@@ -3871,6 +3956,170 @@ function EmptyState({ onAdd }) {
   );
 }
 
+// Birden fazla yere kayıtta sonuç: hangi yere yazıldı, hangisine yazılamadı.
+// "Tekrar dene" aynı tarifi (aynı id, aynı ad) yalnızca başarısız yerlere yazar.
+function SaveResultBanner({ title, saved, failed, retrying, onRetry, onClose, fromShare }) {
+  const { t } = useLanguage();
+  return (
+    <div
+      role="alert"
+      style={{
+        position: "fixed",
+        left: "50%",
+        bottom: "calc(20px + env(safe-area-inset-bottom, 0px))",
+        transform: "translateX(-50%)",
+        width: "min(440px, calc(100vw - 32px))",
+        boxSizing: "border-box",
+        background: COLORS.forestDark,
+        color: "#F3EFE6",
+        padding: "12px 14px",
+        borderRadius: "12px",
+        boxShadow: "0 6px 20px rgba(0,0,0,0.25)",
+        zIndex: 51,
+        fontSize: "14px",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "flex-start", gap: "8px" }}>
+        <AlertCircle size={16} style={{ flexShrink: 0, marginTop: "2px" }} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 700, marginBottom: "4px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {fromShare ? t("save.fromShare", { title: title || t("common.untitledRecipe") }) : title || t("common.untitledRecipe")}
+          </div>
+          {saved.length > 0 && (
+            <div style={{ display: "flex", gap: "6px", alignItems: "flex-start" }}>
+              <Check size={14} color={COLORS.mustard} style={{ flexShrink: 0, marginTop: "3px" }} />
+              <span>{t("save.savedTo", { places: saved.join(", ") })}</span>
+            </div>
+          )}
+          <div style={{ display: "flex", gap: "6px", alignItems: "flex-start" }}>
+            <X size={14} color="#F2B8A8" style={{ flexShrink: 0, marginTop: "3px" }} />
+            <span>{t("save.failedTo", { places: failed.join(", ") })}</span>
+          </div>
+        </div>
+        <button
+          type="button"
+          aria-label={t("common.close")}
+          onClick={onClose}
+          style={{ background: "transparent", border: "none", color: "#F3EFE6", cursor: "pointer", padding: "4px", flexShrink: 0 }}
+        >
+          <X size={18} />
+        </button>
+      </div>
+      {onRetry && (
+        <button
+          type="button"
+          onClick={onRetry}
+          disabled={retrying}
+          style={{
+            marginTop: "10px",
+            width: "100%",
+            minHeight: "40px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: "6px",
+            background: "transparent",
+            border: `1px solid ${COLORS.mustard}`,
+            color: COLORS.mustard,
+            borderRadius: "8px",
+            fontWeight: 700,
+            cursor: retrying ? "default" : "pointer",
+            opacity: retrying ? 0.6 : 1,
+          }}
+        >
+          {retrying ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
+          {t("save.retryFailed")}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// AI'ın çıkardığı tarif kaydedilmeden önce: ad değiştirilebilir, kayıt yerleri
+// seçilir. Ad değişikliği AI'a yeniden gitmez.
+function ExtractReview({ review, onTitle, saveTargets, setSaveTargets, isPlus, families, busy, error, onConfirm, onBack }) {
+  const { t } = useLanguage();
+  const { recipe } = review;
+  const ingredientCount = Array.isArray(recipe.ingredients) ? recipe.ingredients.length : 0;
+  const stepCount = Array.isArray(recipe.instructions) ? recipe.instructions.length : 0;
+  return (
+    <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "20px", boxShadow: CARD_SHADOW }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "8px", color: COLORS.forest, marginBottom: "4px" }}>
+        <Check size={18} />
+        <h2 style={{ fontFamily: SERIF, fontSize: "22px", margin: 0 }}>{t("review.heading")}</h2>
+      </div>
+      <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: "0 0 16px" }}>
+        {t("review.summary", { ingredients: ingredientCount, steps: stepCount })}
+      </p>
+
+      <label
+        htmlFor="extract-review-title"
+        style={{ display: "block", fontSize: "11px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", color: COLORS.inkSoft, marginBottom: "6px" }}
+      >
+        {t("review.titleLabel")}
+      </label>
+      <input
+        id="extract-review-title"
+        value={review.title}
+        onChange={(e) => onTitle(e.target.value)}
+        maxLength={120}
+        placeholder={recipe.title || ""}
+        style={{
+          width: "100%",
+          boxSizing: "border-box",
+          borderRadius: "8px",
+          border: `1px solid ${COLORS.line}`,
+          background: COLORS.paper,
+          color: COLORS.ink,
+          padding: "12px",
+          fontSize: "16px",
+          fontFamily: SERIF,
+          outline: "none",
+          marginBottom: "4px",
+        }}
+      />
+      <div style={{ fontSize: "12px", color: COLORS.inkSoft, marginBottom: "16px" }}>{t("review.titleHint")}</div>
+
+      <SaveTargetPicker saveTargets={saveTargets} setSaveTargets={setSaveTargets} isPlus={isPlus} families={families} />
+
+      {error && <InlineError message={error} />}
+
+      <button
+        onClick={onConfirm}
+        disabled={busy}
+        style={{
+          marginTop: "8px",
+          width: "100%",
+          minHeight: "48px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: "8px",
+          borderRadius: "10px",
+          fontSize: "15px",
+          fontWeight: 700,
+          background: COLORS.mustard,
+          color: COLORS.forestDark,
+          border: "none",
+          cursor: busy ? "default" : "pointer",
+          opacity: busy ? 0.6 : 1,
+        }}
+      >
+        {busy ? <Loader2 size={16} className="spin" /> : <Check size={16} />}
+        {busy ? t("review.saving") : t("review.save")}
+      </button>
+      <button
+        onClick={onBack}
+        disabled={busy}
+        style={{ marginTop: "6px", width: "100%", padding: "10px", background: "transparent", border: "none", color: COLORS.inkSoft, fontSize: "13px", cursor: "pointer" }}
+      >
+        {t("review.back")}
+      </button>
+      <style>{`.spin { animation: spin 1s linear infinite; } @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
+
 function SaveTargetPicker({ saveTargets, setSaveTargets, isPlus, families }) {
   const { t } = useLanguage();
   const options = [
@@ -3935,7 +4184,7 @@ function SaveTargetPicker({ saveTargets, setSaveTargets, isPlus, families }) {
   );
 }
 
-function AddForm({ link, caption, notes, images, category, busy, error, setLink, setCaption, setNotes, setImages, setCategory, saveTargets, setSaveTargets, isPlus, families, onSubmit, onCancel }) {
+function AddForm({ link, caption, notes, images, category, busy, error, setLink, setCaption, setNotes, setImages, setCategory, saveTargets, setSaveTargets, isPlus, families, onSubmit, onCancel, review, onReviewTitle, onConfirmReview, onBackFromReview }) {
   const { t, categoryLabel } = useLanguage();
   const [fetchingCaption, setFetchingCaption] = useState(false);
   const [captionFetchError, setCaptionFetchError] = useState("");
@@ -4023,6 +4272,23 @@ function AddForm({ link, caption, notes, images, category, busy, error, setLink,
     setImageError("");
     setImages((prev) => prev.filter((img) => img.id !== id));
   };
+
+  if (review) {
+    return (
+      <ExtractReview
+        review={review}
+        onTitle={onReviewTitle}
+        saveTargets={saveTargets}
+        setSaveTargets={setSaveTargets}
+        isPlus={isPlus}
+        families={families}
+        busy={busy}
+        error={error}
+        onConfirm={onConfirmReview}
+        onBack={onBackFromReview}
+      />
+    );
+  }
 
   return (
     <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>
@@ -4420,7 +4686,193 @@ function IngredientList({ ingredients, language, recipe }) {
   );
 }
 
-function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavorite, onChangeCategory, onEdit, onAddToShopping, onSendNotification, onStartCooking, onRetryTranslation }) {
+// Kişisel tarifi aileye taşı (kişisel kopya kalkar) ya da kopyala (iki yerde
+// kalır). Taşımada önce aileye yazılır; seçilen her aileye yazılamadıysa kişisel
+// tarif silinmez. Tekrar denemek kopya üretmez (aynı id). Sonuç mesajı, taşıma
+// sonrası seçenekler kaybolsa da görünür kalır.
+function RecipeTransfer({ families, familyNameById, onTransfer }) {
+  const { t } = useLanguage();
+  const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState([]);
+  const [busy, setBusy] = useState(null); // "move" | "copy" | null
+  const [result, setResult] = useState(null); // { tone: "ok" | "warn" | "error", text }
+  const available = families || [];
+  const availableIds = available.map((f) => f.id).join(",");
+
+  useEffect(() => {
+    // Tek aile varsa doğrudan seçili; liste değişince geçersiz seçim atılır.
+    setSelected((prev) => {
+      const ids = availableIds ? availableIds.split(",") : [];
+      const kept = prev.filter((id) => ids.includes(id));
+      return kept.length ? kept : ids.length === 1 ? ids : [];
+    });
+  }, [availableIds]);
+
+  if (!available.length && !result) return null;
+  const name = (id) => familyNameById[id] || t("common.family");
+
+  const run = async (mode) => {
+    if (!selected.length || busy) return;
+    setBusy(mode);
+    setResult(null);
+    try {
+      const out = await onTransfer(selected, mode);
+      const savedNames = out.saved.map(name).join(", ");
+      const failedNames = out.failed.map((f) => name(f.scopeKey)).join(", ");
+      if (out.failed.length && !out.saved.length) {
+        setResult({ tone: "error", text: t("transfer.failedAll", { places: failedNames }) });
+      } else if (out.failed.length) {
+        setResult({
+          tone: "warn",
+          text: t(mode === "move" ? "transfer.partialMove" : "transfer.partialCopy", { saved: savedNames, failed: failedNames }),
+        });
+      } else if (mode === "move" && !out.removedFromPersonal) {
+        setResult({ tone: "warn", text: t("transfer.movedButKept", { places: savedNames }) });
+      } else {
+        setResult({ tone: "ok", text: t(mode === "move" ? "transfer.moved" : "transfer.copied", { places: savedNames }) });
+        setOpen(false);
+      }
+    } catch (e) {
+      setResult({ tone: "error", text: e.message || t("common.genericError") });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const resultBox = result && (
+    <div
+      role="status"
+      style={{
+        marginTop: "10px",
+        padding: "10px 12px",
+        borderRadius: "8px",
+        fontSize: "13px",
+        background: result.tone === "ok" ? "#E4EDE3" : result.tone === "warn" ? "#F6EBCF" : "#F5E4E0",
+        color: result.tone === "error" ? COLORS.danger : COLORS.ink,
+      }}
+    >
+      {result.text}
+    </div>
+  );
+
+  if (!available.length) return resultBox;
+
+  if (!open) {
+    return (
+      <>
+        <button
+          onClick={() => {
+            setOpen(true);
+            setResult(null);
+          }}
+          style={{
+            marginTop: "8px",
+            width: "100%",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: "8px",
+            padding: "10px 16px",
+            borderRadius: "8px",
+            fontSize: "13px",
+            fontWeight: 600,
+            background: "transparent",
+            color: COLORS.forest,
+            border: `1px solid ${COLORS.line}`,
+            cursor: "pointer",
+          }}
+        >
+          <Users size={14} />
+          {t("transfer.open")}
+        </button>
+        {resultBox}
+      </>
+    );
+  }
+
+  const toggle = (id) => setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  return (
+    <div style={{ marginTop: "8px", padding: "14px", borderRadius: "10px", border: `1px solid ${COLORS.line}`, background: COLORS.paper }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
+        <span style={{ fontSize: "13px", fontWeight: 700, color: COLORS.forest }}>{t("transfer.heading")}</span>
+        <button
+          type="button"
+          aria-label={t("common.close")}
+          onClick={() => setOpen(false)}
+          disabled={!!busy}
+          style={{ background: "transparent", border: "none", color: COLORS.inkSoft, cursor: "pointer", padding: "4px" }}
+        >
+          <X size={16} />
+        </button>
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "10px" }}>
+        {available.map((f) => {
+          const on = selected.includes(f.id);
+          return (
+            <button
+              key={f.id}
+              type="button"
+              aria-pressed={on}
+              onClick={() => toggle(f.id)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                padding: "8px 14px",
+                borderRadius: "9999px",
+                fontSize: "13px",
+                fontWeight: 600,
+                border: `1px solid ${on ? COLORS.forest : COLORS.line}`,
+                background: on ? COLORS.forest : "transparent",
+                color: on ? "#F3EFE6" : COLORS.inkSoft,
+                cursor: "pointer",
+              }}
+            >
+              {on && <Check size={13} />}
+              {f.name}
+            </button>
+          );
+        })}
+      </div>
+      <p style={{ fontSize: "12px", color: COLORS.inkSoft, margin: "0 0 12px", lineHeight: 1.45 }}>{t("transfer.explain")}</p>
+      <div style={{ display: "flex", gap: "8px" }}>
+        {[
+          { mode: "move", label: t("transfer.move"), primary: true },
+          { mode: "copy", label: t("transfer.copy"), primary: false },
+        ].map(({ mode, label, primary }) => (
+          <button
+            key={mode}
+            type="button"
+            onClick={() => run(mode)}
+            disabled={!selected.length || !!busy}
+            style={{
+              flex: 1,
+              minHeight: "44px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "6px",
+              borderRadius: "8px",
+              fontSize: "14px",
+              fontWeight: 700,
+              background: primary ? COLORS.forest : "transparent",
+              color: primary ? "#F3EFE6" : COLORS.forest,
+              border: `1px solid ${COLORS.forest}`,
+              cursor: !selected.length || busy ? "default" : "pointer",
+              opacity: !selected.length || (busy && busy !== mode) ? 0.5 : 1,
+            }}
+          >
+            {busy === mode && <Loader2 size={14} className="spin" />}
+            {label}
+          </button>
+        ))}
+      </div>
+      {resultBox}
+    </div>
+  );
+}
+
+function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavorite, onChangeCategory, onEdit, onAddToShopping, onSendNotification, onStartCooking, onRetryTranslation, transferFamilies = [], onTransfer }) {
   const { t, language, categoryLabel, difficultyLabel } = useLanguage();
   const { title, servings, category, prep_time_minutes, difficulty, ingredients = [], instructions = [], nutrition = {}, assumptions, servings_note, isFavorite, addedBy } = recipe;
   // Yalnızca güvenli http(s) link href olur (eski/başka üyenin kaydındaki
@@ -4701,6 +5153,8 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
           <ShoppingCart size={14} />
           {t("detail.addToShopping")}
         </button>
+
+        <RecipeTransfer key={recipe.id} families={transferFamilies} familyNameById={familyNameById} onTransfer={onTransfer} />
       </div>
 
       <div className="md-detail-row" style={{ display: "flex", flexDirection: "column", gap: "20px", alignItems: "flex-start" }}>

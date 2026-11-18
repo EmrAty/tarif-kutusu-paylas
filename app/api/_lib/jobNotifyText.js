@@ -7,6 +7,8 @@ export const NOTIFY_TEXT = {
   tr: {
     readyTitle: "Tarifin hazır 🍝",
     readyBody: (title) => (title ? `${title} tarifin hazır.` : "Tarifin hazır."),
+    partialSuffix: "Bazı yerlere kaydedilemedi; uygulamada tekrar deneyebilirsin.",
+    saveFailed: "Tarif hazırlandı ama kaydedilemedi. Uygulamada tekrar deneyebilirsin.",
     failedTitle: "Tarif oluşturulamadı",
     failedDefault: "Paylaştığın videodan tarif çıkarılamadı. Dokun, uygulamada tekrar deneyelim.",
     insufficient: "Bu videodan yeterli tarif bilgisi çıkaramadık.",
@@ -15,6 +17,8 @@ export const NOTIFY_TEXT = {
   en: {
     readyTitle: "Your recipe is ready 🍝",
     readyBody: (title) => (title ? `${title} is ready.` : "Your recipe is ready."),
+    partialSuffix: "It couldn't be saved everywhere; you can retry in the app.",
+    saveFailed: "The recipe was prepared but couldn't be saved. You can retry in the app.",
     failedTitle: "Couldn't create the recipe",
     failedDefault: "We couldn't extract a recipe from the video you shared. Tap to try again in the app.",
     insufficient: "We couldn't get enough recipe details from this video.",
@@ -31,5 +35,6 @@ export function failedBody(language, kind) {
   const t = notifyText(language);
   if (kind === "insufficient") return t.insufficient;
   if (kind === "service") return t.serviceUnavailable;
+  if (kind === "save") return t.saveFailed;
   return t.failedDefault;
 }

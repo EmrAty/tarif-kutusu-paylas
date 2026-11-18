@@ -12,8 +12,11 @@ import { useLanguage } from "./i18n.jsx";
 // uygulama burada hiç render edilmiyor: sadece link + açıklama + kategori alınıp
 // /api/recipe-jobs'a gönderiliyor, tarif sunucuda hazırlanıyor.
 //
-// Kayıt hedefi tek seçim: kendi tariflerin (varsayılan) ya da üyesi olduğun
-// bir aile. Aileler yalnızca Plus + gerçek üyelik varsa (GET /api/families,
+// Kayıt hedefi çoklu seçim: kendi tariflerin (varsayılan) ve/veya üyesi
+// olduğun aileler (en az bir yer seçili kalır). Tarif tek AI çağrısıyla
+// hazırlanır, aynı tarif (aynı id) seçilen her yere yazılır; bir yere
+// yazılamazsa uygulama "Tekrar dene" bandı gösterir (AI'a yeniden gidilmez).
+// İsteğe bağlı "Tarif adı" AI'ın başlığının yerine geçer. Aileler yalnızca Plus + gerçek üyelik varsa (GET /api/families,
 // ana uygulamanın kullandığı aynı uç) listeleniyor; sunucu seçimi job
 // kabulünde ve kayıttan önce yeniden doğruluyor.
 const PERSONAL_TARGET = "personal";
@@ -66,7 +69,8 @@ export default function SharePanel() {
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
   const [familyInfo, setFamilyInfo] = useState({ status: "idle", families: [] }); // "idle" | "loading" | "ready" | "error"
-  const [target, setTarget] = useState(PERSONAL_TARGET);
+  const [targets, setTargets] = useState([PERSONAL_TARGET]);
+  const [title, setTitle] = useState("");
   const [expectFamilies] = useState(readFamiliesHint);
   const requestIdRef = useRef(uid());
 
@@ -107,12 +111,22 @@ export default function SharePanel() {
     };
   }, [authUser]);
 
-  // Seçili aile listede yoksa (liste yenilendi/boş geldi) hedef kişisele döner.
+  // Seçili aile listede yoksa (liste yenilendi/boş geldi) seçimden çıkar;
+  // hiçbir yer kalmazsa kişisel seçilir.
   useEffect(() => {
-    if (target !== PERSONAL_TARGET && !familyInfo.families.some((f) => f.id === target)) {
-      setTarget(PERSONAL_TARGET);
-    }
-  }, [familyInfo, target]);
+    setTargets((prev) => {
+      const kept = prev.filter((id) => id === PERSONAL_TARGET || familyInfo.families.some((f) => f.id === id));
+      if (kept.length === prev.length) return prev;
+      return kept.length ? kept : [PERSONAL_TARGET];
+    });
+  }, [familyInfo]);
+
+  const toggleTarget = (id) =>
+    setTargets((prev) => {
+      if (!prev.includes(id)) return [...prev, id];
+      const next = prev.filter((x) => x !== id);
+      return next.length ? next : prev; // en az bir yer seçili kalmalı
+    });
 
   useEffect(() => {
     // Açıklama "Yeni Tarif Çıkar" ekranındaki (AddForm) ile aynı uçtan, aynı
@@ -147,6 +161,10 @@ export default function SharePanel() {
       setError(t("sharePanel.errorCaptionRequired"));
       return;
     }
+    if (!targets.length) {
+      setError(t("sharePanel.needTarget"));
+      return;
+    }
     setStatus("sending");
     try {
       const data = await authedFetch("/api/recipe-jobs", {
@@ -161,7 +179,8 @@ export default function SharePanel() {
           addedBy: storageGet("person-name")?.value || "",
           // Tarif metinleri uygulamanın dilinde üretilsin (kaynak videonun dili değil).
           language,
-          ...(target === PERSONAL_TARGET ? { target: "personal" } : { target: "family", familyId: target }),
+          targets: targets.map((id) => (id === PERSONAL_TARGET ? { scope: "personal" } : { scope: "family", familyId: id })),
+          ...(title.trim() ? { title: title.trim() } : {}),
         },
       });
       if (!data.jobId) throw new Error(t("sharePanel.errorJobStartFailed"));
@@ -327,19 +346,45 @@ export default function SharePanel() {
         })}
       </div>
 
+      <label style={labelStyle} htmlFor="share-panel-title">
+        {t("sharePanel.titleLabel")}
+      </label>
+      <input
+        id="share-panel-title"
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        maxLength={120}
+        placeholder={t("sharePanel.titlePlaceholder")}
+        style={{
+          width: "100%",
+          borderRadius: "8px",
+          border: `1px solid ${COLORS.line}`,
+          background: COLORS.panel,
+          color: COLORS.ink,
+          padding: "10px 12px",
+          fontSize: "16px",
+          outline: "none",
+          boxSizing: "border-box",
+          marginBottom: "16px",
+        }}
+      />
+
       {familyInfo.families.length > 0 && (
         <>
-          <label style={labelStyle}>{t("sharePanel.saveToLabel")}</label>
-          <div role="radiogroup" style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "16px" }}>
+          <label style={labelStyle}>
+            {t("sharePanel.saveToLabel")}{" "}
+            <span style={{ textTransform: "none", fontWeight: 400 }}>{t("sharePanel.saveToHint")}</span>
+          </label>
+          <div role="group" style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "16px" }}>
             {[{ id: PERSONAL_TARGET, name: t("sharePanel.saveToPersonal") }, ...familyInfo.families].map((option) => {
-              const selected = target === option.id;
+              const selected = targets.includes(option.id);
               return (
                 <button
                   key={option.id}
                   type="button"
-                  role="radio"
+                  role="checkbox"
                   aria-checked={selected}
-                  onClick={() => setTarget(option.id)}
+                  onClick={() => toggleTarget(option.id)}
                   style={{
                     display: "flex",
                     alignItems: "center",
@@ -360,8 +405,9 @@ export default function SharePanel() {
                     style={{
                       width: "16px",
                       height: "16px",
-                      borderRadius: "50%",
+                      borderRadius: "4px",
                       border: `2px solid ${selected ? COLORS.forest : COLORS.line}`,
+                      background: selected ? COLORS.forest : "transparent",
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
@@ -369,7 +415,7 @@ export default function SharePanel() {
                       boxSizing: "border-box",
                     }}
                   >
-                    {selected && <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: COLORS.forest }} />}
+                    {selected && <Check size={11} color="#F3EFE6" strokeWidth={3} />}
                   </span>
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{option.name}</span>
                 </button>
