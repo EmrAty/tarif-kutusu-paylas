@@ -2,10 +2,13 @@
 
 Dal: `feature/rename-multi-target-move` (temel: production `9d97c8f`). Main'e alınmadı, yayınlanmadı.
 
-## Model
-Bir tarif birden fazla listede **aynı id** ile durur (mevcut mimari: `App.jsx` `recipes` id'ye göre tekilleştirir, `_scopes` tutar; düzenleme/silme her kopyaya uygulanır). Yeni özellikler bunu kullanır:
-- Yeniden deneme her zaman aynı tarif nesnesini yazar → hedefte zaten varsa liste değişmez (kopya yok).
-- "Kopyala" = aynı tarif aileye de eklenir (iki yerde, düzenlemeler ikisine de yansır). "Taşı" = önce aileye yaz, seçilen **her** aileye yazıldıysa kişiselden kaldır.
+## Model (bağımsız kopyalar)
+Her listedeki kayıt **ayrı** bir tariftir. Kişisel kayıt asıl kimliği (`id`) taşır; her aile kopyası asıl kimlikten türetilen kendi kimliğini alır: `<id>-fam-<aileId>` (`shared/recipeIds.js`, istemci ve sunucu ortak). Sonuç:
+- Ailede düzenleme/silme kişisel tarifi etkilemez, kişiseldeki işlemler aile kopyasını etkilemez; kart listesinde her kopya ayrı kart olarak görünür.
+- Kimlik türetildiği (rastgele olmadığı) için "Tekrar dene" ve ikinci kopyalama aynı kimliği üretir → hedefte zaten varsa liste değişmez (kopya çoğalmaz). AI'a yeniden gidilmez.
+- "Kopyala" = içerik aile kopyası kimliğiyle aileye eklenir. "Taşı" = önce aileye yaz, seçilen **her** aileye yazıldıysa kişisel kaydı kaldır.
+- Kayıttan sonra açılan / bildirimdeki tarif: kişisele yazıldıysa kişisel kayıt, değilse ilk aile kopyası.
+- Eski kayıtlar: bu daldan önce (Grup 5 çoklu hedef) aynı kimlikle birden çok listeye yazılmış tarifler bağlı kalır (tek kart, düzenleme her kopyaya). Bunlar taşınmadı/ayrıştırılmadı.
 
 ## Akışlar
 | Yer | Ad değiştirme | Çoklu hedef | Kısmi hata |
@@ -28,9 +31,9 @@ Not: "Elimde Bunlar Var" önerisini kaydetme yalnızca kişisel listeye (değiş
 `test/multiTargetJobs.test.mjs` (10), `test/recipeTransferServer.test.mjs` (5, gerçek `/api/data`), `src/recipeTransfer.test.mjs` (7). `npm run check` yeşil.
 
 ## Telefonda denenecekler (Preview)
-1. Yeni Tarif Çıkar → "Tarif hazır" → adı değiştir, Kişisel + aile seç → Kaydet → kart tek, alt satırda "Kişisel + Ev", iki listede yeni ad.
+1. Yeni Tarif Çıkar → "Tarif hazır" → adı değiştir, Kişisel + aile seç → Kaydet → iki ayrı kart (Kişisel ve Ev), ikisinde de yeni ad; birini düzenle/sil → diğeri değişmez.
 2. Aynı adımda "Geri dön" → Tarifi Çıkar'a tekrar bas → AI beklemesi olmadan inceleme ekranı gelmeli.
 3. TikTok → Paylaş → panelde ad yaz + iki yer seç → bildirimdeki ad ve iki listedeki ad aynı.
 4. Kısmi hata: ikinci telefonda aileden çıkar/Plus kapat, sonra ilk telefonda o aileye + kişisele paylaş → bildirim "Bazı yerlere kaydedilemedi", uygulamada bant ("Kaydedildi: Kişisel / Kaydedilemedi: Ev") → erişimi geri ver → "Tekrar dene" → ailede tek kopya.
-5. Tarif detayı → "Aileye taşı veya kopyala" → Kopyala → iki yerde; başka tarifte Taşı → kişisel listeden kalkar, ailede kalır; porsiyon, "≈" tahmini miktarlar, bölümler aynı.
+5. Tarif detayı → "Aileye taşı veya kopyala" → Kopyala → ailede ayrı kart; aile kopyasında adı değiştir → kişisel aynı kalır; tekrar Kopyala seçeneği o aile için görünmez; başka tarifte Taşı → kişisel listeden kalkar, ailede kalır; porsiyon, "≈" tahmini miktarlar, bölümler aynı.
 6. Free hesap (Plus kapalı): taşı düğmesi görünmez; panelde aile seçeneği yok.

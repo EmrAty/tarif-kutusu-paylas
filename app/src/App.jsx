@@ -44,7 +44,8 @@ import { servingsUnitOf } from "../shared/portionEstimate.js";
 import { safeRecipeLink } from "../shared/safeLink.js";
 import { amountFlagsAfterEdit } from "../shared/ingredientText.js";
 import { normalizeSuggestion, normalizeSuggestions } from "../shared/pantrySuggestions.js";
-import { saveRecipeToTargets, extractionSignature } from "./saveTargets.js";
+import { saveRecipeToTargets, extractionSignature, savedRecipeId } from "./saveTargets.js";
+import { familyCopyId } from "../shared/recipeIds.js";
 import { transferRecipe } from "./recipeTransfer.js";
 import { saveTicket as saveGuestMergeTicket, clearTicket as clearGuestMergeTicket, syncGuestMerge } from "./guestMergeClient.js";
 import { useLanguage, LANGUAGES, translate } from "./i18n.jsx";
@@ -1751,12 +1752,13 @@ export default function TarifKutusu() {
       const { saved, failed } = await saveRecipeToTargets(recipe, targets, mutateRecipes, PERSONAL);
       if (!failed.length) {
         setPartialSave(null);
-        return;
+        return saved;
       }
       if (!saved.length) throw failed[0].error;
       const limit = failed.some((f) => f.error?.code === FREE_LIMIT_ERROR_CODE);
       if (limit) setLimitModalOpen(true);
       setPartialSave({ recipe, saved, failed: failed.map((f) => f.scopeKey), limit });
+      return saved;
     },
     [mutateRecipes]
   );
@@ -1823,6 +1825,13 @@ export default function TarifKutusu() {
 
   // Kişisel tarifi aileye/ailelere taşı ya da kopyala (bkz. recipeTransfer.js).
   // Kayıtlı nesne (görünüm/çeviri değil) kullanılır; aile yetkisi sunucuda.
+  // Kayıttan sonra açılan kopya: kişisele yazıldıysa o, değilse ilk aile kopyası
+  // (her aile kopyası kendi kimliğiyle bağımsız; bkz. shared/recipeIds.js).
+  const openedRecipeId = (recipe, saved) => {
+    const list = saved && saved.length ? saved : [PERSONAL];
+    return savedRecipeId(recipe, list.includes(PERSONAL) ? PERSONAL : list[0], PERSONAL);
+  };
+
   const placeName = (scopeKey) => (scopeKey === PERSONAL ? t("saveTarget.personal") : familyNameById[scopeKey] || t("common.family"));
 
   const handleTransfer = async (id, familyIds, mode) => {
@@ -1881,8 +1890,9 @@ export default function TarifKutusu() {
     const recipe = { ...extractReview.recipe, title };
     setBusy(true);
     try {
+      let saved = [];
       try {
-        await saveNewRecipe(recipe, saveTargets);
+        saved = await saveNewRecipe(recipe, saveTargets);
       } catch (e) {
         if (handleSaveFailure(e)) return;
       }
@@ -1893,7 +1903,7 @@ export default function TarifKutusu() {
       setNotes("");
       setImages([]);
       setCategory("");
-      setActiveId(recipe.id);
+      setActiveId(openedRecipeId(recipe, saved));
       setView("detail");
     } catch (e) {
       setError(e.message || t("common.genericError"));
@@ -2023,13 +2033,14 @@ export default function TarifKutusu() {
   const handleManualSave = async (data) => {
     // Elle yazılan tarifin içerik dili: yazıldığı sıradaki uygulama dili.
     const recipe = { id: uid(), createdAt: Date.now(), isFavorite: false, addedBy: personName || "", content_lang: language, ...data };
+    let saved = [];
     try {
-      await saveNewRecipe(recipe, saveTargets);
+      saved = await saveNewRecipe(recipe, saveTargets);
     } catch (e) {
       if (handleSaveFailure(e)) return;
     }
     setManualPrefill(null);
-    setActiveId(recipe.id);
+    setActiveId(openedRecipeId(recipe, saved));
     setView("detail");
   };
 
@@ -2455,7 +2466,11 @@ export default function TarifKutusu() {
                 onStartCooking={() => setView("cook")}
                 transferFamilies={
                   isPlus && active._scopes.includes(PERSONAL) && !isRecipeLocked(active)
-                    ? families.filter((f) => !active._scopes.includes(f.id))
+                    ? families.filter(
+                        (f) =>
+                          !active._scopes.includes(f.id) &&
+                          !(recipeBuckets[f.id] || []).some((r) => r && r.id === familyCopyId(active.id, f.id))
+                      )
                     : []
                 }
                 onTransfer={(familyIds, mode) => handleTransfer(active.id, familyIds, mode)}

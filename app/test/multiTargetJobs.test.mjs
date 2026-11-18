@@ -86,7 +86,9 @@ async function runJob(extra) {
 
 const ALL = [{ scope: "personal" }, { scope: "family", familyId: "F1" }, { scope: "family", familyId: "F2" }];
 
-test("Çoklu hedef: tek AI çağrısı, aynı tarif (aynı id, aynı alanlar) kişisel + iki aileye yazılır", async () => {
+const withoutId = ({ id, ...rest }) => rest;
+
+test("Çoklu hedef: tek AI çağrısı, kişisel + iki aileye BAĞIMSIZ kopyalar (ayrı kimlik, aynı içerik)", async () => {
   reset();
   const job = await runJob({ targets: ALL });
   assert.equal(job.status, "completed");
@@ -95,8 +97,14 @@ test("Çoklu hedef: tek AI çağrısı, aynı tarif (aynı id, aynı alanlar) ki
   const f1 = read("family:F1:recipes");
   const f2 = read("family:F2:recipes");
   assert.equal(personal.length, 1);
-  assert.deepEqual(f1, personal);
-  assert.deepEqual(f2, personal);
+  assert.equal(f1.length, 1);
+  assert.equal(f2.length, 1);
+  assert.equal(f1[0].id, `${personal[0].id}-fam-F1`);
+  assert.equal(f2[0].id, `${personal[0].id}-fam-F2`);
+  assert.deepEqual(withoutId(f1[0]), withoutId(personal[0]));
+  assert.deepEqual(withoutId(f2[0]), withoutId(personal[0]));
+  assert.equal(job.recipeId, personal[0].id);
+  assert.equal(pushes[0].data.recipeId, personal[0].id);
   assert.equal(personal[0].servings, 4);
   assert.deepEqual(job.targets.map((t) => t.status), ["saved", "saved", "saved"]);
   assert.equal(job.recipe, undefined, "her yere yazıldıysa tarif job kaydında saklanmaz");
@@ -135,6 +143,8 @@ test("Tek hedef seçilebilir: yalnızca aile (kişisel listeye hiçbir şey yaz�
   assert.equal(job.status, "completed");
   assert.deepEqual(read("user:A:recipes"), []);
   assert.equal(read("family:F2:recipes").length, 1);
+  assert.equal(job.recipeId, read("family:F2:recipes")[0].id, "job kaydı aile kopyasını gösterir");
+  assert.match(job.recipeId, /-fam-F2$/);
   assert.deepEqual(pushes[0].data, { type: "recipe_ready", recipeId: job.recipeId, scope: "family", familyId: "F2" });
 });
 
@@ -215,7 +225,9 @@ test("Kısmi kayıt: aile erişimi job sürerken kalkarsa kişisel kayıt durur,
   assert.equal(aiCalls(), 1);
   assert.equal(read("user:A:recipes").length, 1);
   assert.equal(read("family:F1:recipes").length, 1);
-  assert.deepEqual(read("family:F2:recipes"), read("user:A:recipes"));
+  assert.equal(read("family:F2:recipes")[0].id, `${read("user:A:recipes")[0].id}-fam-F2`);
+  assert.deepEqual(withoutId(read("family:F2:recipes")[0]), withoutId(read("user:A:recipes")[0]));
+  assert.equal(read("family:F2:recipes")[0].title, "Benim Tavuğum");
   assert.equal(read(`job:A:${job.id}`).recipe, null, "her şey yazılınca saklanan kopya atılır");
   assert.deepEqual((await invoke(recipeJobs, { method: "GET", uid: "A", query: { attention: "1" } })).body.jobs, []);
 

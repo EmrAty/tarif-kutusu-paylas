@@ -6,7 +6,13 @@
 // (Yeni Tarif Çıkar'da) ikinci bir ücretli AI çağrısı oluşuyordu.
 // Şimdi: her hedef ayrı denenir, sonuç hedef hedef döner. Aynı tarif nesnesi
 // (aynı id) tekrar kaydedilirse zaten bulunan hedefte hiçbir şey değişmez.
+// Her aile kopyası bağımsızdır: kendi (asıl kimlikten türetilmiş) kimliğiyle
+// yazılır (bkz. shared/recipeIds.js); tekrar denemede aynı kimlik üretilir.
 // Saf modül (React/Firebase yok) — node --test ile sınanır.
+import { recipeForFamily, familyCopyId } from "../shared/recipeIds.js";
+
+// Kaydedilen kopyanın o listedeki kimliği.
+export const savedRecipeId = (recipe, scopeKey, personalKey) => (scopeKey === personalKey ? recipe.id : familyCopyId(recipe.id, scopeKey));
 
 export const addRecipeOnce = (recipe) => (list) => (list.some((r) => r && r.id === recipe.id) ? list : [recipe, ...list]);
 
@@ -18,7 +24,7 @@ export async function saveRecipeToTargets(recipe, targets, mutate, personalKey) 
   const failed = [];
   const run = async (scopeKey) => {
     try {
-      await mutate(scopeKey, addRecipeOnce(recipe));
+      await mutate(scopeKey, addRecipeOnce(scopeKey === personalKey ? recipe : recipeForFamily(recipe, scopeKey)));
       saved.push(scopeKey);
     } catch (error) {
       failed.push({ scopeKey, error });

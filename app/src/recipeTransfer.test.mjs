@@ -36,6 +36,7 @@ function store(initial, fail = new Set()) {
 }
 
 const stored = storableRecipe(RECIPE);
+const famCopy = (id) => ({ ...stored, id: `r1-fam-${id}` });
 
 test("storableRecipe görünüm alanlarını atar, diğer her alanı aynen korur", () => {
   assert.deepEqual(Object.keys(stored).filter((k) => k.startsWith("_")), []);
@@ -48,7 +49,7 @@ test("Taşı: aileye yazılır, sonra kişisel kopya kalkar; tüm alanlar korunu
   const out = await transferRecipe({ recipe: RECIPE, familyIds: ["F1"], mode: "move", mutate: s.mutate, personalKey: "personal" });
   assert.deepEqual(out.saved, ["F1"]);
   assert.equal(out.removedFromPersonal, true);
-  assert.deepEqual(s.lists.get("F1"), [stored]);
+  assert.deepEqual(s.lists.get("F1"), [famCopy("F1")], "aile kopyası kendi kimliğiyle, diğer bütün alanlar aynı");
   assert.deepEqual(s.lists.get("personal"), [{ id: "r2" }]);
   assert.deepEqual(s.writes, ["F1", "personal"], "önce aile, sonra kişisel silme");
 });
@@ -81,7 +82,15 @@ test("Kopyala: aileye eklenir, kişisel kopya kalır", async () => {
   const out = await transferRecipe({ recipe: RECIPE, familyIds: ["F1"], mode: "copy", mutate: s.mutate, personalKey: "personal" });
   assert.equal(out.removedFromPersonal, false);
   assert.deepEqual(s.lists.get("personal"), [stored]);
-  assert.deepEqual(s.lists.get("F1"), [stored]);
+  assert.deepEqual(s.lists.get("F1"), [famCopy("F1")]);
+  assert.notEqual(s.lists.get("F1")[0].id, stored.id, "kopya bağımsız: ayrı kimlik");
+});
+
+test("Kopyala iki kez / tekrar dene: türetilmiş kimlik aynı, ailede tek kopya", async () => {
+  const s = store({ personal: [stored], F1: [] });
+  await transferRecipe({ recipe: RECIPE, familyIds: ["F1"], mode: "copy", mutate: s.mutate, personalKey: "personal" });
+  await transferRecipe({ recipe: RECIPE, familyIds: ["F1"], mode: "copy", mutate: s.mutate, personalKey: "personal" });
+  assert.deepEqual(s.lists.get("F1"), [famCopy("F1")]);
 });
 
 test("Taşı: aileye yazıldı ama kişisel silme başarısız → removeError döner, tarif iki yerde de kalır", async () => {
@@ -91,7 +100,7 @@ test("Taşı: aileye yazıldı ama kişisel silme başarısız → removeError d
   const out = await transferRecipe({ recipe: RECIPE, familyIds: ["F1"], mode: "move", mutate, personalKey: "personal" });
   assert.equal(out.removedFromPersonal, false);
   assert.match(out.removeError.message, /ağ/);
-  assert.deepEqual(s.lists.get("F1"), [stored]);
+  assert.deepEqual(s.lists.get("F1"), [famCopy("F1")]);
 });
 
 test("Hedef yoksa ya da yalnızca kişisel verildiyse hiçbir şey yazılmaz/silinmez", async () => {
@@ -99,4 +108,20 @@ test("Hedef yoksa ya da yalnızca kişisel verildiyse hiçbir şey yazılmaz/sil
   const out = await transferRecipe({ recipe: RECIPE, familyIds: ["personal"], mode: "move", mutate: s.mutate, personalKey: "personal" });
   assert.equal(out.removedFromPersonal, false);
   assert.deepEqual(s.writes, []);
+});
+
+test("Yeni kayıt (kişisel + aile): kopyalar bağımsız; tekrar dene yalnızca eksik yere yazar, kopya üretmez", async () => {
+  const { saveRecipeToTargets, savedRecipeId } = await import("./saveTargets.js");
+  const fail = new Set(["F1"]);
+  const s = store({ personal: [], F1: [] }, fail);
+  const recipe = { id: "n1", title: "Yeni ad", servings: 3 };
+  let out = await saveRecipeToTargets(recipe, ["personal", "F1"], s.mutate, "personal");
+  assert.deepEqual(out.saved, ["personal"]);
+  fail.clear();
+  out = await saveRecipeToTargets(recipe, ["F1"], s.mutate, "personal");
+  await saveRecipeToTargets(recipe, ["personal", "F1"], s.mutate, "personal");
+  assert.deepEqual(s.lists.get("personal"), [recipe]);
+  assert.deepEqual(s.lists.get("F1"), [{ ...recipe, id: "n1-fam-F1" }]);
+  assert.equal(savedRecipeId(recipe, "F1", "personal"), "n1-fam-F1");
+  assert.equal(savedRecipeId(recipe, "personal", "personal"), "n1");
 });

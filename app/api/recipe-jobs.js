@@ -15,6 +15,7 @@ import { notifyText, failedBody } from "./_lib/jobNotifyText.js";
 import { parseSocialUrl, SUPPORTED_LINK_MESSAGE } from "./_lib/socialUrl.js";
 import { guardAiRequest, reserveAiBudget, sendGuardError, deferResponse, checkDataWriteLimit, clientIp } from "./_lib/aiGuard.js";
 import { CATEGORIES } from "../shared/recipeExtraction.js";
+import { recipeForFamily, familyCopyId } from "../shared/recipeIds.js";
 import { DEFAULT_CONTENT_LANG, isContentLanguage } from "../shared/recipeLocales.js";
 
 // Android paylaşım paneli (ShareActivity) buraya POST atıyor: link, kullanıcının
@@ -226,14 +227,16 @@ function freeLimitError() {
   return err;
 }
 
-// Tek bir hedefe yazım (aynı id ile tekil: tekrar yazımda hiçbir şey değişmez).
+// Tek bir hedefe yazım. Aile kopyası bağımsızdır: asıl kimlikten türetilmiş
+// kendi kimliğiyle yazılır (shared/recipeIds.js); tekrar yazımda aynı kimlik
+// üretildiği için hiçbir şey değişmez (kopya çoğalmaz).
 // Aile: Plus + gerçek üyelik her yazımdan hemen önce yeniden doğrulanır;
 // başarısızsa kişisel listeye ASLA düşülmez. Kişisel: Free sınırı (taşınan
 // misafirin tarifinde taşımadaki gibi uygulanmaz).
 async function saveRecipeToTarget({ uid, ownerUid, recipe, target }) {
   if (target.scope === "family") {
     await assertFamilyMember(ownerUid, target.familyId);
-    await addRecipeToList(familyRecipesKey(target.familyId), recipe);
+    await addRecipeToList(familyRecipesKey(target.familyId), recipeForFamily(recipe, target.familyId));
     return;
   }
   if (ownerUid !== uid) {
@@ -263,6 +266,12 @@ async function saveRecipeToTargets({ uid, ownerUid, recipe, targets }) {
 
 const failedTargetsOf = (results) => (results || []).filter((r) => r.status !== "saved");
 const plainTarget = (r) => (r.scope === "family" ? { scope: "family", familyId: r.familyId } : { scope: "personal" });
+// Bildirimin/job kaydının gösterdiği kopya: kişisele yazıldıysa o, değilse ilk aile kopyası.
+function primaryRecipeId(baseId, results) {
+  const saved = (results || []).filter((r) => r.status === "saved");
+  if (!saved.length || saved.some((r) => r.scope === "personal")) return baseId;
+  return familyCopyId(baseId, saved[0].familyId);
+}
 
 async function markAttention(uid, jobId) {
   await redisCommand(["HSET", attentionKey(uid), jobId, String(Date.now())]);
@@ -524,7 +533,7 @@ async function runRecipeJob({ uid, jobId, sourceUrl, caption, category, addedBy,
     // aynı tarifi yazar) ve job uygulamadaki uyarı listesine girer.
     await patchJob(uid, jobId, {
       status: "completed",
-      recipeId: recipe.id,
+      recipeId: primaryRecipeId(recipe.id, saveResults),
       recipeTitle: recipe.title,
       targets: saveResults,
       ...(failedTargets.length ? { recipe } : {}),
@@ -548,7 +557,7 @@ async function runRecipeJob({ uid, jobId, sourceUrl, caption, category, addedBy,
     // yazıldıysa familyIds hepsini taşır (FCM data değerleri metin).
     data: {
       type: "recipe_ready",
-      recipeId: recipe.id,
+      recipeId: primaryRecipeId(recipe.id, saveResults),
       ...(!personalSaved && savedFamilyIds.length ? { scope: "family", familyId: savedFamilyIds[0] } : {}),
       ...(savedFamilyIds.length && (personalSaved || savedFamilyIds.length > 1) ? { familyIds: savedFamilyIds.join(",") } : {}),
     },
@@ -756,7 +765,7 @@ const JOB_ID_RE = /^[\w-]{6,64}$/;
 function attentionSummary(job) {
   return {
     id: job.id,
-    recipeId: job.recipeId || job.recipe?.id || null,
+    recipeId: job.recipeId || null,
     recipeTitle: job.recipeTitle || job.recipe?.title || "",
     status: job.status,
     createdAt: job.createdAt || 0,
@@ -823,7 +832,7 @@ async function handleRetry(req, res, user) {
   const stillFailed = failedTargetsOf(targets).length > 0;
   const next = await patchJob(uid, job.id, {
     targets,
-    ...(anySaved ? { status: "completed", recipeId: job.recipe.id, error: null, errorCode: null, completedAt: job.completedAt || Date.now() } : {}),
+    ...(anySaved ? { status: "completed", recipeId: primaryRecipeId(job.recipe.id, targets), error: null, errorCode: null, completedAt: job.completedAt || Date.now() } : {}),
     // Her şey yazıldıysa saklanan tarif kopyasına gerek kalmadı.
     ...(stillFailed ? {} : { recipe: null }),
   });

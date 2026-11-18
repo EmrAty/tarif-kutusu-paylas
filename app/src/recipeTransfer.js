@@ -1,12 +1,13 @@
 // Kişisel listedeki bir tarifi aileye/ailelere taşıma ya da kopyalama.
 // Saf modül (React/Firebase yok) — node --test ile sınanır.
 //
-// Uygulama bir tarifi birden fazla listede AYNI id ile tutar (kart tekilleşir,
-// düzenleme her kopyaya yansır; bkz. App.jsx `recipes`). Kopyalama = tarif
-// nesnesinin aynısını aile listesine eklemek; taşıma = önce aileye ekle, ancak
-// seçilen HER aileye yazıldıysa kişisel kopyayı kaldır. Böylece:
+// Aile kopyası BAĞIMSIZ bir kayıttır: asıl kimlikten türetilmiş kendi kimliği
+// vardır (bkz. shared/recipeIds.js), ailede düzenleme/silme kişisel tarifi
+// etkilemez, tersi de. Kopyalama = tarifin içeriğini bu kimlikle aile listesine
+// eklemek; taşıma = önce aileye ekle, ancak seçilen HER aileye yazıldıysa
+// kişisel kaydı kaldır. Böylece:
 //  - aileye yazım başarısızsa kişisel tarif asla kaybolmaz;
-//  - tekrar deneme kopya üretmez (aynı id zaten varsa liste değişmez);
+//  - tekrar deneme kopya üretmez (türetilmiş kimlik zaten varsa liste değişmez);
 //  - malzemeler, bölümler, püf noktaları, tahmini miktar işaretleri ve porsiyon
 //    alanları olduğu gibi taşınır (nesne kopyalanır, alan seçilmez).
 // Aile yetkisi ve Plus kilidi sunucuda (/api/data) uygulanır; reddedilen yazım

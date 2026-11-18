@@ -59,6 +59,7 @@ async function mutate(scopeKey, updater) {
 }
 
 const read = (key) => JSON.parse(db.get(key));
+const FAM_COPY = { ...RECIPE, id: `${RECIPE.id}-fam-F1` };
 // İstemcide tarif görünüm alanlarıyla gelir; bunlar kayda girmemeli.
 const shown = { ...RECIPE, _scopes: ["personal"], _origTitle: RECIPE.title, _translation: { status: "idle" } };
 
@@ -67,16 +68,33 @@ test("Taşı: aileye bütün alanlarıyla yazılır, kişisel kopya kalkar, diğ
   const out = await transferRecipe({ recipe: shown, familyIds: ["F1"], mode: "move", mutate, personalKey: "personal" });
   assert.deepEqual(out.saved, ["F1"]);
   assert.equal(out.removedFromPersonal, true);
-  assert.deepEqual(read("family:F1:recipes"), [RECIPE]);
+  assert.deepEqual(read("family:F1:recipes"), [FAM_COPY]);
   assert.deepEqual(read("user:A:recipes").map((r) => r.title), ["Diğer"]);
 });
 
-test("Kopyala: iki listede de aynı tarif (aynı id); tekrar kopyalama ikinci kopya yaratmaz", async () => {
+test("Kopyala: aile kopyası bağımsız (ayrı kimlik, aynı içerik); tekrar kopyalama ikinci kopya yaratmaz", async () => {
   seed();
   await transferRecipe({ recipe: shown, familyIds: ["F1"], mode: "copy", mutate, personalKey: "personal" });
   await transferRecipe({ recipe: shown, familyIds: ["F1"], mode: "copy", mutate, personalKey: "personal" });
-  assert.deepEqual(read("family:F1:recipes"), [RECIPE]);
+  assert.deepEqual(read("family:F1:recipes"), [FAM_COPY]);
   assert.equal(read("user:A:recipes").length, 2);
+});
+
+test("Bağımsızlık: ailede düzenleme/silme kişiseli, kişiselde düzenleme/silme aileyi etkilemez", async () => {
+  seed();
+  await transferRecipe({ recipe: shown, familyIds: ["F1"], mode: "copy", mutate, personalKey: "personal" });
+  // Uygulamanın düzenlemesi: tarifin bulunduğu kapsamlarda o kimliği günceller.
+  const edit = (id, patch) => (list) => (list.some((r) => r.id === id) ? list.map((r) => (r.id === id ? { ...r, ...patch } : r)) : list);
+  const remove = (id) => (list) => list.filter((r) => r.id !== id);
+  await mutate("F1", edit(FAM_COPY.id, { title: "Ailenin Çorbası" }));
+  assert.equal(read("user:A:recipes")[0].title, "Mercimek Çorbası");
+  await mutate("personal", edit(RECIPE.id, { servings: 2 }));
+  assert.equal(read("family:F1:recipes")[0].servings, 5);
+  await mutate("personal", remove(RECIPE.id));
+  assert.equal(read("family:F1:recipes").length, 1, "kişisel silme aile kopyasını silmez");
+  await transferRecipe({ recipe: { ...RECIPE, id: "1700000000002-other1" }, familyIds: ["F1"], mode: "copy", mutate, personalKey: "personal" });
+  await mutate("F1", remove(FAM_COPY.id));
+  assert.equal(read("user:A:recipes").length, 1, "aile silmesi kişisel listeye dokunmaz");
 });
 
 test("Üyesi olunmayan aile: sunucu reddeder, kişisel tarif silinmez", async () => {
@@ -105,6 +123,6 @@ test("Kısmi taşıma (izinli + izinsiz aile): izinli aileye yazılır, kişisel
   assert.deepEqual(out.saved, ["F1"]);
   assert.equal(out.failed[0].scopeKey, "F9");
   assert.equal(out.removedFromPersonal, false);
-  assert.deepEqual(read("family:F1:recipes"), [RECIPE]);
+  assert.deepEqual(read("family:F1:recipes"), [FAM_COPY]);
   assert.equal(read("user:A:recipes").length, 2);
 });
