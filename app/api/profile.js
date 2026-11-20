@@ -10,6 +10,7 @@ import {
   normalizeCustomCategories,
   validateNewCategory,
   cleanCategoryRef,
+  legacyCategoryRef,
   isAcceptableRecipeCategory,
 } from "../shared/categories.js";
 
@@ -140,10 +141,21 @@ export async function familyCategories(uid, profile) {
   const out = [];
   await Promise.all(
     ids.map(async (familyId) => {
-      const list = await redisGetJSON(`family:${familyId}:recipes`, []);
+      const [rawList, rawMembers] = await Promise.all([
+        redisGetJSON(`family:${familyId}:recipes`, []),
+        redisGetJSON(`family:${familyId}:members`, {}),
+      ]);
+      const list = Array.isArray(rawList) ? rawList : [];
+      // Bağsız (eski) tariflerde sahip, ekleyenin adının üye listesindeki tek eşleşmesi
+      // (istemcideki categoryOf ile aynı kural; bkz. shared/categories.js legacyCategoryRef).
+      const members =
+        rawMembers && typeof rawMembers === "object" && !Array.isArray(rawMembers)
+          ? Object.entries(rawMembers).map(([memberUid, m]) => ({ uid: memberUid, name: m && m.name }))
+          : [];
+      const siblings = list.filter((r) => r && r.categoryRef);
       const seen = new Set();
-      for (const r of Array.isArray(list) ? list : []) {
-        const ref = cleanCategoryRef(r && r.categoryRef);
+      for (const r of list) {
+        const ref = cleanCategoryRef(r && r.categoryRef) || legacyCategoryRef(r, members, siblings);
         if (!ref || ref.uid === uid || !isAcceptableRecipeCategory(r.category)) continue;
         const k = `${ref.uid}:${ref.id}`;
         if (seen.has(k)) continue;

@@ -258,3 +258,52 @@ test("çeviri: püf noktaları çevrilir; sayısı ya da rakamı değişen öğe
   const wrongCount = validateTranslation(payload, { title: "Cake", ingredients: [], instructions: [], assumptions: "", servings_note: "", tips: ["Only one"] });
   assert.deepEqual(wrongCount.tips, recipe.tips);
 });
+
+// ---- 21 Kasım dipnotları: bağsız eski aile tarifleri, tekil/çoğul çeviri ----
+
+test("aile kategorileri: bağsız (d2254df) aile tarifinde sahip, ekleyenin üye listesindeki tek eşleşmesi", async () => {
+  reset();
+  familyWith([
+    { id: "old1-fam-F1", title: "Tarhana", category: "Çorba", addedBy: "Emre" },
+    { id: "old2-fam-F1", title: "Kısır", category: "Mezeler", addedBy: "Ayşe" },
+    { id: "old3-fam-F1", title: "Bilinmez", category: "Garip", addedBy: "Kimse" },
+  ]);
+  const r = await invoke(profileHandler, { method: "GET", uid: "B", query: { familyCategories: "1" } });
+  assert.equal(r.status, 200);
+  // Ayşe'ye yalnız Emre'nin kategorisi döner (kendi eklediği ve sahibi bulunamayan dönmez).
+  assert.equal(r.body.familyCategories.length, 1);
+  const [fc] = r.body.familyCategories;
+  assert.equal(fc.name, "Çorba");
+  assert.equal(fc.ref.uid, "A");
+  assert.equal(fc.ref.by, "Emre");
+  assert.match(fc.ref.id, /^l[a-z0-9]+$/, "d2254df metin kategorisinin sabit kimliği");
+  // Aynı adlı bağlı tarif varsa onun bağı kullanılır (ayrı bölüm olmasın).
+  familyWith([
+    { id: "old1-fam-F1", title: "Tarhana", category: "Çorbalar", addedBy: "Emre" },
+    { id: "new1-fam-F1", title: "Ezogelin", category: "Çorbalar", categoryRef: EMRE_SOUPS },
+  ]);
+  const r2 = await invoke(profileHandler, { method: "GET", uid: "B", query: { familyCategories: "1" } });
+  assert.deepEqual(r2.body.familyCategories, [{ familyId: "F1", name: "Çorbalar", ref: EMRE_SOUPS }]);
+  // Kayıtlar değişmez.
+  assert.equal(read("family:F1:recipes")[0].categoryRef, undefined);
+});
+
+test("kategori çevirisi: tekil/çoğul korunur (prompt), önbellek sürümü v3; bağsız özel adlar da çevrilir", async () => {
+  reset();
+  familyWith([
+    { id: "r1-fam-F1", title: "Ezogelin", category: "Çorba", categoryRef: { ...EMRE_SOUPS } },
+    { id: "old-fam-F1", title: "Tarhana", category: "Mezeler", addedBy: "Emre" },
+  ]);
+  extracted = { titles: ["Soup", "Appetizers"] };
+  const r = await invoke(translateHandler, { uid: "B", body: { mode: "categories", target: "en" } });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(r.body.categories, { "tr\nÇorba": "Soup", "tr\nMezeler": "Appetizers" });
+  assert.equal(requests.length, 1);
+  assert.match(requests[0].system, /singular name stays singular/);
+  assert.match(requests[0].system, /"Çorba" → "Soup"/);
+  const fields = [...db.get("user:B:translations:en").map.keys()];
+  assert.ok(fields.length > 0 && fields.every((k) => k.startsWith("c:v3:")), "yeni sürüm anahtarı (v2'nin çoğullaştırdığı kayıt kullanılmaz)");
+  // İkinci istek önbellekten.
+  await invoke(translateHandler, { uid: "B", body: { mode: "categories", target: "en" } });
+  assert.equal(requests.length, 1);
+});

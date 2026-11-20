@@ -12,6 +12,7 @@ import {
   categoryOptions,
   categoryFields,
   legacyCategoryId,
+  legacyCategoryRef,
 } from "./categories.js";
 
 const SOUPS = { id: "c0011aa22bb33cc44", name: "Çorbalar", lang: "tr" };
@@ -82,4 +83,45 @@ test("seçenekler: sabitler + kendi kategorilerim (boş olsa da) + verilen tarif
   assert.deepEqual(keys, [...CATEGORIES.map((c) => `f:${c}`), `u:${ME.uid}:${SOUPS.id}`, "u:uidAyse:c9999zz"]);
   // Kişisel kayıtta (aile tarifleri verilmezse) üyelerin kategorileri yok.
   assert.equal(categoryOptions(ctx, []).length, CATEGORIES.length + 1);
+});
+
+// ---- Bağsız (d2254df) aile tarifleri: sahip ekleyenden çözülür ----
+const legacyId = legacyCategoryId;
+const describeOf = categoryOf;
+
+const MEMBERS = [
+  { uid: "EMRE", name: "Emre" },
+  { uid: "AYSE", name: "Ayşe" },
+];
+
+test("legacyCategoryRef: tek eşleşen üye sahip; belirsiz/eşleşmeyen/sabit/bağlı tarifte null", () => {
+  const r = { id: "x-fam-F", category: "Çorba", addedBy: "Emre" };
+  assert.deepEqual(legacyCategoryRef(r, MEMBERS), { id: legacyId("Çorba"), uid: "EMRE", by: "Emre", lang: "tr" });
+  assert.equal(legacyCategoryRef({ ...r, addedBy: "Kimse" }, MEMBERS), null);
+  assert.equal(legacyCategoryRef(r, [...MEMBERS, { uid: "E2", name: "emre" }]), null, "aynı adlı iki üye: belirsiz");
+  assert.equal(legacyCategoryRef({ ...r, category: "Tatlılar" }, MEMBERS), null, "sabit kategori");
+  assert.equal(legacyCategoryRef({ ...r, categoryRef: { id: "c1234", uid: "EMRE", by: "Emre", lang: "tr" } }, MEMBERS), null);
+  // Aynı listede o üyenin aynı adlı BAĞLI tarifi varsa onun bağı.
+  const sibling = { category: "çorba", categoryRef: { id: "cabcdef12", uid: "EMRE", by: "Emre", lang: "tr" } };
+  assert.deepEqual(legacyCategoryRef(r, MEMBERS, [sibling]), sibling.categoryRef);
+});
+
+test("categoryOf: başka üyenin bağsız aile tarifi izleyenin aynı adlı kendi kategorisine bağlanmaz", () => {
+  const ayseCtx = {
+    me: { uid: "AYSE", name: "Ayşe" },
+    mine: [{ id: "cayse0001", name: "Çorba", lang: "tr" }],
+    legacyRefOf: (r) => (r._scopes.includes("personal") ? null : legacyCategoryRef(r, MEMBERS)),
+  };
+  const emresOld = { id: "x-fam-F", category: "Çorba", addedBy: "Emre", _scopes: ["F"] };
+  const d = describeOf(emresOld, ayseCtx);
+  assert.equal(d.key, `u:EMRE:${legacyId("Çorba")}`);
+  assert.equal(d.ref.by, "Emre");
+  assert.equal(d.mine, false);
+  // Ayşe'nin kendi eklediği bağsız tarif kendi kategorisine bağlanır (eski davranış).
+  const ayses = { id: "y-fam-F", category: "Çorba", addedBy: "Ayşe", _scopes: ["F"] };
+  assert.equal(describeOf(ayses, ayseCtx).key, "u:AYSE:cayse0001");
+  // Emre'nin kendisinde: kendi adlı kategorisine bağlanır.
+  const emreCtx = { me: { uid: "EMRE", name: "Emre" }, mine: [{ id: legacyId("Çorba"), name: "Çorba", lang: "tr" }], legacyRefOf: ayseCtx.legacyRefOf };
+  assert.equal(describeOf(emresOld, emreCtx).key, `u:EMRE:${legacyId("Çorba")}`);
+  assert.equal(describeOf(emresOld, emreCtx).mine, true);
 });

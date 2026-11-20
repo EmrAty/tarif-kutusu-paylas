@@ -149,7 +149,34 @@ function mineDesc(cat, me) {
   };
 }
 
-// ctx: { me: { uid, name }, mine: normalizeCustomCategories(...) }
+// Bağsız (categoryRef'siz) özel kategorili bir AİLE tarifinin kategorisinin sahibi.
+// d2254df döneminde kaydedilen ya da o dönemin kişisel tariflerinden kopyalanan aile
+// tariflerinde bağ yok; bunlar diğer üyelerde sahipsiz ("Çorbalar") ya da üyenin kendi
+// aynı adlı kategorisine bağlı görünüyordu. Sahip, tarifi ekleyenin adından (addedBy)
+// o ailenin üye listesinde TEK eşleşmeyle bulunur; kimlik, o dönemin metin kategorisine
+// verilen sabit kimliktir (legacyCategoryId). Kayıt değişmez, yalnızca okunurken türetilir.
+// Aynı listede o üyenin aynı adlı kategorisine BAĞLI bir tarif varsa onun bağı
+// kullanılır (sonradan yeniden oluşturulmuş kategori ayrı bölüm gibi görünmesin).
+// members: [{ uid, name }] (tarifin bulunduğu ailenin üyeleri); siblings: o listenin
+// tarifleri. Bulunamazsa null.
+export function legacyCategoryRef(recipe, members, siblings = []) {
+  if (!recipe || recipe.categoryRef || isFixedCategory(recipe.category)) return null;
+  const name = typeof recipe.category === "string" ? recipe.category : "";
+  if (!name || !isAcceptableRecipeCategory(name)) return null;
+  const by = cleanCategoryName(typeof recipe.addedBy === "string" ? recipe.addedBy : "");
+  if (!by) return null;
+  const key = categoryKey(by);
+  const hits = (Array.isArray(members) ? members : []).filter((m) => m && typeof m.uid === "string" && categoryKey(m.name) === key);
+  if (hits.length !== 1) return null;
+  const nameKey = categoryKey(name);
+  for (const r of Array.isArray(siblings) ? siblings : []) {
+    const ref = cleanCategoryRef(r && r.categoryRef);
+    if (ref && ref.uid === hits[0].uid && categoryKey(r.category) === nameKey) return ref;
+  }
+  return cleanCategoryRef({ id: legacyCategoryId(name), uid: hits[0].uid, by: by.slice(0, 40), lang: "tr" });
+}
+
+// ctx: { me: { uid, name }, mine: normalizeCustomCategories(...), legacyRefOf?: (recipe) => ref|null }
 export function categoryOf(recipe, ctx) {
   const name = recipe && typeof recipe.category === "string" ? recipe.category : "";
   if (!name) return null;
@@ -163,6 +190,12 @@ export function categoryOf(recipe, ctx) {
       if (own) return mineDesc(own, me);
     }
     return { key: `u:${ref.uid}:${ref.id}`, name, fixed: false, ref, lang: ref.lang, mine: ref.uid === me.uid };
+  }
+  // Bağsız aile tarifi başka bir üyenin eklediği bir tarifse kategori onundur
+  // (bkz. legacyCategoryRef); izleyenin aynı adlı kendi kategorisine bağlanmaz.
+  const legacy = ctx && ctx.legacyRefOf ? cleanCategoryRef(ctx.legacyRefOf(recipe)) : null;
+  if (legacy && legacy.uid !== me.uid) {
+    return { key: `u:${legacy.uid}:${legacy.id}`, name, fixed: false, ref: legacy, lang: legacy.lang, mine: false };
   }
   const own = mine.find((c) => categoryKey(c.name) === categoryKey(name));
   if (own && me.uid) return mineDesc(own, me);

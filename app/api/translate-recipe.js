@@ -19,7 +19,7 @@ import { requireUser } from "./_lib/auth.js";
 import { redisGetJSON, redisCommand } from "./_lib/redis.js";
 import { assertFamilyAccess, verifiedFamilyIds } from "./_lib/families.js";
 import { getProfile } from "./_lib/profile.js";
-import { normalizeCustomCategories, cleanCategoryRef, isFixedCategory, CATEGORY_NAME_MAX } from "../shared/categories.js";
+import { normalizeCustomCategories, cleanCategoryRef, isFixedCategory, isAcceptableRecipeCategory, CATEGORY_NAME_MAX } from "../shared/categories.js";
 import { checkRateLimit, reserveAiBudget, assertKillSwitchOff, clientIp, sendGuardError } from "./_lib/aiGuard.js";
 import { checkInputBudget, textChars, INPUT_TOO_LARGE_CODE } from "./_lib/aiInputBudget.js";
 import { CONTENT_LANGUAGES, contentLangOf, isContentLanguage, sameNumbers, translationPayload } from "../shared/recipeLocales.js";
@@ -350,7 +350,10 @@ async function translateTitles(uid, target, guard) {
 // alan c:<sürüm>:<sha1(dil + ad)>) kalır: aynı ad bir kez çevrilir. Kişi adı (parantez)
 // istemcide eklenir, çeviriye hiç gitmez.
 export const CATEGORY_TRANSLATE_MAX = 60;
-const categoryField = (lang, name) => `c:${PROMPT_VERSION}:${sha("sha1", `${lang}\n${name}`)}`;
+// Kategori çevirisinin kendi sürümü (tarif/başlık önbelleği etkilenmesin). v3: tekil/çoğul
+// korunur ("Çorba" → "Soup", "Çorbalar" → "Soups"); v2'nin çoğullaştırdığı kayıtlar kullanılmaz.
+const CATEGORY_PROMPT_VERSION = "v3";
+const categoryField = (lang, name) => `c:${CATEGORY_PROMPT_VERSION}:${sha("sha1", `${lang}\n${name}`)}`;
 export const categoryTranslationKey = (lang, name) => `${lang}\n${name}`;
 
 async function translateCategories(uid, target, guard) {
@@ -368,7 +371,9 @@ async function translateCategories(uid, target, guard) {
   for (const list of buckets) {
     for (const r of list) {
       const ref = cleanCategoryRef(r && r.categoryRef);
+      // Bağsız (eski) özel kategoriler Türkçe kabul edilir (istemcideki categoryOf ile aynı).
       if (ref) add(r.category, ref.lang);
+      else if (r && isAcceptableRecipeCategory(r.category)) add(r.category, "tr");
     }
   }
   const result = {};
@@ -385,7 +390,7 @@ async function translateCategories(uid, target, guard) {
   if (batch.length) {
     await guardTranslation(guard);
     const { json } = await callClaude({
-      system: `${systemPrompt(target)}\n- The input is a list of recipe category names (section titles a user created, e.g. "Çorbalar", "Meal Prep"). Translate each one into a short, natural ${CONTENT_LANGUAGES[target].name} category name; keep proper names as they are. Return the same number of names in the same order, in "titles".`,
+      system: `${systemPrompt(target)}\n- The input is a list of recipe category names (section titles a user created). Translate each one into ${CONTENT_LANGUAGES[target].name} as literally as natural wording allows. Keep the grammatical number exactly: a singular name stays singular and a plural name stays plural (e.g. "Çorba" → "Soup", "Çorbalar" → "Soups"; "Soup" → "Çorba", "Soups" → "Çorbalar"). Do not add, drop or explain words, and keep proper names as they are. Return the same number of names in the same order, in "titles".`,
       userText: `<recipe>\n${JSON.stringify({ titles: batch.map(([, w]) => w.name) })}\n</recipe>`,
       schema: TITLES_SCHEMA,
     });
