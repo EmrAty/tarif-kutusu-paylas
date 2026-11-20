@@ -4,7 +4,7 @@ Dal: `feature/rename-multi-target-move` (temel: production `9d97c8f`). Main'e al
 
 ## Model (bağımsız kopyalar)
 Her listedeki kayıt **ayrı** bir tariftir. Kişisel kayıt asıl kimliği (`id`) taşır; her aile kopyası asıl kimlikten türetilen kendi kimliğini alır: `<id>-fam-<aileId>` (`shared/recipeIds.js`, istemci ve sunucu ortak). Sonuç:
-- Ailede düzenleme/silme kişisel tarifi etkilemez, kişiseldeki işlemler aile kopyasını etkilemez; kart listesinde her kopya ayrı kart olarak görünür.
+- Ailede düzenleme/silme kişisel tarifi etkilemez, kişiseldeki işlemler aile kopyasını etkilemez. (20 Kasım: genel listede aynı bölümdeki kopyalar tek kart; **tarif adı kopyalar arasında ortak** — ad değişince yazılabilen bütün kopyalarda değişir, içerik/silme yine yalnız seçili kopyada. Bkz. `docs/kategori-puf-elimde.md` 3. tur.)
 - Kimlik türetildiği (rastgele olmadığı) için "Tekrar dene" ve ikinci kopyalama aynı kimliği üretir → hedefte zaten varsa liste değişmez (kopya çoğalmaz). AI'a yeniden gidilmez.
 - "Kopyala" = içerik aile kopyası kimliğiyle aileye eklenir. "Taşı" = önce aileye yaz, seçilen **her** aileye yazıldıysa kişisel kaydı kaldır.
 - Kayıttan sonra açılan / bildirimdeki tarif: kişisele yazıldıysa kişisel kayıt, değilse ilk aile kopyası.

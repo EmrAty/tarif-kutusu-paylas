@@ -57,6 +57,30 @@ Testler: `shared/categories.test.mjs`, `src/recipeGroups.test.mjs`, `src/recipeT
 5. Tarife basılı tut: aile tarifinde "Canının çektiğini bildir" eskisi gibi; altında "Aileye taşı veya kopyala" → tarif ekranı panel açık gelir.
 6. "Tarifi Düzenle": ayrı ekran, en üstte; Android geri ve Vazgeç → tarif; Kaydet → tarif. Püf noktası alanı yazdıkça büyüyor, tutamaç yok, klavye açıkken imleç görünür. Ardından (ertelenen) püf noktası silme + İngilizce çeviri kontrolü.
 
+## 3. tur: telefon dipnotları (20 Kasım 2026, akşam)
+Kök nedenler yerel test sunucusunda (gerçek `/api/*` uçları + bellek içi Redis + gerçek React, 390 px) yeniden üretildi, düzeltmeden sonra aynı akışla doğrulandı.
+
+1. **Kategori sahibinin adı yok.** Yeni kayıtlar `categoryRef` taşıyor ve "Çorba (Emre)" doğru çıkıyordu; ad, **bağsız** aile tariflerinde (d2254df döneminde kaydedilen ya da o dönemin kişisel tariflerinden kopyalanan) çıkmıyordu. Bunlar diğer üyede sahipsiz ya da üyenin aynı adlı kendi kategorisine bağlı görünüyordu. Şimdi: bağsız aile tarifinin sahibi, ekleyenin adının (`addedBy`) o ailenin üye listesindeki **tek** eşleşmesi (`shared/categories.js legacyCategoryRef`; belirsizse eski davranış). Kimlik: aynı listede o üyenin aynı adlı bağlı tarifi varsa onunki, yoksa d2254df metin kategorisinin sabit kimliği. Kayıtlar değişmez (okunurken türetilir). Liste, kayıt seçicisi (kova kayıtları artık listesini biliyor) ve paylaşım paneli (`GET /api/profile?familyCategories=1`) aynı kuralı kullanır. Bağsız kişisel tarif aileye kopyalanırken/taşınırken sahibin bağı kopyaya yazılır.
+2. **Çeviri.** Prompt tekil/çoğulu korur ("Çorba" → "Soup", "Çorbalar" → "Soups"); kategori önbelleği kendi sürümüyle `c:v3:` (v2'nin çoğullaştırdığı kayıtlar kullanılmaz → her kullanıcıda kategori adları için bir kez yeni çeviri; tarif/başlık önbelleği etkilenmez). Bağsız özel adlar da çevrilir. "Kategorilerin" penceresi çeviriyi gösterir; `<html lang>` dile göre (İngilizcede "YOUR CATEGORİES" hatası). Asıl ad ve kimlik değişmez, kişi adı çevrilmez.
+3. **Aynı tarif iki kart.** Kök neden: "Tarifi Kendin Oluştur"da Kaydet kayıt sürerken kilitlenmiyordu; her basış `uid()` ile **yeni kimlikli** bir tarif yazıyordu → iki ayrı kayıt, ikisi de "Kişisel + Ev". (Gruplama doğruydu; aynı ada göre birleştirme yapılmadı.) Editörde kayıt bitene kadar düğme kapalı (ref + state) ve `handleManualSave` ikinci eşzamanlı çağrıyı yok sayar. Yeni Tarif Çıkar/inceleme zaten aynı kimliği yeniden kullanıyor; öneri kaydetme zaten kilitliydi.
+4. **Ortak ad (yeni karar).** Ad değişince (tarif ekranında ya da düzenleme ekranında) kullanıcının yazabildiği bütün kopyalarda değişir (`src/recipeTitles.js`): kopyalar türetilmiş kimlikle bulunur, adla değil. Kilitli kopyalar (Plus'ı kapalı aile, Free sınırı) yazılmaz, "kilitli olduğu için değişmedi" denir; yazılamayan kopya bantta "Tekrar dene" ile yalnızca kendisi yeniden denenir (kayıt yoksa yeniden oluşmaz). İçerik, favori, kategori ve silme yalnızca seçili kopyaya.
+5. **Taşı/kopyala kayboluyordu.** Panel yalnızca açık kayıt kişiselse görünüyordu; kopyalamadan sonra "Ev" kopyası seçilince ya da ekran aile kopyasına geçince kayboluyordu. Seçenekler artık **gruptan** hesaplanır (`transferOptions`): kişisel kopya varsa (hangi kopya seçili olursa olsun) Taşı / Taşımayı tamamla + kopyası olmayan ailelere Kopyala; yalnız aile kopyası kaldıysa kopyası olmayan diğer ailelere Kopyala (yeni kopya yine asıl kimlikten türetilir). Kopyası olan aileye yazılmaz; taşımayı tamamlama aile kopyasını sunucudan taze okuyarak doğrulamadan kişiseli silmez (değişmedi, testle korunuyor).
+6. **Basılı tutma.** "Aileye taşı veya kopyala" artık tarif ekranına gitmez: listenin üstünde, arkası bulanık küçük pencere (en çok 380 px, telefonda kenarlardan 16 px). Sonuç pencerede görünür; kopyaladıktan sonra "Taşımayı tamamla" aynı pencerede. Android geri tuşu pencereyi kapatır. "Canının çektiğini bildir" aynı, üstte.
+7. **Düğmeler.** Pişirmeye Başla, Tarifi Düzenle, Alışveriş Listesine Ekle, Aileye taşı veya kopyala: aynı genişlik/yükseklik (390 px'te 309×46), ikon + yazı ortada.
+
+Testler: `shared/categories.test.mjs` (+2), `test/categoriesTips.test.mjs` (+2: bağsız aile kategorisi, tekil/çoğul + v3 önbellek), `src/recipeTransfer.test.mjs` (+5), `src/recipeTitles.test.mjs` (3). `npm run check` 578 test yeşil. Çift basış, ortak ad, taşımayı tamamla, pencere ve İngilizce kategori akışları yerel test sunucusunda gerçek bileşenlerle denendi (Chrome ekran görüntüsü alınamadı; DOM ve ölçülerle).
+
+### 3. tur — yalnızca yeniden kontrol edilecekler
+1. Ayşe'nin telefonunda: Emre'nin eski "Çorbalar" tarifleri listede "Çorbalar (Emre)" bölümünde; Ayşe'nin kendi "Çorbalar"ı ayrı. Elle oluştur ve paylaşım panelinde Ev seçiliyken "Çorbalar (Emre)" çipi var.
+2. İngilizce: özel kategoriler tekil/çoğul doğru ("Çorba" → "Soup"), "Your categories" penceresinde de çevrili, kişi adı aynı. Türkçeye dön → asıl adlar.
+3. Elle oluştur → Kişisel + Ev → Kaydet'e hızlıca iki kez bas → listede tek kart "Kişisel + Ev".
+4. O tarifte Ev kopyasını seç → düzenle: adı ve bir miktarı değiştir → kişiselde ad değişti, miktar değişmedi. Bir kopyayı sil → diğeri kalır.
+5. Kişisel tarifi Kopyala → düğme kalıyor; Ev kopyasını seç → "Aileye taşı veya kopyala" hâlâ var → "Taşımayı tamamla" → aile kopyası düzenlenmiş hâliyle tek kopya.
+6. Listede kişisel tarife basılı tut → "Aileye taşı veya kopyala" → bulanık arka planlı pencere; Kopyala, ardından Taşımayı tamamla; geri tuşu pencereyi kapatıyor.
+7. Tarif ekranında dört düğme aynı boyda.
+
+Hâlâ bekleyen (hata olarak doğrulanmadı): "Tarif hazır → Geri dön → aynı girdilerle yeniden çıkar".
+
 ## Telefonda denenecekler (1. tur, Preview bu dala bağlandıktan sonra)
 1. Menü: "Tarifi Kendin Oluştur" en üstte sarı, "Yeni Tarif Çıkar" altında beyaz; ikisi de doğru ekranı açıyor.
 2. "Yeni Kategori Oluştur" → "Kahvaltı" ya da "Breakfast" reddedilir; "Çorbalar" eklenir, listede boş bölüm olarak görünür; boşken silinebilir.
