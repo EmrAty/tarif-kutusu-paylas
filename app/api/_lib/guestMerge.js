@@ -57,6 +57,7 @@ import { mutateBucket, readBucket, parseListOrThrow, bucketAuxKeys } from "./ver
 import { checkRecipeList } from "./recipeInput.js";
 import { BUCKET_LIMITS, byteSize } from "./bucketLimits.js";
 import { getProfile, updateProfile, MAX_FAMILIES } from "./profile.js";
+import { normalizeCustomCategories } from "../../shared/categories.js";
 import {
   readFamilyState,
   isFamilyDeleting,
@@ -587,6 +588,16 @@ async function runSteps(guestUid, targetUid) {
       }
       throw e;
     });
+    // Misafirin açtığı özel kategoriler hedef hesabın listesine eklenir (birleşim;
+    // tekrar çalıştırılırsa değişiklik yok). Tarifler kategorilerini zaten taşır.
+    const guestCategories = normalizeCustomCategories(guestProfile.categories);
+    if (guestCategories.length) {
+      await assertTargetAlive(targetUid);
+      await updateProfile(targetUid, (p) => {
+        const merged = normalizeCustomCategories([...normalizeCustomCategories(p.categories), ...guestCategories]);
+        return sameData(merged, p.categories) ? undefined : { ...p, categories: merged };
+      });
+    }
     for (const id of guestProfile.families) {
       await assertTargetAlive(targetUid);
       const outcome = await transferFamily(guestUid, targetUid, id);
@@ -791,4 +802,8 @@ export async function deleteOwnMergeState(guestUid) {
   const keys = [stateKey(guestUid), ...bucketAuxKeys(stateKey(guestUid)), lockKey(guestUid)];
   if (state?.ticketHash && !state.targetUid) keys.push(ticketKey(state.ticketHash));
   await redisCommand(["DEL", ...keys]);
+}
+
+function sameData(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b);
 }

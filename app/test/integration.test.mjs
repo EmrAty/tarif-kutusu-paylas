@@ -214,7 +214,8 @@ test("entegrasyon 3d: doğrulama/aynı video çıkışları kira bırakır; ikin
   reset();
   const uid = "I3D";
   db.set(`user:${uid}:profile`, JSON.stringify({ isPlus: true, families: [] }));
-  const bad = await invoke(recipeJobs, { uid, body: jobBody(50, { category: "Yok" }) });
+  // Özel kategoriler serbest ad olabildiği için geçersiz örnek: hazır kategorinin İngilizce etiketi.
+  const bad = await invoke(recipeJobs, { uid, body: jobBody(50, { category: "Breakfast" }) });
   assert.equal(bad.status, 400);
   assert.equal(inflight(uid), 0);
 

@@ -20,6 +20,7 @@ SADECE ve SADECE aşağıdaki şemaya uyan HAM JSON döndür. Markdown yok, aç�
   "difficulty": string, // "Kolay", "Orta" veya "Zor" değerlerinden biri
   "ingredients": [ { "name": string, "amount": string, "group": string, "estimated": boolean } ],
   "instructions": [ string ],
+  "tips": [ string ],
   "nutrition": {
     "calories": number,
     "protein_g": number,
@@ -73,6 +74,8 @@ ADLANDIRMA VE DİL (malzeme adları, başlık ve yapılış adımları için):
 - Tam karşılığı OLMAYAN malzemeyi başka bir malzemeye DÖNÜŞTÜRME: bacon pastırma değildir ("Bacon" yaz), flank steak bonfile değildir ("Flank steak" yaz), ciabatta, brioche, havarti, parmigiano reggiano, Worcestershire sosu, sriracha gibi ekmek/peynir/sos çeşitleri, et kesimleri, marka ve ürün adları orijinal adıyla kalır.
 - Aynı malzemeyi iki dilde tekrar yazma ("Pastırma (bacon)", "Flank bonfile (flank steak)" gibi). Parantezi yalnızca doğru ürünü alabilmek için gerçekten gereken kısa bilgi için kullan.
 - Başlık kısa ve doğal olsun; aynı kelimeyi iki dilde tekrarlama ("Biftekli Steak Sandviç" değil "Steak Sandviç"), parantez içinde uzun malzeme listesi yazma.
+
+PÜF NOKTALARI ("tips"): kaynakta AÇIKÇA geçen ipuçları, püf noktaları, uyarılar ve servis/saklama önerileri ("hamuru en az 30 dakika dinlendirin", "tava iyice ısınmadan eti koymayın", "buzdolabında 3 gün saklanır"). Her öğe kısa, tek başına anlaşılır bir cümle olsun; kaynaktaki sayıları ve ölçüleri aynen koru. Yapılış adımlarına zaten yazdığın bir talimatı aynen tekrar etme. Kaynakta böyle bir ipucu YOKSA boş dizi döndür. Kendi bilgine dayanan öneri, alternatif ya da tavsiye EKLEME; senin tahminlerin ve notların yalnızca "assumptions" alanına girer, "tips" alanına asla.
 
 Yapılış adımları verilmemişse "instructions" alanını boş dizi olarak döndür, uydurma. "prep_time_minutes" ve "difficulty" belirtilmemişse tarifin niteliğine göre makul bir tahmin yap. `;
 

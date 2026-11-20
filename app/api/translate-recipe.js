@@ -41,7 +41,7 @@ const PROMPT_VERSION = "v2";
 export const TRANSLATE_INPUT_LIMITS = {
   maxTotalChars: 16_000,
   fields: { title: 300, assumptions: 4_000, servings_note: 2_000 },
-  arrays: { ingredients: 150, instructions: 120 },
+  arrays: { ingredients: 150, instructions: 120, tips: 30 },
 };
 // Liste başlıkları modu: tek başlık en çok 300 karakter (daha uzunu Claude'a
 // gönderilmez, asıl hâliyle kalır), tek çağrıdaki başlıkların toplamı en çok 8 bin.
@@ -78,7 +78,8 @@ Rules:
 - Use the ingredient name a home cook in the target language actually uses (into Turkish: honey -> bal, buttermilk -> yayık ayranı, heavy cream -> krema). If there is no exact equivalent, keep the original name instead of substituting a different ingredient (bacon is not pastırma, flank steak is not bonfile; bread, cheese and sauce varieties, cuts of meat, brand and product names stay as they are). Do not write the same ingredient in two languages ("Pastırma (bacon)").
 - "groups" (if present) are section titles of the ingredient list ("Sauce", "Spice mix"); translate each one, same count and order.
 - Keep brand and product names, and URLs, unchanged.
-- "servings_note" explains how a serving count was calculated; translate it faithfully and keep every number and unit.`;
+- "servings_note" explains how a serving count was calculated; translate it faithfully and keep every number and unit.
+- "tips" (if present) are cooking tips from the original source; translate each one, same count and order, without adding advice of your own.`;
 }
 
 const RECIPE_SCHEMA = {
@@ -107,6 +108,13 @@ const RECIPE_SCHEMA_WITH_GROUPS = {
   properties: { ...RECIPE_SCHEMA.properties, groups: { type: "array", items: { type: "string" } } },
   required: [...RECIPE_SCHEMA.required, "groups"],
 };
+// Püf noktası olan tarif için ek alan (yoksa şema ve önbellek anahtarı eskisiyle aynı).
+const TIPS_PROPERTY = { tips: { type: "array", items: { type: "string" } } };
+function recipeSchemaFor(payload) {
+  const base = payload.groups ? RECIPE_SCHEMA_WITH_GROUPS : RECIPE_SCHEMA;
+  if (!payload.tips) return base;
+  return { ...base, properties: { ...base.properties, ...TIPS_PROPERTY }, required: [...base.required, "tips"] };
+}
 const TITLES_SCHEMA = {
   type: "object",
   properties: { titles: { type: "array", items: { type: "string" } } },
@@ -179,6 +187,15 @@ export function validateTranslation(payload, out) {
     assumptions: payload.assumptions && text(out.assumptions) && sameNumbers(payload.assumptions, out.assumptions) ? text(out.assumptions) : payload.assumptions,
     servings_note:
       payload.servings_note && text(out.servings_note) && sameNumbers(payload.servings_note, out.servings_note) ? text(out.servings_note) : payload.servings_note,
+    // Püf noktaları: sayı ve sıra aynı olmalı; sayısı değişen öğe asıl metinle kalır.
+    ...(Array.isArray(payload.tips) && payload.tips.length
+      ? {
+          tips: payload.tips.map((src, i) => {
+            const tip = Array.isArray(out.tips) && out.tips.length === payload.tips.length ? text(out.tips[i]) : "";
+            return tip && sameNumbers(src, tip) ? tip : src;
+          }),
+        }
+      : {}),
     ...(Array.isArray(payload.groups) && payload.groups.length
       ? {
           groups: payload.groups.map((src, i) => {
@@ -239,7 +256,7 @@ async function translateOne(uid, { recipeId, scope, target }, guard) {
   const { json, usage } = await callClaude({
     system: systemPrompt(target),
     userText: `<recipe>\n${JSON.stringify(payload)}\n</recipe>`,
-    schema: payload.groups ? RECIPE_SCHEMA_WITH_GROUPS : RECIPE_SCHEMA,
+    schema: recipeSchemaFor(payload),
   });
   const translation = validateTranslation(payload, json);
   if (!translation) throw Object.assign(new Error("Çeviri doğrulanamadı."), { status: 502 });

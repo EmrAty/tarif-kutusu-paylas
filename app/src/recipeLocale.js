@@ -202,6 +202,8 @@ export function contentFingerprint(recipe) {
     recipe.instructions || [],
     recipe.assumptions || "",
     recipe.servings_note || "",
+    // Püf noktası yoksa eklenmez: eski tariflerin parmak izi değişmez.
+    ...(Array.isArray(recipe.tips) && recipe.tips.length ? [recipe.tips] : []),
   ]);
   let h = 2166136261; // FNV-1a
   for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619);
@@ -232,6 +234,7 @@ export function localizeRecipe(recipe, lang, { translation, title } = {}) {
     });
     if ((translation.instructions || []).length === (recipe.instructions || []).length) out.instructions = translation.instructions;
     if (translation.assumptions) out.assumptions = translation.assumptions;
+    if (Array.isArray(translation.tips) && Array.isArray(recipe.tips) && translation.tips.length === recipe.tips.length) out.tips = translation.tips;
   }
   if (translation.servings_note) out.servings_note = translation.servings_note;
   return out;

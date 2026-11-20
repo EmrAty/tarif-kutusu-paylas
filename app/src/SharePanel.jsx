@@ -4,6 +4,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "./firebase.js";
 import { COLORS, SERIF, BODY, uid, storageGet, authedFetch, fetchCaption } from "./App.jsx";
 import { CATEGORIES } from "../shared/recipeExtraction.js";
+import { normalizeCustomCategories } from "../shared/categories.js";
 import { useLanguage } from "./i18n.jsx";
 
 // Android paylaşım paneli. Native ShareActivity, kaynak uygulamanın (TikTok vb.)
@@ -65,6 +66,9 @@ export default function SharePanel() {
   const [fetchingCaption, setFetchingCaption] = useState(false);
   const [captionError, setCaptionError] = useState("");
   const [category, setCategory] = useState("");
+  // Kullanıcının kendi kategorileri (profil). Alınamazsa yalnızca sabit kategoriler.
+  // Yeni kategori panelde değil, uygulamada oluşturulur (panel sade kalsın).
+  const [customCategories, setCustomCategories] = useState([]);
   const [status, setStatus] = useState("idle"); // "idle" | "sending" | "sent"
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
@@ -106,6 +110,19 @@ export default function SharePanel() {
       .catch(() => {
         if (!cancelled) setFamilyInfo({ status: "error", families: [] });
       });
+    return () => {
+      cancelled = true;
+    };
+  }, [authUser]);
+
+  useEffect(() => {
+    if (!authUser) return;
+    let cancelled = false;
+    authedFetch("/api/profile")
+      .then((data) => {
+        if (!cancelled) setCustomCategories(normalizeCustomCategories(data && data.categories));
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -322,7 +339,7 @@ export default function SharePanel() {
 
       <label style={labelStyle}>{t("addForm.categoryLabel")}</label>
       <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "16px" }}>
-        {CATEGORIES.map((cat) => {
+        {[...CATEGORIES, ...customCategories].map((cat) => {
           const selected = category === cat;
           return (
             <button
@@ -338,6 +355,10 @@ export default function SharePanel() {
                 background: selected ? COLORS.forest : "transparent",
                 color: selected ? "#F3EFE6" : COLORS.inkSoft,
                 cursor: "pointer",
+                maxWidth: "100%",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
               }}
             >
               {categoryLabel(cat)}

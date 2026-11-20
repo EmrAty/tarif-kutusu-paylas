@@ -2,6 +2,7 @@ import { recipeSystemPrompt, buildRecipeUserText } from "../../shared/recipeExtr
 import { DEFAULT_CONTENT_LANG, isContentLanguage } from "../../shared/recipeLocales.js";
 import { extractionModel } from "../../shared/extractModel.js";
 import { normalizeExtractedIngredients } from "../../shared/ingredientText.js";
+import { withTips } from "../../shared/recipeTips.js";
 import {
   applyPortionEstimate,
   PORTION_DISH_TYPES,
@@ -47,6 +48,8 @@ const RECIPE_SCHEMA = {
       },
     },
     instructions: { type: "array", items: { type: "string" } },
+    // Yalnızca kaynakta yazan püf noktaları (modelin kendi notu "assumptions"ta); bkz. shared/recipeTips.js.
+    tips: { type: "array", items: { type: "string" } },
     nutrition: {
       type: "object",
       properties: {
@@ -87,7 +90,7 @@ const RECIPE_SCHEMA = {
       additionalProperties: false,
     },
   },
-  required: ["title", "servings", "servings_unit", "suggested_servings", "prep_time_minutes", "difficulty", "ingredients", "instructions", "nutrition", "assumptions", "portion"],
+  required: ["title", "servings", "servings_unit", "suggested_servings", "prep_time_minutes", "difficulty", "ingredients", "instructions", "tips", "nutrition", "assumptions", "portion"],
   additionalProperties: false,
 };
 
@@ -199,5 +202,7 @@ export async function extractRecipe({ link, caption = "", notes = "", images = [
   // Malzeme metni kayıttan önce deterministik temizlenir ("belirtilmemiş, tahminen 45 g" →
   // "45 g" + estimated); boş grup/false bayrak kayda yazılmaz (bkz. shared/ingredientText.js).
   const ingredients = normalizeExtractedIngredients(recipe.ingredients, lang);
-  return { recipe: { ...applyPortionEstimate({ ...recipe, ingredients }), content_lang: lang }, usage: data.usage, stopReason: data.stop_reason, model };
+  // Püf noktaları temizlenir; boşsa alan kayda yazılmaz.
+  const withCleanTips = withTips(recipe, recipe.tips);
+  return { recipe: { ...applyPortionEstimate({ ...withCleanTips, ingredients }), content_lang: lang }, usage: data.usage, stopReason: data.stop_reason, model };
 }

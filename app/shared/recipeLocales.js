@@ -10,7 +10,7 @@ export const CONTENT_LANGUAGES = {
   en: {
     name: "English",
     extractInstruction:
-      "Kullanıcıya görünen TÜM metinler (başlık, malzeme adları, malzeme miktarlarının yazılışı, yapılış adımları, assumptions) İngilizce olsun; kaynak başka dilde olsa bile İngilizceye çevir. Sayıları ASLA değiştirme. Birimleri doğal İngilizceyle yaz (\"yemek kaşığı\" → \"tbsp\", \"çay kaşığı\" → \"tsp\", \"diş\" → \"clove\"); \"adet\" kelimesini hiç yazma (\"2 adet\" → \"2\"); Türk bardak ölçülerini \"cup\" diye YAZMA, \"glass (200 ml)\" (su bardağı) ve \"tea glass (100 ml)\" (çay bardağı) yaz.",
+      "Kullanıcıya görünen TÜM metinler (başlık, malzeme adları, malzeme miktarlarının yazılışı, yapılış adımları, püf noktaları, assumptions) İngilizce olsun; kaynak başka dilde olsa bile İngilizceye çevir. Sayıları ASLA değiştirme. Birimleri doğal İngilizceyle yaz (\"yemek kaşığı\" → \"tbsp\", \"çay kaşığı\" → \"tsp\", \"diş\" → \"clove\"); \"adet\" kelimesini hiç yazma (\"2 adet\" → \"2\"); Türk bardak ölçülerini \"cup\" diye YAZMA, \"glass (200 ml)\" (su bardağı) ve \"tea glass (100 ml)\" (çay bardağı) yaz.",
   },
 };
 export const DEFAULT_CONTENT_LANG = "tr";
@@ -51,6 +51,8 @@ export function translationPayload(recipe, target) {
   // Bölüm adları ("Sos", "Kaplama") ayrı bir listede çevrilir. Bölümü olmayan (eski) tarifte
   // anahtar hiç eklenmez: çevrilecek metin, dolayısıyla önbellek anahtarı eskisiyle aynı kalır.
   const groups = contentNeeds ? groupNamesOf(ingredients) : [];
+  // Püf noktaları da aynı kural: alan yoksa anahtar eklenmez (eski önbellek anahtarı korunur).
+  const tips = contentNeeds && Array.isArray(recipe.tips) ? recipe.tips.filter((t) => typeof t === "string" && t.trim()) : [];
   return {
     title: contentNeeds ? str(recipe.title) : "",
     ingredients: contentNeeds ? ingredients.map((i) => ({ name: str(i && i.name), amount: str(i && i.amount) })) : [],
@@ -58,6 +60,7 @@ export function translationPayload(recipe, target) {
     instructions: contentNeeds ? instructions.map(str) : [],
     assumptions: contentNeeds ? str(recipe.assumptions) : "",
     servings_note: noteNeeds ? str(recipe.servings_note) : "",
+    ...(tips.length ? { tips } : {}),
   };
 }
 

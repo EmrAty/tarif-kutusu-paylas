@@ -14,7 +14,7 @@ import { isTikTokLink, tiktokTranscript } from "./_lib/tiktok.js";
 import { notifyText, failedBody } from "./_lib/jobNotifyText.js";
 import { parseSocialUrl, SUPPORTED_LINK_MESSAGE } from "./_lib/socialUrl.js";
 import { guardAiRequest, reserveAiBudget, sendGuardError, deferResponse, checkDataWriteLimit, clientIp } from "./_lib/aiGuard.js";
-import { CATEGORIES } from "../shared/recipeExtraction.js";
+import { isAcceptableRecipeCategory } from "../shared/categories.js";
 import { recipeForFamily, familyCopyId } from "../shared/recipeIds.js";
 import { DEFAULT_CONTENT_LANG, isContentLanguage } from "../shared/recipeLocales.js";
 
@@ -621,7 +621,8 @@ async function handlePost(req, res, user) {
     res.status(400).json({ error: "Açıklama çok uzun." });
     return;
   }
-  if (!CATEGORIES.includes(category)) {
+  // Sabit kategori ya da kullanıcının özel kategorisi (temiz ad; bkz. shared/categories.js).
+  if (!isAcceptableRecipeCategory(category)) {
     res.status(400).json({ error: "Yemeğin hangi kategoriye ait olduğunu seçmen lazım." });
     return;
   }

@@ -5,6 +5,7 @@ import {
   ChefHat, Plus, Minus, Link2, ExternalLink, Trash2, Loader2, ArrowLeft, ArrowRight, AlertCircle,
   FileText, Pencil, Check, ChevronDown, Star, Search, ShoppingCart, Clock, Gauge, Undo2, X, Package, Download,
   Mail, LogOut, Users, Crown, Settings, UserCircle, Copy, Sparkles, LogIn, Bell, Info, Lock, RefreshCw, MoreHorizontal,
+  Lightbulb, FolderPlus,
 } from "lucide-react";
 import { auth, googleProvider, retireWebPush } from "./firebase.js";
 import {
@@ -29,6 +30,9 @@ import ShareReceiver from "./capacitorShare.js";
 import NativeSplash from "./capacitorSplash.js";
 import { scaleIngredient, FRACTION_GLYPHS, scaleNutrition, perServingNutrition, baseServingsOf, maxServingsFor, MIN_SERVINGS } from "./servings.js";
 import { CATEGORIES } from "../shared/recipeExtraction.js";
+import { categoryKey, categorySections, sectionOf, cleanCategoryName, validateNewCategory, normalizeCustomCategories, CATEGORY_NAME_MAX } from "../shared/categories.js";
+import { tipsOf, normalizeTips } from "../shared/recipeTips.js";
+import { matchRecipes } from "./pantryMatch.js";
 import { MAX_IMAGES, validateImageBatch } from "../shared/imageLimits.js";
 import { compressImageFile } from "./imageCompress.js";
 import { FREE_RECIPE_LIMIT, FREE_LIMIT_ERROR_CODE } from "../shared/limits.js";
@@ -39,7 +43,7 @@ import { appUpdateGate, clientOutdatedError, reloadForUpdate, reloadDidNotHelp, 
 import { serverErrorKey, readErrorBody, classifyErrorResponse } from "./apiErrors.js";
 import { contentLangOf, translationPayload } from "../shared/recipeLocales.js";
 import { localizeRecipe, displayIngredient, contentFingerprint, localizeAmount, approxText } from "./recipeLocale.js";
-import { presentRecipe, presentIngredients, groupRuns, hasEstimatedAmounts } from "./ingredientPresentation.js";
+import { presentRecipe, groupRuns, hasEstimatedAmounts } from "./ingredientPresentation.js";
 import { servingsUnitOf } from "../shared/portionEstimate.js";
 import { safeRecipeLink } from "../shared/safeLink.js";
 import { amountFlagsAfterEdit } from "../shared/ingredientText.js";
@@ -928,6 +932,10 @@ export default function TarifKutusu() {
   // takılsa bile Free hesabın fazla tarifleri açılmaz. Hiç bilinmiyorsa
   // (ilk açılış) kilit gösterilmez; Plus kullanıcıda yanlış kilit görünmesin.
   const [plusStatus, setPlusStatus] = useState(null);
+  // Kullanıcının kendi kategorileri (profil; bkz. shared/categories.js) ve
+  // "Yeni Kategori Oluştur" penceresi ({ onCreated } | null).
+  const [customCategories, setCustomCategories] = useState([]);
+  const [categoryModal, setCategoryModal] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [modalView, setModalView] = useState(null); // "account" | "families" | "plus" | "settings" | null
   // Free tarif sınırı dolunca yeni tarif eklemeye çalışınca açılan uyarı.
@@ -1114,8 +1122,10 @@ export default function TarifKutusu() {
     setPlusStatus(cached === "1" ? true : cached === "0" ? false : null);
     let cancelled = false;
     const epoch = plusEpochRef.current;
+    setCustomCategories([]);
     authedFetch("/api/profile")
       .then((data) => {
+        if (!cancelled) setCustomCategories(normalizeCustomCategories(data.categories));
         if (!cancelled && epoch === plusEpochRef.current) applyPlusStatus(!!data.isPlus);
       })
       .catch(() => {
@@ -1457,6 +1467,8 @@ export default function TarifKutusu() {
         CapacitorApp.minimizeApp();
       } else if (openRoundingSheet.close) {
         openRoundingSheet.close();
+      } else if (categoryModal) {
+        setCategoryModal(null);
       } else if (limitModalOpen) {
         setLimitModalOpen(false);
       } else if (languageModalOpenRef.current) {
@@ -1476,7 +1488,7 @@ export default function TarifKutusu() {
     return () => {
       if (listenerHandle) listenerHandle.remove();
     };
-  }, [view, menuOpen, modalView, limitModalOpen, closeActiveScreen, closeModal]);
+  }, [view, menuOpen, modalView, limitModalOpen, categoryModal, closeActiveScreen, closeModal]);
 
   // Yalnızca başarıyla yüklenmiş tarif kovaları (gösterim = onaylı veri +
   // bekleyen değişiklikler). Yüklenemeyen kova burada hiç yer almaz; boş liste
@@ -1707,6 +1719,24 @@ export default function TarifKutusu() {
     },
     [lockedIds, lockedFamilyRecipeIds]
   );
+
+  // Özel kategoriler. Liste profilde (sunucuda atomik); tarif kategorisini ad olarak
+  // taşır. Seçim yerlerinde: sabitler + kendi kategorilerim + kişisel tariflerimde
+  // geçen adlar (ör. misafirken açılıp taşınan). Aile üyesinin kategorisi yalnızca
+  // o aile tarifinin bölümü olarak görünür, benim seçim listeme girmez.
+  const categoryRequest = useCallback(async (action, name) => {
+    try {
+      const profile = await authedFetch("/api/profile", { method: "POST", body: { action, name } });
+      setCustomCategories(normalizeCustomCategories(profile && profile.categories));
+    } catch (e) {
+      if (e && typeof e.code === "string" && e.code.startsWith("category_")) throw new Error(t(`categories.error.${e.code}`, { max: CATEGORY_NAME_MAX }));
+      throw e;
+    }
+  }, [t]);
+  const pickerCategories = useMemo(() => categorySections(customCategories, recipeBuckets[PERSONAL] || []), [customCategories, recipeBuckets]);
+  const requestCreateCategory = useCallback((onCreated) => setCategoryModal({ onCreated: onCreated || null }), []);
+  const categoriesContext = useMemo(() => ({ pickerCategories, requestCreate: requestCreateCategory }), [pickerCategories, requestCreateCategory]);
+  const categoryRecipeCount = useCallback((cat) => recipes.filter((r) => r && categoryKey(r.category) === categoryKey(cat)).length, [recipes]);
 
   // Bildirime tıklanınca (native pushNotificationActionPerformed ya da web
   // ?openRecipe= query param) hedef tarif henüz yüklenmemiş olabilir - ailenin
@@ -2214,7 +2244,6 @@ export default function TarifKutusu() {
   const displayRecipes = useMemo(() => recipes.map(localizeForDisplay), [recipes, localizeForDisplay]);
   // Alışveriş listesi ve "Elimde Bunlar Var" malzemeyle çalışır; kilitli aile
   // kartlarının malzemesi zaten yok, hiç gösterilmezler.
-  const accessibleRecipes = useMemo(() => recipes.filter((r) => !r._lockedFamily), [recipes]);
   const accessibleDisplayRecipes = useMemo(() => displayRecipes.filter((r) => !r._lockedFamily), [displayRecipes]);
   const activeDisplay = useMemo(() => localizeForDisplay(active), [active, localizeForDisplay]);
   useEffect(() => {
@@ -2248,6 +2277,7 @@ export default function TarifKutusu() {
   }
 
   return (
+    <CategoriesContext.Provider value={categoriesContext}>
     <div
       style={{
         width: "100%",
@@ -2340,6 +2370,8 @@ export default function TarifKutusu() {
             isPlus={isPlus}
             familyNameById={familyNameById}
             isRecipeLocked={isRecipeLocked}
+            customCategories={customCategories}
+            onNewCategory={() => requestCreateCategory(null)}
             onSelect={(id) => {
               if (isRecipeLocked(id)) return;
               listScrollYRef.current = window.scrollY;
@@ -2500,12 +2532,12 @@ export default function TarifKutusu() {
           {view === "pantry" && (
             <div className={screenTransitionClass}>
               <PantryFinder
-                recipes={accessibleRecipes}
+                recipes={accessibleDisplayRecipes}
                 isPlus={isPlus}
                 families={families}
+                familyNameById={familyNameById}
                 isRecipeLocked={isRecipeLocked}
                 onSelectRecipe={openRecipe}
-                onOpenPlus={() => setModalView("plus")}
                 onSaveSuggestion={handleSavePantrySuggestion}
                 pantryModalOpenRef={pantryModalOpenRef}
                 pantryModalCloseRef={pantryModalCloseRef}
@@ -2812,7 +2844,23 @@ export default function TarifKutusu() {
           </button>
         </div>
       )}
+
+      {categoryModal && (
+        <CategoryCreateModal
+          customCategories={customCategories}
+          recipeCountOf={categoryRecipeCount}
+          onCreate={async (name) => {
+            await categoryRequest("addCategory", name);
+            const onCreated = categoryModal.onCreated;
+            setCategoryModal(null);
+            if (onCreated) onCreated(name);
+          }}
+          onRemove={(name) => categoryRequest("removeCategory", name)}
+          onClose={() => setCategoryModal(null)}
+        />
+      )}
     </div>
+    </CategoriesContext.Provider>
   );
 }
 
@@ -3348,7 +3396,7 @@ function scopeLabels(recipe, familyNameById, t) {
   return scopes.map((s) => (s === PERSONAL ? t("common.personal") : familyNameById?.[s] || t("families.fallbackName")));
 }
 
-function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus, familyNameById, isRecipeLocked, onSelect, onOpenPlus, onAdd, onManual, onPantry, onShopping, onToggleFavorite, onDelete, onSendNotification }) {
+function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus, familyNameById, isRecipeLocked, customCategories = [], onNewCategory, onSelect, onOpenPlus, onAdd, onManual, onPantry, onShopping, onToggleFavorite, onDelete, onSendNotification }) {
   const { t, language, categoryLabel } = useLanguage();
   const personalLoadFailed = !!loadProblems && loadProblems.failed.includes(PERSONAL);
   const failedFamilyNames = (loadProblems?.failed || []).filter((s) => s !== PERSONAL).map((s) => familyNameById[s] || s);
@@ -3401,9 +3449,12 @@ function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus,
   const q = query.trim().toLocaleLowerCase("tr");
   const matches = (r) => [r.title, r._origTitle].some((x) => (x || "").toLocaleLowerCase("tr").includes(q));
 
-  const byCategory = (cat) => recipes.filter((r) => (r.category || "Diğer") === cat && (!isSearching || matches(r)));
+  // Bölümler: 5 sabit kategori, kullanıcının kendi kategorileri, sonra tariflerde
+  // geçen diğer adlar (ör. aile üyesinin kategorisi). Kategorisiz tarifler "Diğer".
+  const sections = categorySections(customCategories, recipes);
+  const byCategory = (cat) => recipes.filter((r) => sectionOf(r, sections) === cat && (!isSearching || matches(r)));
   const favorites = recipes.filter((r) => r.isFavorite && (!isSearching || matches(r)));
-  const uncategorized = recipes.filter((r) => !CATEGORIES.includes(r.category) && (!isSearching || matches(r)));
+  const uncategorized = recipes.filter((r) => !sectionOf(r, sections) && (!isSearching || matches(r)));
   const listExpanded = isSearching ? true : listOpen;
 
   const renderRecipeButton = (r) => {
@@ -3722,7 +3773,7 @@ function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus,
                   </div>
                 )}
 
-                {CATEGORIES.map((cat) => {
+                {sections.map((cat) => {
                   const items = byCategory(cat);
                   if (isSearching && items.length === 0) return null;
                   const catOpen = isSearching ? true : !!openCats[cat];
@@ -3743,7 +3794,7 @@ function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus,
                           textAlign: "left",
                         }}
                       >
-                        <span style={{ fontSize: "13px", fontWeight: 600, color: COLORS.ink }}>
+                        <span style={{ fontSize: "13px", fontWeight: 600, color: COLORS.ink, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                           {categoryLabel(cat)} <span style={{ fontWeight: 400, color: COLORS.inkSoft }}>({items.length})</span>
                         </span>
                         <ChevronDown
@@ -3829,8 +3880,9 @@ function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus,
       </div>
 
 
+      {/* Sıra: "Tarifi Kendin Oluştur" en üstte ve ana (sarı) düğme; "Yeni Tarif Çıkar" onun eski yerinde, beyaz. */}
       <button
-        onClick={onAdd}
+        onClick={onManual}
         style={{
           width: "100%",
           display: "flex",
@@ -3848,12 +3900,12 @@ function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus,
           marginTop: "24px",
         }}
       >
-        <Plus size={16} strokeWidth={2.5} />
-        {t("sidebar.addRecipe")}
+        <Pencil size={15} strokeWidth={2.5} />
+        {t("sidebar.createManually")}
       </button>
 
       <button
-        onClick={onManual}
+        onClick={onAdd}
         style={{
           width: "100%",
           display: "flex",
@@ -3871,8 +3923,8 @@ function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus,
           marginTop: "8px",
         }}
       >
-        <Pencil size={15} />
-        {t("sidebar.createManually")}
+        <Plus size={16} strokeWidth={2.5} />
+        {t("sidebar.addRecipe")}
       </button>
 
       <button
@@ -3919,6 +3971,29 @@ function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus,
       >
         <Package size={16} />
         {t("sidebar.pantry")}
+      </button>
+
+      <button
+        onClick={onNewCategory}
+        style={{
+          width: "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: "8px",
+          padding: "10px 16px",
+          borderRadius: "8px",
+          fontSize: "14px",
+          fontWeight: 600,
+          background: COLORS.panel,
+          color: COLORS.ink,
+          border: `1px dashed ${COLORS.line}`,
+          cursor: "pointer",
+          marginTop: "8px",
+        }}
+      >
+        <FolderPlus size={16} />
+        {t("sidebar.newCategory")}
       </button>
 
     </aside>
@@ -4431,28 +4506,7 @@ function AddForm({ link, caption, notes, images, category, busy, error, setLink,
       <label style={labelStyle}>{t("addForm.categoryLabel")}</label>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "8px" }}>
-        {CATEGORIES.map((cat) => {
-          const selected = category === cat;
-          return (
-            <button
-              key={cat}
-              type="button"
-              onClick={() => setCategory(cat)}
-              style={{
-                padding: "8px 14px",
-                borderRadius: "9999px",
-                fontSize: "13px",
-                fontWeight: 600,
-                border: `1px solid ${selected ? COLORS.forest : COLORS.line}`,
-                background: selected ? COLORS.forest : "transparent",
-                color: selected ? "#F3EFE6" : COLORS.inkSoft,
-                cursor: "pointer",
-              }}
-            >
-              {categoryLabel(cat)}
-            </button>
-          );
-        })}
+        <CategoryChips value={category} onChange={setCategory} />
       </div>
 
       <SaveTargetPicker saveTargets={saveTargets} setSaveTargets={setSaveTargets} isPlus={isPlus} families={families} />
@@ -4894,6 +4948,8 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
   // "javascript:" vb. hiç bağlantıya dönüşmez; buton gizlenir).
   const link = safeRecipeLink(recipe.link);
   const servingsEstimated = isEstimatedServings(recipe);
+  // Kaynaktaki (ya da kullanıcının yazdığı) püf noktaları; modelin notları ayrı (assumptions).
+  const tips = tipsOf(recipe);
   const [editing, setEditing] = useState(false);
   // Ad düzenleme asıl (kayıtlı) başlık üzerinde; çeviri gösteriliyorsa bile kayda çeviri yazılmaz.
   const originalTitle = recipe._origTitle ?? title;
@@ -4928,7 +4984,8 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
     setEditing(false);
   };
 
-  const hasValidCategory = CATEGORIES.includes(category);
+  // Sabit ya da özel; yalnızca kategorisi hiç olmayan (eski) tarif uyarı gösterir.
+  const hasValidCategory = typeof category === "string" && category.trim() !== "";
   const scopeLabel = scopeLabels(recipe, familyNameById, t).join(" + ");
 
   // Tarif Detay kayıtlı tarifi gösterir; porsiyon seçimi ve ölçekleme Pişirme modunda.
@@ -5078,24 +5135,7 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
               {t("detail.noCategoryWarning")}
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-              {CATEGORIES.map((cat) => (
-                <button
-                  key={cat}
-                  onClick={() => onChangeCategory(cat)}
-                  style={{
-                    padding: "6px 12px",
-                    borderRadius: "9999px",
-                    fontSize: "12px",
-                    fontWeight: 600,
-                    border: `1px solid ${COLORS.forest}`,
-                    background: "transparent",
-                    color: COLORS.forest,
-                    cursor: "pointer",
-                  }}
-                >
-                  {categoryLabel(cat)}
-                </button>
-              ))}
+              <CategoryChips compact onChange={onChangeCategory} />
             </div>
           </div>
         )}
@@ -5214,6 +5254,12 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
               </ol>
             )}
           </ExpandableSection>
+
+          {tips.length > 0 && (
+            <ExpandableSection title={t("detail.tips")} badge={`${tips.length}`} defaultOpen>
+              <TipList tips={tips} />
+            </ExpandableSection>
+          )}
 
           {link && (
             <a
@@ -5688,6 +5734,19 @@ function RoundingInfoSheet({ name, pairs, onClose }) {
         <p style={{ fontSize: "12px", color: COLORS.inkSoft, margin: "12px 0 0", fontWeight: 400 }}>{t("rounding.nutritionNote")}</p>
       </div>
     </div>
+  );
+}
+
+function TipList({ tips }) {
+  return (
+    <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "10px" }}>
+      {tips.map((tip, i) => (
+        <li key={i} style={{ display: "flex", gap: "10px", fontSize: "14px", color: COLORS.ink }}>
+          <Lightbulb size={16} color={COLORS.mustardDark} style={{ flexShrink: 0, marginTop: "2px" }} />
+          <span>{tip}</span>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -6167,6 +6226,7 @@ function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setS
       ? initial.instructions.map((s) => ({ _key: uid(), text: s }))
       : [{ _key: uid(), text: "" }]
   );
+  const [tips, setTips] = useState(() => tipsOf(initial).map((text) => ({ _key: uid(), text })));
   const [calories, setCalories] = useState(initial?.nutrition?.calories != null ? String(initial.nutrition.calories) : "");
   const [protein, setProtein] = useState(initial?.nutrition?.protein_g != null ? String(initial.nutrition.protein_g) : "");
   const [carbs, setCarbs] = useState(initial?.nutrition?.carbs_g != null ? String(initial.nutrition.carbs_g) : "");
@@ -6205,6 +6265,9 @@ function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setS
   };
   const addInstruction = () => setInstructions((prev) => [...prev, { _key: uid(), text: "" }]);
   const removeInstruction = (key) => setInstructions((prev) => (prev.length > 1 ? prev.filter((s) => s._key !== key) : prev));
+  const updateTip = (key, value) => setTips((prev) => prev.map((x) => (x._key === key ? { ...x, text: value } : x)));
+  const addTip = () => setTips((prev) => [...prev, { _key: uid(), text: "" }]);
+  const removeTip = (key) => setTips((prev) => prev.filter((x) => x._key !== key));
 
   const handleSave = () => {
     if (!title.trim()) {
@@ -6258,6 +6321,11 @@ function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setS
       link: safeRecipeLink(link),
       ingredients: cleanIngredients,
       instructions: cleanInstructions,
+      // Boşsa alan kayıttan kalkar (undefined JSON'a yazılmaz).
+      tips: (() => {
+        const clean = normalizeTips(tips.map((x) => x.text));
+        return clean.length ? clean : undefined;
+      })(),
       nutrition: {
         calories: calories.trim() ? Number(calories) : undefined,
         protein_g: protein.trim() ? Number(protein) : undefined,
@@ -6292,27 +6360,7 @@ function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setS
 
         <label style={labelStyle}>{t("addForm.categoryLabel")}</label>
         <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "16px" }}>
-          {CATEGORIES.map((cat) => {
-            const selected = category === cat;
-            return (
-              <button
-                key={cat}
-                onClick={() => setCategory(cat)}
-                style={{
-                  padding: "8px 14px",
-                  borderRadius: "9999px",
-                  fontSize: "13px",
-                  fontWeight: 600,
-                  border: `1px solid ${selected ? COLORS.forest : COLORS.line}`,
-                  background: selected ? COLORS.forest : "transparent",
-                  color: selected ? "#F3EFE6" : COLORS.inkSoft,
-                  cursor: "pointer",
-                }}
-              >
-                {categoryLabel(cat)}
-              </button>
-            );
-          })}
+          <CategoryChips value={category} onChange={setCategory} extra={initial?.category} />
         </div>
 
         {isNew && <SaveTargetPicker saveTargets={saveTargets} setSaveTargets={setSaveTargets} isPlus={isPlus} families={families} />}
@@ -6489,6 +6537,54 @@ function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setS
       </div>
 
       <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", marginBottom: tips.length ? "14px" : "6px" }}>
+          <h3 style={{ fontFamily: SERIF, fontSize: "17px", color: COLORS.ink, margin: 0 }}>{t("detail.tips")}</h3>
+          <button
+            onClick={addTip}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "4px",
+              fontSize: "12px",
+              fontWeight: 600,
+              color: COLORS.forest,
+              background: "transparent",
+              border: "none",
+              cursor: "pointer",
+              flexShrink: 0,
+            }}
+          >
+            <Plus size={13} /> {t("editor.addTip")}
+          </button>
+        </div>
+        {tips.length === 0 ? (
+          <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: 0 }}>{t("editor.tipsHint")}</p>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+            {tips.map((tip) => (
+              <div key={tip._key} style={{ display: "flex", alignItems: "flex-start", gap: "8px" }}>
+                <Lightbulb size={16} color={COLORS.mustardDark} style={{ flexShrink: 0, marginTop: "12px" }} />
+                <textarea
+                  value={tip.text}
+                  onChange={(e) => updateTip(tip._key, e.target.value)}
+                  placeholder={t("editor.tipPlaceholder")}
+                  rows={2}
+                  style={{ ...inputStyle, flex: 1, resize: "vertical" }}
+                />
+                <button
+                  onClick={() => removeTip(tip._key)}
+                  aria-label={t("editor.removeTip")}
+                  style={{ padding: "8px", background: "transparent", border: "none", color: COLORS.danger, cursor: "pointer", flexShrink: 0, marginTop: "2px" }}
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>
         <h3 style={{ fontFamily: SERIF, fontSize: "17px", color: COLORS.ink, margin: "0 0 14px" }}>{t("editor.nutritionTitle")}</h3>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
           <div>
@@ -6563,17 +6659,8 @@ function normalizeText(s) {
   return (s || "").toLocaleLowerCase("tr").trim();
 }
 
-function ingredientIsAvailable(ingredientName, pantryItems) {
-  const norm = normalizeText(ingredientName);
-  if (!norm) return false;
-  return pantryItems.some((item) => {
-    const it = normalizeText(item);
-    if (!it) return false;
-    return norm.includes(it) || it.includes(norm);
-  });
-}
-
-function PantryFinder({ recipes, isPlus, families, isRecipeLocked, onSelectRecipe, onOpenPlus, onSaveSuggestion, pantryModalOpenRef, pantryModalCloseRef }) {
+// recipes: gösterim tarifleri (başlık/malzeme uygulama dilinde, çeviri varsa asıl ad `_canon`'da).
+function PantryFinder({ recipes, isPlus, families, familyNameById, isRecipeLocked, onSelectRecipe, onSaveSuggestion, pantryModalOpenRef, pantryModalCloseRef }) {
   const { t } = useLanguage();
   const [context, setContext] = useState(PERSONAL);
   // Seçili aile artık erişilebilir değilse (çıkarıldın / kilitlendi) kişisel
@@ -6671,20 +6758,27 @@ function PantryFinder({ recipes, isPlus, families, isRecipeLocked, onSelectRecip
     }
   };
 
-  const contextRecipes = recipes.filter((r) => (r._scopes || [r._scope]).includes(context));
-
-  const results = contextRecipes
-    .map((r) => {
-      // Eski kayıtta tek satıra yazılmış karışımlar ayrı malzeme sayılır; karışıma atıf sayılmaz.
-      const ingredients = presentIngredients(r.ingredients || []).filter((ing) => !ing._ref);
-      const total = ingredients.length;
-      const matched = ingredients.filter((ing) => ingredientIsAvailable(ing.name, items));
-      const missing = ingredients.filter((ing) => !ingredientIsAvailable(ing.name, items));
-      const ratio = total > 0 ? matched.length / total : 0;
-      return { recipe: r, total, matchedCount: matched.length, missing, ratio };
-    })
-    .filter((x) => x.total > 0 && x.matchedCount > 0)
-    .sort((a, b) => b.ratio - a.ratio || b.matchedCount - a.matchedCount);
+  // Kayıtlı tariflerle eşleşme tamamen cihazda (AI yok; bkz. src/pantryMatch.js).
+  // Erişilebilen BÜTÜN tarifler aranır (kişisel + Plus ile açık aileler). Kilitli
+  // tarifler (Free sınırı ya da kilitli aile) ve artık erişilemeyen ailelerin
+  // tarifleri hiç aranmaz: ne adı ne de eksik malzemesi gösterilir.
+  const results = useMemo(() => {
+    if (!loaded || loadFailed || items.length === 0) return [];
+    const entries = recipes
+      .filter((r) => r && !r._lockedFamily && !isRecipeLocked?.(r))
+      .map((r) => ({
+        recipe: r,
+        // Eski kayıtta tek satıra yazılmış karışımlar ayrı malzeme sayılır; karışıma atıf sayılmaz.
+        ingredients: (r.ingredients || [])
+          .filter((ing) => ing && !ing._ref && ing.name)
+          .map((ing) => ({ name: ing.name, names: [ing.name, ing._canon && ing._canon.name].filter(Boolean) })),
+      }));
+    return matchRecipes(entries, items);
+  }, [recipes, items, loaded, loadFailed, isRecipeLocked]);
+  const scopeText = (r) => {
+    const labels = scopeLabels(r, familyNameById, t).filter((l) => l !== t("common.personal"));
+    return labels.join(" + ");
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
@@ -6779,38 +6873,40 @@ function PantryFinder({ recipes, isPlus, families, isRecipeLocked, onSelectRecip
         )}
       </div>
 
-      {items.length > 0 && (
+      {items.length > 0 && loaded && !loadFailed && (
         <div>
+          <h3 style={{ fontFamily: SERIF, fontSize: "17px", color: COLORS.ink, margin: "0 0 10px", display: "flex", alignItems: "center", gap: "8px" }}>
+            <FileText size={16} color={COLORS.forest} />
+            {t("pantry.savedTitle")}
+          </h3>
           {results.length === 0 ? (
-            <div style={{ borderRadius: "10px", border: `1px dashed ${COLORS.line}`, padding: "24px", textAlign: "center" }}>
+            <div style={{ borderRadius: "10px", border: `1px dashed ${COLORS.line}`, padding: "16px", textAlign: "center" }}>
               <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: 0 }}>
                 {t("pantry.noMatches")}
               </p>
             </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-              {results.map(({ recipe, total, matchedCount, missing, ratio }) => {
-                const isFull = matchedCount === total;
-                const locked = !!isRecipeLocked?.(recipe);
+              {results.map(({ recipe, total, matchedCount, missing, complete }) => {
+                const where = scopeText(recipe);
                 return (
                   <button
                     key={recipe.id}
-                    onClick={() => (locked ? onOpenPlus?.() : onSelectRecipe(recipe.id))}
-                    aria-label={locked ? `${recipe.title || t("common.untitledRecipe")} — ${t("recipe.locked")}` : undefined}
+                    onClick={() => onSelectRecipe(recipe.id)}
                     style={{
-                      position: "relative",
-                      overflow: "hidden",
                       textAlign: "left",
                       borderRadius: "10px",
-                      border: `1px solid ${isFull ? COLORS.forest : COLORS.line}`,
+                      border: `1px solid ${complete ? COLORS.forest : COLORS.line}`,
                       background: COLORS.panel,
-                      padding: "16px",
+                      padding: "14px 16px",
                       cursor: "pointer",
                     }}
                   >
-                    {locked && <LockedOverlay size={24} />}
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", marginBottom: missing.length > 0 ? "8px" : 0 }}>
-                      <div style={{ fontFamily: SERIF, fontSize: "16px", color: COLORS.ink }}>{recipe.title || t("common.untitledRecipe")}</div>
+                    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "12px" }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontFamily: SERIF, fontSize: "16px", color: COLORS.ink, overflowWrap: "anywhere" }}>{recipe.title || t("common.untitledRecipe")}</div>
+                        {where && <div style={{ fontSize: "11px", color: COLORS.inkSoft, marginTop: "2px" }}>{where}</div>}
+                      </div>
                       <span
                         style={{
                           flexShrink: 0,
@@ -6818,16 +6914,17 @@ function PantryFinder({ recipes, isPlus, families, isRecipeLocked, onSelectRecip
                           fontWeight: 700,
                           padding: "4px 10px",
                           borderRadius: "9999px",
-                          background: isFull ? COLORS.forest : "#EFE9D8",
-                          color: isFull ? "#F3EFE6" : COLORS.mustardDark,
+                          background: complete ? COLORS.forest : "#EFE9D8",
+                          color: complete ? "#F3EFE6" : COLORS.mustardDark,
+                          whiteSpace: "nowrap",
                         }}
                       >
-                        {isFull ? t("pantry.fullMatch") : t("pantry.partialMatch", { matched: matchedCount, total })}
+                        {complete ? t("pantry.fullMatch") : t("pantry.partialMatch", { matched: matchedCount, total })}
                       </span>
                     </div>
                     {missing.length > 0 && (
-                      <div style={{ fontSize: "12px", color: COLORS.inkSoft }}>
-                        {t("pantry.missing", { list: missing.map((m) => m.name).join(", ") })}
+                      <div style={{ fontSize: "12px", color: COLORS.ink, marginTop: "8px" }}>
+                        <strong style={{ color: COLORS.danger }}>{t("pantry.missingLabel")}</strong> {missing.map((m) => m.name).join(", ")}
                       </div>
                     )}
                   </button>
@@ -6977,6 +7074,219 @@ function FreeLimitModal({ onUpgrade, onClose }) {
   );
 }
 
+// Özel kategoriler (bkz. shared/categories.js). Seçim yapılan her yer (Yeni Tarif
+// Çıkar, elle oluşturma/düzenleme, kategorisiz tarif uyarısı, öneri kaydetme) aynı
+// listeyi bu context'ten okur: sabitler + kullanıcının kendi kategorileri + kişisel
+// tariflerinde geçen adlar. "+ Yeni" çipi aynı oluşturma penceresini açar.
+const CategoriesContext = React.createContext({ pickerCategories: CATEGORIES, requestCreate: null });
+
+function CategoryChips({ value, onChange, extra, compact }) {
+  const { categoryLabel, t } = useLanguage();
+  const { pickerCategories, requestCreate } = React.useContext(CategoriesContext);
+  // Düzenlenen tarifin kategorisi listede yoksa (ör. başka üyenin aile kategorisi) yine seçili görünür.
+  const options = extra && !pickerCategories.some((c) => categoryKey(c) === categoryKey(extra)) ? [...pickerCategories, extra] : pickerCategories;
+  const chip = (selected) => ({
+    padding: compact ? "6px 12px" : "8px 14px",
+    borderRadius: "9999px",
+    fontSize: compact ? "12px" : "13px",
+    fontWeight: 600,
+    border: `1px solid ${selected || compact ? COLORS.forest : COLORS.line}`,
+    background: selected ? COLORS.forest : "transparent",
+    color: selected ? "#F3EFE6" : compact ? COLORS.forest : COLORS.inkSoft,
+    cursor: "pointer",
+    maxWidth: "100%",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  });
+  return (
+    <>
+      {options.map((cat) => {
+        const selected = value != null && categoryKey(value) === categoryKey(cat);
+        return (
+          <button key={cat} type="button" onClick={() => onChange(cat)} style={chip(selected)}>
+            {categoryLabel(cat)}
+          </button>
+        );
+      })}
+      {requestCreate && (
+        <button
+          type="button"
+          onClick={() => requestCreate((name) => onChange(name))}
+          style={{ ...chip(false), border: `1px dashed ${COLORS.mustard}`, color: COLORS.mustardDark, display: "inline-flex", alignItems: "center", gap: "4px" }}
+        >
+          <Plus size={13} />
+          {t("categories.newChip")}
+        </button>
+      )}
+    </>
+  );
+}
+
+function CategoryCreateModal({ customCategories, recipeCountOf, onCreate, onRemove, onClose }) {
+  const { t } = useLanguage();
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const inputRef = useRef(null);
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+  const submit = async () => {
+    if (busy) return;
+    const code = validateNewCategory(name, customCategories);
+    if (code) {
+      setError(t(`categories.error.${code}`, { max: CATEGORY_NAME_MAX }));
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await onCreate(cleanCategoryName(name));
+    } catch (e) {
+      setError(e.message || t("categories.error.save"));
+      setBusy(false);
+    }
+  };
+  const remove = async (cat) => {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await onRemove(cat);
+    } catch (e) {
+      setError(e.message || t("categories.error.save"));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 90, display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" }}>
+      <div
+        onClick={onClose}
+        style={{ position: "absolute", inset: 0, background: "rgba(42,38,32,0.45)", backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)" }}
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("categories.createTitle")}
+        style={{
+          position: "relative",
+          width: "100%",
+          maxWidth: "380px",
+          maxHeight: "calc(100vh - 32px)",
+          overflowY: "auto",
+          boxSizing: "border-box",
+          background: COLORS.panel,
+          borderRadius: "16px",
+          boxShadow: "0 8px 40px rgba(0,0,0,0.3)",
+          padding: "20px",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
+          <h3 style={{ fontFamily: SERIF, fontSize: "17px", color: COLORS.ink, margin: 0 }}>{t("categories.createTitle")}</h3>
+          <button
+            onClick={onClose}
+            aria-label={t("common.close")}
+            style={{ background: "transparent", border: "none", cursor: "pointer", color: COLORS.inkSoft, padding: "4px", display: "flex" }}
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: "0 0 14px" }}>{t("categories.createHint")}</p>
+        <div style={{ display: "flex", gap: "8px" }}>
+          <input
+            ref={inputRef}
+            type="text"
+            value={name}
+            maxLength={CATEGORY_NAME_MAX + 10}
+            onChange={(e) => {
+              setName(e.target.value);
+              if (error) setError("");
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                submit();
+              }
+            }}
+            placeholder={t("categories.placeholder")}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              borderRadius: "8px",
+              border: `1px solid ${COLORS.line}`,
+              background: COLORS.paper,
+              color: COLORS.ink,
+              padding: "10px 12px",
+              fontSize: "14px",
+              outline: "none",
+            }}
+          />
+          <button
+            onClick={submit}
+            disabled={busy || !name.trim()}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              padding: "10px 14px",
+              borderRadius: "8px",
+              fontSize: "13px",
+              fontWeight: 700,
+              background: COLORS.mustard,
+              color: COLORS.forestDark,
+              border: "none",
+              cursor: busy || !name.trim() ? "default" : "pointer",
+              opacity: busy || !name.trim() ? 0.6 : 1,
+              flexShrink: 0,
+            }}
+          >
+            {busy ? <Loader2 size={14} className="spin" /> : <Plus size={14} />}
+            {t("categories.create")}
+          </button>
+        </div>
+        {error && <div style={{ fontSize: "12px", color: COLORS.danger, marginTop: "8px" }}>{error}</div>}
+
+        {customCategories.length > 0 && (
+          <div style={{ marginTop: "18px" }}>
+            <div style={{ fontSize: "11px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", color: COLORS.inkSoft, marginBottom: "8px" }}>
+              {t("categories.mine")}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              {customCategories.map((cat) => {
+                const count = recipeCountOf(cat);
+                return (
+                  <div
+                    key={cat}
+                    style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 10px", borderRadius: "8px", border: `1px solid ${COLORS.line}`, background: COLORS.paper }}
+                  >
+                    <span style={{ flex: 1, minWidth: 0, fontSize: "13px", fontWeight: 600, color: COLORS.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {cat}
+                    </span>
+                    <span style={{ fontSize: "12px", color: COLORS.inkSoft, flexShrink: 0 }}>{t("categories.recipeCount", { n: count })}</span>
+                    {count === 0 && (
+                      <button
+                        onClick={() => remove(cat)}
+                        disabled={busy}
+                        aria-label={t("categories.remove", { name: cat })}
+                        style={{ padding: "4px", background: "transparent", border: "none", cursor: busy ? "default" : "pointer", color: COLORS.inkSoft, display: "flex", flexShrink: 0 }}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <p style={{ fontSize: "12px", color: COLORS.inkSoft, margin: "8px 0 0" }}>{t("categories.removeHint")}</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function CategoryPickerModal({ onSelect, onClose }) {
   const { t, categoryLabel } = useLanguage();
   return (
@@ -7008,24 +7318,7 @@ function CategoryPickerModal({ onSelect, onClose }) {
         </div>
         <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: "0 0 14px" }}>{t("categoryModal.subtitle")}</p>
         <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-          {CATEGORIES.map((cat) => (
-            <button
-              key={cat}
-              onClick={() => onSelect(cat)}
-              style={{
-                padding: "8px 14px",
-                borderRadius: "9999px",
-                fontSize: "13px",
-                fontWeight: 600,
-                border: `1px solid ${COLORS.line}`,
-                background: "transparent",
-                color: COLORS.inkSoft,
-                cursor: "pointer",
-              }}
-            >
-              {categoryLabel(cat)}
-            </button>
-          ))}
+          <CategoryChips onChange={onSelect} />
         </div>
       </div>
     </div>
