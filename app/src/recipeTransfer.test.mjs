@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { transferRecipe, storableRecipe } from "./recipeTransfer.js";
+import { transferRecipe, storableRecipe, transferOptions } from "./recipeTransfer.js";
 
 const RECIPE = {
   id: "r1",
@@ -156,4 +156,66 @@ test("Taşı: doğrulama başarısızsa (kopya sunucuda yok ya da okunamadı) ki
     assert.equal(out.removedFromPersonal, false);
     assert.deepEqual(s.lists.get("personal"), [stored]);
   }
+});
+
+// ---- 21 Kasım: seçenekler gruptan hesaplanır (düğme kaybolmaz) ----
+const FAMS = [
+  { id: "F1", name: "Ev" },
+  { id: "F2", name: "Yazlık" },
+];
+const P = { ...stored, _scopes: ["personal"] };
+const C1 = { ...famCopy("F1"), _scopes: ["F1"] };
+const noCopies = () => false;
+
+test("transferOptions: aile kopyası seçiliyken de kişisel kaynaktan taşı/tamamla görünür", () => {
+  const fromFamily = transferOptions({ record: C1, copies: [P, C1], families: FAMS, personalKey: "personal", familyHasCopy: noCopies });
+  const fromPersonal = transferOptions({ record: P, copies: [P, C1], families: FAMS, personalKey: "personal", familyHasCopy: noCopies });
+  assert.deepEqual(fromFamily, fromPersonal);
+  assert.equal(fromFamily.canMove, true);
+  assert.equal(fromFamily.sourceId, "r1");
+  assert.equal(fromFamily.baseId, "r1");
+  assert.deepEqual(
+    fromFamily.families.map((f) => [f.id, f.hasCopy]),
+    [
+      ["F1", true],
+      ["F2", false],
+    ],
+    "kopyası olan aile 'kopyası var' ile kalır (taşımayı tamamla)"
+  );
+});
+
+test("transferOptions: taşındıktan sonra yalnız kopyası olmayan ailelere Kopyala; hiç yoksa null", () => {
+  const only = transferOptions({ record: C1, copies: [C1], families: FAMS, personalKey: "personal", familyHasCopy: noCopies });
+  assert.equal(only.canMove, false);
+  assert.equal(only.sourceScope, "F1");
+  assert.equal(only.baseId, "r1");
+  assert.deepEqual(only.families.map((f) => f.id), ["F2"]);
+  assert.equal(transferOptions({ record: C1, copies: [C1], families: [FAMS[0]], personalKey: "personal", familyHasCopy: noCopies }), null);
+  // F2'de kopya zaten varsa (listede görünmese de kova kaydı) yine null.
+  assert.equal(transferOptions({ record: C1, copies: [C1], families: FAMS, personalKey: "personal", familyHasCopy: (f, id) => f === "F2" && id === "r1-fam-F2" }), null);
+});
+
+test("transferOptions: kilitli kişisel kopya, kilitli aile özeti ve ailesiz hesapta işlem yok", () => {
+  assert.equal(transferOptions({ record: P, copies: [P], families: FAMS, personalKey: "personal", isLocked: (r) => r.id === "r1" }), null);
+  assert.equal(transferOptions({ record: { ...C1, _lockedFamily: true }, copies: [], families: FAMS, personalKey: "personal" }), null);
+  assert.equal(transferOptions({ record: P, copies: [P], families: [], personalKey: "personal" }), null);
+});
+
+test("Kopyala (aile kaynağından): yeni kopya ASIL kimlikten türetilir; taşıma reddedilir, hiçbir şey silinmez", async () => {
+  const s = store({ F1: [famCopy("F1")], F2: [] });
+  const out = await transferRecipe({ recipe: C1, baseId: "r1", familyIds: ["F2"], mode: "copy", mutate: s.mutate, personalKey: "personal" });
+  assert.deepEqual(out.saved, ["F2"]);
+  assert.deepEqual(s.lists.get("F2").map((r) => r.id), ["r1-fam-F2"], "r1-fam-F1-fam-F2 değil: bütün kopyalar tek grupta");
+  await assert.rejects(() => transferRecipe({ recipe: C1, baseId: "r1", familyIds: ["F2"], mode: "move", mutate: s.mutate, personalKey: "personal" }));
+  assert.deepEqual(s.lists.get("F1").map((r) => r.id), ["r1-fam-F1"]);
+});
+
+test("Taşımayı tamamla: aile kopyası doğrulanamazsa (silinmiş/erişim yok) kişisel kayıt silinmez", async () => {
+  const s = store({ personal: [stored], F1: [{ ...famCopy("F1"), title: "Düzenlenmiş" }] });
+  // Kopya bu arada başka üye tarafından silinmiş: taze okuma boş.
+  const out = await transferRecipe({ recipe: RECIPE, baseId: "r1", familyIds: ["F1"], mode: "move", mutate: s.mutate, verify: async () => false, personalKey: "personal" });
+  assert.deepEqual(out.verifyFailed, ["F1"]);
+  assert.equal(out.removedFromPersonal, false);
+  assert.deepEqual(s.lists.get("personal").map((r) => r.id), ["r1"]);
+  assert.equal(s.lists.get("F1")[0].title, "Düzenlenmiş", "düzenlenmiş aile kaydının üzerine yazılmadı");
 });

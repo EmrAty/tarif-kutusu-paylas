@@ -15,7 +15,8 @@
 // Malzemeler, bölümler, püf noktaları, kategori ve porsiyon alanları olduğu gibi
 // taşınır (nesne kopyalanır, alan seçilmez). Aile yetkisi ve Plus kilidi sunucuda
 // (/api/data) uygulanır; reddedilen yazım burada "failed" olarak döner.
-import { recipeForFamily } from "../shared/recipeIds.js";
+import { familyCopyId } from "../shared/recipeIds.js";
+import { groupIdOf } from "./recipeGroups.js";
 
 // Görünüm alanları (_scopes, _translation, _origTitle …) kayda girmez.
 export function storableRecipe(recipe) {
@@ -33,15 +34,21 @@ export const removeRecipeById = (id) => (list) => (list.some((r) => r && r.id ==
 // Dönen: { saved: [familyId], existing: [familyId], failed: [{ scopeKey, error }],
 //          verifyFailed: [familyId], removedFromPersonal, removeError }
 // beforeRemove(): kişisel kayıt kaldırılmadan hemen önce (ör. ekranı aile kopyasına geçirmek için).
-export async function transferRecipe({ recipe, familyIds, mode, mutate, verify, personalKey, beforeRemove }) {
+// baseId: tarifin asıl kimliği (kişisel kopyanın kimliği). Kaynak bir aile kopyası
+// olabilir (yalnızca kopyalama): yeni aile kopyası yine asıl kimlikten türetilir ki
+// bütün kopyalar tek grupta kalsın. Taşıma yalnızca kişisel kaynaktan yapılır.
+export async function transferRecipe({ recipe, baseId, familyIds, mode, mutate, verify, personalKey, beforeRemove }) {
   const clean = storableRecipe(recipe);
+  const base = baseId != null ? String(baseId) : String(clean.id);
+  if (mode === "move" && base !== String(clean.id)) throw new Error("move_requires_personal_source");
+  const copyFor = (familyId) => ({ ...clean, id: familyCopyId(base, familyId) });
   const targets = [...new Set(familyIds)].filter((k) => k && k !== personalKey);
   const saved = [];
   const existing = [];
   const failed = [];
   await Promise.all(
     targets.map(async (familyId) => {
-      const copy = recipeForFamily(clean, familyId);
+      const copy = copyFor(familyId);
       let had = false;
       try {
         await mutate(familyId, (list) => {
@@ -67,7 +74,7 @@ export async function transferRecipe({ recipe, familyIds, mode, mutate, verify, 
     for (const familyId of targets) {
       let ok = false;
       try {
-        ok = !!verify && (await verify(familyId, recipeForFamily(clean, familyId).id));
+        ok = !!verify && (await verify(familyId, copyFor(familyId).id));
       } catch {
         ok = false;
       }
@@ -84,4 +91,34 @@ export async function transferRecipe({ recipe, familyIds, mode, mutate, verify, 
     }
   }
   return { saved, existing, failed, verifyFailed, removedFromPersonal, removeError };
+}
+
+// Bir tarif kartı/ekranı için yapılabilecek taşıma/kopyalama işlemleri. Seçili kopya
+// hangisi olursa olsun (kişisel ya da aile kopyası) aynı gruptan hesaplanır; böylece
+// kopyalamadan sonra aile kopyasına geçince ya da "taşımayı tamamla" için düğme kaybolmaz.
+//  - Kaynak: grubun kilitsiz kişisel kopyası; yoksa (taşınmış tarif) seçili aile kopyası.
+//  - Taşı / Taşımayı tamamla: yalnızca kişisel kaynakta. Kopyası olan aile de listelenir
+//    ("kopyası var"; kopyalama ona yazmaz).
+//  - Yalnızca aile kopyası varsa: kopyası olmayan diğer erişilebilir ailelere Kopyala.
+// copies: grubun erişilebilir kopyaları (copiesOf); families: [{ id, name }] (Plus ile
+// erişilen aileler); familyHasCopy(familyId, copyId) → boolean; isLocked(recipe) → boolean.
+// Yapılacak bir işlem yoksa null.
+export function transferOptions({ record, copies, families, personalKey, familyHasCopy, isLocked = () => false }) {
+  if (!record || record._lockedFamily || !families || !families.length) return null;
+  const scopesOf = (r) => r._scopes || [r._scope];
+  const list = (copies && copies.length ? copies : [record]).filter((r) => r && !r._lockedFamily);
+  const personal = list.find((r) => scopesOf(r).includes(personalKey) && !isLocked(r));
+  if (!personal && list.some((r) => scopesOf(r).includes(personalKey))) return null; // kişisel kopya kilitli
+  const source = personal || (isLocked(record) ? null : record);
+  if (!source) return null;
+  const baseId = personal ? String(personal.id) : groupIdOf(source, personalKey);
+  // Grubun herhangi bir kopyasının bulunduğu aileler (eski, aynı kimlikli kayıtlar dahil).
+  const covered = new Set(list.flatMap(scopesOf));
+  const options = families
+    .filter((f) => f && f.id && !scopesOf(source).includes(f.id))
+    .map((f) => ({ id: f.id, name: f.name, hasCopy: covered.has(f.id) || !!(familyHasCopy && familyHasCopy(f.id, familyCopyId(baseId, f.id))) }));
+  const canMove = !!personal;
+  const shown = canMove ? options : options.filter((o) => !o.hasCopy);
+  if (!shown.length) return null;
+  return { sourceId: source.id, sourceScope: canMove ? personalKey : scopesOf(source)[0], baseId, canMove, families: shown };
 }

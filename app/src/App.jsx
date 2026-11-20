@@ -30,7 +30,7 @@ import ShareReceiver from "./capacitorShare.js";
 import NativeSplash from "./capacitorSplash.js";
 import { scaleIngredient, FRACTION_GLYPHS, scaleNutrition, perServingNutrition, baseServingsOf, maxServingsFor, MIN_SERVINGS } from "./servings.js";
 import { CATEGORIES } from "../shared/recipeExtraction.js";
-import { categoryOf, categoryOptions, categoryFields, cleanCategoryName, validateNewCategory, normalizeCustomCategories, CATEGORY_NAME_MAX } from "../shared/categories.js";
+import { categoryOf, categoryOptions, categoryFields, cleanCategoryName, validateNewCategory, normalizeCustomCategories, legacyCategoryRef, CATEGORY_NAME_MAX } from "../shared/categories.js";
 import { tipsOf, normalizeTips } from "../shared/recipeTips.js";
 import { matchRecipes } from "./pantryMatch.js";
 import { MAX_IMAGES, validateImageBatch } from "../shared/imageLimits.js";
@@ -50,7 +50,8 @@ import { amountFlagsAfterEdit } from "../shared/ingredientText.js";
 import { normalizeSuggestion, normalizeSuggestions } from "../shared/pantrySuggestions.js";
 import { saveRecipeToTargets, extractionSignature, savedRecipeId } from "./saveTargets.js";
 import { familyCopyId } from "../shared/recipeIds.js";
-import { transferRecipe } from "./recipeTransfer.js";
+import { transferRecipe, transferOptions } from "./recipeTransfer.js";
+import { titleTargets, writeTitle } from "./recipeTitles.js";
 import { groupCopies, copiesOf, groupIdOf } from "./recipeGroups.js";
 import { saveTicket as saveGuestMergeTicket, clearTicket as clearGuestMergeTicket, syncGuestMerge } from "./guestMergeClient.js";
 import { useLanguage, LANGUAGES, translate } from "./i18n.jsx";
@@ -938,6 +939,9 @@ export default function TarifKutusu() {
   // "Yeni Kategori Oluştur" penceresi ({ onCreated } | null).
   const [customCategories, setCustomCategories] = useState([]);
   const [categoryModal, setCategoryModal] = useState(null);
+  // Basılı tutma menüsünden "Aileye taşı veya kopyala" penceresi. Başlık açılışta
+  // sabitlenir (taşınınca kişisel kayıt kalkar, pencere sonucu göstermeye devam eder).
+  const [transferModal, setTransferModal] = useState(null); // { id, title } | null
   const [menuOpen, setMenuOpen] = useState(false);
   const [modalView, setModalView] = useState(null); // "account" | "families" | "plus" | "settings" | null
   // Free tarif sınırı dolunca yeni tarif eklemeye çalışınca açılan uyarı.
@@ -1469,6 +1473,8 @@ export default function TarifKutusu() {
         CapacitorApp.minimizeApp();
       } else if (openRoundingSheet.close) {
         openRoundingSheet.close();
+      } else if (transferModal) {
+        setTransferModal(null);
       } else if (categoryModal) {
         setCategoryModal(null);
       } else if (limitModalOpen) {
@@ -1490,7 +1496,7 @@ export default function TarifKutusu() {
     return () => {
       if (listenerHandle) listenerHandle.remove();
     };
-  }, [view, menuOpen, modalView, limitModalOpen, categoryModal, closeActiveScreen, closeModal]);
+  }, [view, menuOpen, modalView, limitModalOpen, categoryModal, transferModal, closeActiveScreen, closeModal]);
 
   // Yalnızca başarıyla yüklenmiş tarif kovaları (gösterim = onaylı veri +
   // bekleyen değişiklikler). Yüklenemeyen kova burada hiç yer almaz; boş liste
@@ -1726,9 +1732,33 @@ export default function TarifKutusu() {
   // atomik, kimlikli); tarif kategorisini ad + categoryRef olarak taşır. Seçiciler
   // kaydedilecek yerlere göre: sabitler + kendi kategorilerim + o yerlerin
   // tariflerinde geçen kategoriler (aile üyelerininkiler "Ad (Kişi)" görünür).
+  // Bağsız (eski) aile tariflerinin kategori sahibi: ekleyenin adı o ailenin üye
+  // listesinde tek eşleşmeyse o üye (bkz. shared/categories.js legacyCategoryRef).
+  const legacyRefIndex = useMemo(() => {
+    const map = new Map();
+    families.forEach((f) => {
+      const list = recipeBuckets[f.id] || [];
+      map.set(f.id, { members: f.members || [], siblings: list.filter((r) => r && r.categoryRef) });
+    });
+    return map;
+  }, [families, recipeBuckets]);
+  const legacyRefOf = useCallback(
+    (r) => {
+      if (!r || r.categoryRef) return null;
+      const scopes = r._scopes || [r._scope];
+      if (scopes.includes(PERSONAL)) return null;
+      for (const s of scopes) {
+        const entry = legacyRefIndex.get(s);
+        const ref = entry ? legacyCategoryRef(r, entry.members, entry.siblings) : null;
+        if (ref) return ref;
+      }
+      return null;
+    },
+    [legacyRefIndex]
+  );
   const categoryCtx = useMemo(
-    () => ({ me: { uid: authUser?.uid || "", name: personName || "" }, mine: customCategories }),
-    [authUser, personName, customCategories]
+    () => ({ me: { uid: authUser?.uid || "", name: personName || "" }, mine: customCategories, legacyRefOf }),
+    [authUser, personName, customCategories, legacyRefOf]
   );
   const categoryRequest = useCallback(
     async (action, body) => {
@@ -1745,7 +1775,9 @@ export default function TarifKutusu() {
   );
   const describeCategory = useCallback((r) => categoryOf(r, categoryCtx), [categoryCtx]);
   const categoryOptionsFor = useCallback(
-    (scopes) => categoryOptions(categoryCtx, (scopes && scopes.length ? scopes : [PERSONAL]).flatMap((s) => recipeBuckets[s] || [])),
+    // Kova kayıtları hangi listeden geldiklerini (_scopes) taşısın: bağsız aile tarifinin
+    // kategori sahibi listeye göre çözülür (legacyRefOf).
+    (scopes) => categoryOptions(categoryCtx, (scopes && scopes.length ? scopes : [PERSONAL]).flatMap((s) => (recipeBuckets[s] || []).map((r) => ({ ...r, _scopes: [s] })))),
     [categoryCtx, recipeBuckets]
   );
   const memberNameByUid = useMemo(() => {
@@ -1776,8 +1808,9 @@ export default function TarifKutusu() {
     const needed = new Set();
     customCategories.forEach((c) => c.lang !== language && needed.add(`${c.lang}\n${c.name}`));
     recipes.forEach((r) => {
-      const d = r && r.categoryRef ? categoryOf(r, categoryCtx) : null;
-      if (d && d.ref && d.lang !== language) needed.add(`${d.lang}\n${d.name}`);
+      // Bağlı ya da bağsız her özel kategori (sabitler i18n'den çevrilir).
+      const d = r ? categoryOf(r, categoryCtx) : null;
+      if (d && !d.fixed && d.lang !== language) needed.add(`${d.lang}\n${d.name}`);
     });
     const fresh = [...needed].filter((k) => !asked.has(k));
     if (!fresh.length) return;
@@ -1803,13 +1836,25 @@ export default function TarifKutusu() {
     }),
     [categoryOptionsFor, categoryCtx, categoryLabelOf, describeCategory, requestCreateCategory]
   );
-  // "Aileye taşı veya kopyala": Plus, en az bir aile, kişisel ve kilitsiz kayıt.
-  const canTransferRecipe = useCallback(
-    (r) => !!r && isPlus && families.length > 0 && !r._lockedFamily && (r._scopes || [r._scope]).includes(PERSONAL) && !isRecipeLocked(r),
-    [isPlus, families, isRecipeLocked]
+  // "Aileye taşı veya kopyala": Plus + en az bir aile. Seçenekler tarifin GRUBUNDAN
+  // hesaplanır (bkz. recipeTransfer.js transferOptions): aile kopyası seçiliyken ya da
+  // kopyalamadan sonra da "Taşımayı tamamla"/diğer ailelere kopyala görünür kalır.
+  const transferInfoFor = useCallback(
+    (r) => {
+      if (!r || !isPlus || !families.length) return null;
+      return transferOptions({
+        record: r,
+        copies: copiesOf(r, recipes, PERSONAL),
+        families,
+        personalKey: PERSONAL,
+        familyHasCopy: (familyId, copyId) => (recipeBuckets[familyId] || []).some((x) => x && x.id === copyId),
+        isLocked: isRecipeLocked,
+      });
+    },
+    [isPlus, families, recipes, recipeBuckets, isRecipeLocked]
   );
-  // Basılı tutma menüsünden açılınca tarif ekranında taşıma paneli açık gelir.
-  const [transferRequest, setTransferRequest] = useState(null);
+  const canTransferRecipe = useCallback((r) => !!transferInfoFor(r), [transferInfoFor]);
+  // Basılı tutma menüsünden: liste ekranının üstünde küçük pencere (tarif kimliği).
   const categoryRecipeCount = useCallback(
     (cat) => recipes.filter((r) => r && describeCategory(r)?.key === `u:${categoryCtx.me.uid}:${cat.id}`).length,
     [recipes, describeCategory, categoryCtx]
@@ -1955,23 +2000,55 @@ export default function TarifKutusu() {
     dataStore.refresh("recipes", familyId);
     return Array.isArray(list) && list.some((r) => r && r.id === copyId);
   }, []);
-  const handleTransfer = async (id, familyIds, mode) => {
-    const raw = (recipeBuckets[PERSONAL] || []).find((r) => r.id === id);
+  const activeIdRef = useRef(activeId);
+  activeIdRef.current = activeId;
+  // info: transferOptions sonucu (kaynak kopya, asıl kimlik, taşınabilir mi).
+  const handleTransfer = async (info, familyIds, mode) => {
+    if (!info) throw new Error(t("transfer.notPersonal"));
+    if (mode === "move" && !info.canMove) throw new Error(t("transfer.notPersonal"));
+    const raw = (recipeBuckets[info.sourceScope] || []).find((r) => r.id === info.sourceId);
     if (!raw) throw new Error(t("transfer.notPersonal"));
-    // Taşınırken ekran, kişisel kayıt kalkmadan ÖNCE aile kopyasına geçer (yoksa "açık
-    // tarif kayboldu" koruması listeye döner). Kaldırma başarısız olursa kişisele geri döner.
+    // d2254df döneminden kalan bağsız (categoryRef'siz) özel kategoride bağ, kopyaya
+    // sahibinin kategorisi olarak yazılır: diğer üyeler "Çorbalar (Emre)" görsün.
+    const desc = describeCategory(raw);
+    const recipe = !raw.categoryRef && desc && desc.ref && desc.mine ? { ...raw, categoryRef: { ...desc.ref } } : raw;
+    const id = info.sourceId;
+    // Taşınırken açık ekran bu tarifse, kişisel kayıt kalkmadan ÖNCE aile kopyasına geçer
+    // (yoksa "açık tarif kayboldu" koruması listeye döner). Liste penceresinden yapılan
+    // taşıma açık ekrana dokunmaz. Kaldırma başarısız olursa kişisele geri döner.
+    const wasActive = activeIdRef.current === id;
     const out = await transferRecipe({
-      recipe: raw,
+      recipe,
+      baseId: info.baseId,
       familyIds,
       mode,
       mutate: mutateRecipes,
       verify: verifyFamilyCopy,
       personalKey: PERSONAL,
       // flushSync: kova değişikliği eşzamanlı çizildiği için geçiş ondan önce kesinleşmeli.
-      beforeRemove: (familyId) => flushSync(() => setActiveId(familyCopyId(id, familyId))),
+      beforeRemove: (familyId) => wasActive && flushSync(() => setActiveId(familyCopyId(info.baseId, familyId))),
     });
-    if (mode === "move" && !out.removedFromPersonal) setActiveId(id);
+    if (mode === "move" && !out.removedFromPersonal && wasActive) setActiveId(id);
     return out;
+  };
+
+  // Ortak tarif adı (bkz. src/recipeTitles.js): yazılabilen bütün kopyalara uygulanır;
+  // kilitli ya da yazılamayan kopyalar bantta gösterilir, yalnızca onlar yeniden denenir.
+  const [renameIssue, setRenameIssue] = useState(null); // { groupId, title, failed: [{id, scopeKey}], locked: [scopeKey], retrying }
+  const applyTitle = async (record, title, { skipIds = [] } = {}) => {
+    const { targets, locked } = titleTargets(record, recipes, { personalKey: PERSONAL, isLocked: isRecipeLocked });
+    const todo = targets.filter((x) => !skipIds.includes(x.id));
+    const { failed } = await writeTitle(todo, title, mutateRecipes);
+    const groupId = groupIdOf(record, PERSONAL);
+    setRenameIssue(failed.length || locked.length ? { groupId, title, failed: failed.map(({ id, scopeKey }) => ({ id, scopeKey })), locked } : null);
+    return failed;
+  };
+  const retryRename = async () => {
+    if (!renameIssue || !renameIssue.failed.length) return;
+    const issue = renameIssue;
+    setRenameIssue({ ...issue, retrying: true });
+    const { failed } = await writeTitle(issue.failed, issue.title, mutateRecipes);
+    setRenameIssue(failed.length || issue.locked.length ? { ...issue, retrying: false, failed: failed.map(({ id, scopeKey }) => ({ id, scopeKey })), retried: true } : null);
   };
 
   // Kayıt hatası: Free sınırıysa uyarı penceresi (true döner), değilse genel
@@ -2145,10 +2222,12 @@ export default function TarifKutusu() {
     saveErrorTimerRef.current = setTimeout(() => setSaveErrorToast(""), 4000);
   };
 
+  // Ad bütün kopyalarda ortak (kişisel + yazılabilen aile kopyaları).
   const handleRename = async (id, newTitle) => {
     const trimmed = newTitle.trim();
-    if (!trimmed) return;
-    await applyToAllScopes(id, (r) => ({ ...r, title: trimmed })).catch(showSaveError);
+    const record = recipes.find((r) => r.id === id);
+    if (!trimmed || !record) return;
+    await applyTitle(record, trimmed);
   };
 
   // Niyet, kullanıcının gördüğü duruma göre sabitlenir ("favori yap" /
@@ -2164,7 +2243,12 @@ export default function TarifKutusu() {
     await applyToAllScopes(id, (r) => ({ ...r, ...categoryFields(desc) })).catch(showSaveError);
   };
 
+  const manualSavingRef = useRef(false);
   const handleManualSave = async (data) => {
+    // Aynı anda ikinci kayıt başlamaz (editördeki kilidin yanında ikinci güvence):
+    // her çağrı yeni kimlik ürettiği için çift basış iki ayrı tarif yazıyordu.
+    if (manualSavingRef.current) return;
+    manualSavingRef.current = true;
     // Elle yazılan tarifin içerik dili: yazıldığı sıradaki uygulama dili.
     const recipe = { id: uid(), createdAt: Date.now(), isFavorite: false, addedBy: personName || "", content_lang: language, ...data };
     let saved = [];
@@ -2172,18 +2256,23 @@ export default function TarifKutusu() {
       saved = await saveNewRecipe(recipe, saveTargets);
     } catch (e) {
       if (handleSaveFailure(e)) return;
+    } finally {
+      manualSavingRef.current = false;
     }
     setManualPrefill(null);
     setActiveId(openedRecipeId(recipe, saved));
     setView("detail");
   };
 
+  // İçerik yalnızca bu kopyaya; ad değiştiyse diğer kopyalara da (ortak ad).
   const handleEditSave = async (id, data) => {
+    const record = recipes.find((r) => r.id === id);
     try {
       await applyToAllScopes(id, (r) => ({ ...r, ...data }));
     } catch (e) {
       throw new Error(saveErrorMessage(e, t));
     }
+    if (record && data.title && data.title !== record.title) await applyTitle(record, data.title, { skipIds: [id] });
     setView("detail");
   };
 
@@ -2477,11 +2566,8 @@ export default function TarifKutusu() {
             familyNameById={familyNameById}
             isRecipeLocked={isRecipeLocked}
             canTransfer={canTransferRecipe}
-            onOpenTransfer={(id) => {
-              listScrollYRef.current = window.scrollY;
-              setTransferRequest(id);
-              openRecipe(id);
-            }}
+            // Basılı tutma menüsü: tarif ekranına gitmeden, listenin üstünde küçük pencere.
+            onOpenTransfer={(id) => setTransferModal({ id, title: displayRecipes.find((r) => r.id === id)?.title || "" })}
             onNewCategory={() => requestCreateCategory(null)}
             onSelect={(id) => {
               if (isRecipeLocked(id)) return;
@@ -2599,6 +2685,9 @@ export default function TarifKutusu() {
 
           {view === "detail" && active && (
             <div className={screenTransitionClass}>
+              {renameIssue && renameIssue.groupId === groupIdOf(active, PERSONAL) && (
+                <RenameIssueBanner issue={renameIssue} placeName={placeName} onRetry={retryRename} onDismiss={() => setRenameIssue(null)} />
+              )}
               <RecipeDetail
                 recipe={activeDisplay}
                 onRetryTranslation={() => requestTranslation(active, { force: true })}
@@ -2611,22 +2700,10 @@ export default function TarifKutusu() {
                 onAddToShopping={() => addRecipeToShoppingList(active)}
                 onSendNotification={() => handleSendNotification(active)}
                 onStartCooking={() => setView("cook")}
-                // Kopyası olan aileler de listede kalır ("taşımayı tamamla"). Eski, aynı
-                // kimlikle bağlı kayıtlar (Grup 5) ayrı kopya değildir; o aile listelenmez.
-                transferFamilies={
-                  canTransferRecipe(active)
-                    ? families
-                        .filter((f) => !active._scopes.includes(f.id))
-                        .map((f) => ({
-                          id: f.id,
-                          name: f.name,
-                          hasCopy: (recipeBuckets[f.id] || []).some((r) => r && r.id === familyCopyId(active.id, f.id)),
-                        }))
-                    : []
-                }
-                transferAutoOpen={transferRequest === active.id}
-                onTransferOpened={() => setTransferRequest(null)}
-                onTransfer={(familyIds, mode) => handleTransfer(active.id, familyIds, mode)}
+                // Grubun kişisel kopyasından (seçili kopya aile kopyası olsa da) hesaplanır;
+                // kopyası olan aileler "kopyası var" ile kalır ("taşımayı tamamla").
+                transferInfo={transferInfoFor(active)}
+                onTransfer={(info, familyIds, mode) => handleTransfer(info, familyIds, mode)}
                 copies={activeCopies.map((c) => ({ id: c.id, label: scopeLabels(c, familyNameById, t).join(" + ") }))}
                 onSelectCopy={(id) => setActiveId(id)}
               />
@@ -2966,6 +3043,16 @@ export default function TarifKutusu() {
             <X size={14} />
           </button>
         </div>
+      )}
+
+      {transferModal && (
+        <TransferModal
+          title={transferModal.title}
+          info={transferInfoFor(recipes.find((r) => r.id === transferModal.id))}
+          familyNameById={familyNameById}
+          onTransfer={handleTransfer}
+          onClose={() => setTransferModal(null)}
+        />
       )}
 
       {categoryModal && (
@@ -4960,22 +5047,19 @@ function CopySwitcher({ copies, activeId, onSelect }) {
   );
 }
 
-function RecipeTransfer({ families, familyNameById, onTransfer, autoOpen, onAutoOpened }) {
+// Taşı/kopyala paneli. info: transferOptions sonucu (null = yapılacak işlem yok).
+// variant "inline": tarif ekranında düğme + açılır panel. "modal": basılı tutma
+// penceresinin içi (hep açık; onClose ile kapanır).
+function RecipeTransfer({ info, familyNameById, onTransfer, variant = "inline", onClose }) {
   const { t } = useLanguage();
+  const inModal = variant === "modal";
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState([]);
   const [busy, setBusy] = useState(null); // "move" | "copy" | null
   const [result, setResult] = useState(null); // { tone: "ok" | "warn" | "error", text }
-  const available = families || [];
+  const available = (info && info.families) || [];
+  const canMove = !!(info && info.canMove);
   const availableIds = available.map((f) => f.id).join(",");
-  const panelRef = useRef(null);
-  useEffect(() => {
-    if (!autoOpen || !available.length) return;
-    setOpen(true);
-    setResult(null);
-    onAutoOpened?.();
-    setTimeout(() => panelRef.current?.scrollIntoView?.({ behavior: "smooth", block: "center" }), 250);
-  }, [autoOpen, available.length, onAutoOpened]);
 
   useEffect(() => {
     // Tek aile varsa doğrudan seçili; liste değişince geçersiz seçim atılır.
@@ -4986,15 +5070,14 @@ function RecipeTransfer({ families, familyNameById, onTransfer, autoOpen, onAuto
     });
   }, [availableIds]);
 
-  if (!available.length && !result) return null;
   const name = (id) => familyNameById[id] || t("common.family");
 
   const run = async (mode) => {
-    if (!selected.length || busy) return;
+    if (!selected.length || busy || !info) return;
     setBusy(mode);
     setResult(null);
     try {
-      const out = await onTransfer(selected, mode);
+      const out = await onTransfer(info, selected, mode);
       const savedNames = out.saved.map(name).join(", ");
       const failedNames = out.failed.map((f) => name(f.scopeKey)).join(", ");
       const existing = out.existing || [];
@@ -5018,6 +5101,7 @@ function RecipeTransfer({ families, familyNameById, onTransfer, autoOpen, onAuto
         setResult({ tone: "warn", text: t("transfer.alreadyThere", { places: existingNames }) });
       } else {
         setResult({ tone: "ok", text: t("transfer.copied", { places: newNames }) + (existing.length ? ` ${t("transfer.alreadyThere", { places: existingNames })}` : "") });
+        // Panel kapanır ama düğme kalır: "Taşımayı tamamla" ya da diğer aileler için.
         setOpen(false);
       }
     } catch (e) {
@@ -5043,9 +5127,24 @@ function RecipeTransfer({ families, familyNameById, onTransfer, autoOpen, onAuto
     </div>
   );
 
-  if (!available.length) return resultBox;
+  if (!available.length) {
+    if (!inModal) return resultBox || null;
+    // Pencere: yapılacak işlem kalmadı (ör. taşındı) — sonuç ve kapat.
+    return (
+      <div>
+        {resultBox || <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: 0 }}>{t("transfer.nothingLeft")}</p>}
+        <button
+          type="button"
+          onClick={onClose}
+          style={{ marginTop: "12px", width: "100%", minHeight: "44px", borderRadius: "8px", fontSize: "14px", fontWeight: 700, background: COLORS.forest, color: "#F3EFE6", border: "none", cursor: "pointer" }}
+        >
+          {t("common.close")}
+        </button>
+      </div>
+    );
+  }
 
-  if (!open) {
+  if (!inModal && !open) {
     return (
       <>
         <button
@@ -5053,24 +5152,9 @@ function RecipeTransfer({ families, familyNameById, onTransfer, autoOpen, onAuto
             setOpen(true);
             setResult(null);
           }}
-          style={{
-            marginTop: "8px",
-            width: "100%",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: "8px",
-            padding: "10px 16px",
-            borderRadius: "8px",
-            fontSize: "13px",
-            fontWeight: 600,
-            background: "transparent",
-            color: COLORS.forest,
-            border: `1px solid ${COLORS.line}`,
-            cursor: "pointer",
-          }}
+          style={{ ...DETAIL_ACTION_BUTTON, background: "transparent", color: COLORS.forest, border: `1px solid ${COLORS.line}` }}
         >
-          <Users size={14} />
+          <Users size={16} />
           {t("transfer.open")}
         </button>
         {resultBox}
@@ -5082,19 +5166,26 @@ function RecipeTransfer({ families, familyNameById, onTransfer, autoOpen, onAuto
   const selectedHasCopy = available.some((f) => f.hasCopy && selected.includes(f.id));
   // Seçilen ailelerin hepsinde kopya zaten varsa "Kopyala" yapacak bir şey yok.
   const copyPointless = selected.length > 0 && selected.every((id) => available.find((f) => f.id === id)?.hasCopy);
+  const actions = [
+    ...(canMove ? [{ mode: "move", label: copyPointless ? t("transfer.completeMove") : t("transfer.move"), primary: true }] : []),
+    { mode: "copy", label: t("transfer.copy"), primary: !canMove },
+  ];
+  const heading = <span style={{ fontSize: "13px", fontWeight: 700, color: COLORS.forest }}>{t("transfer.heading")}</span>;
   return (
-    <div ref={panelRef} style={{ marginTop: "8px", padding: "14px", borderRadius: "10px", border: `1px solid ${COLORS.line}`, background: COLORS.paper }}>
+    <div style={inModal ? undefined : { marginTop: "8px", padding: "14px", borderRadius: "10px", border: `1px solid ${COLORS.line}`, background: COLORS.paper }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
-        <span style={{ fontSize: "13px", fontWeight: 700, color: COLORS.forest }}>{t("transfer.heading")}</span>
-        <button
-          type="button"
-          aria-label={t("common.close")}
-          onClick={() => setOpen(false)}
-          disabled={!!busy}
-          style={{ background: "transparent", border: "none", color: COLORS.inkSoft, cursor: "pointer", padding: "4px" }}
-        >
-          <X size={16} />
-        </button>
+        {heading}
+        {!inModal && (
+          <button
+            type="button"
+            aria-label={t("common.close")}
+            onClick={() => setOpen(false)}
+            disabled={!!busy}
+            style={{ background: "transparent", border: "none", color: COLORS.inkSoft, cursor: "pointer", padding: "4px" }}
+          >
+            <X size={16} />
+          </button>
+        )}
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "10px" }}>
         {available.map((f) => {
@@ -5109,6 +5200,7 @@ function RecipeTransfer({ families, familyNameById, onTransfer, autoOpen, onAuto
                 display: "flex",
                 alignItems: "center",
                 gap: "6px",
+                maxWidth: "100%",
                 padding: "8px 14px",
                 borderRadius: "9999px",
                 fontSize: "13px",
@@ -5120,54 +5212,149 @@ function RecipeTransfer({ families, familyNameById, onTransfer, autoOpen, onAuto
               }}
             >
               {on && <Check size={13} />}
-              {f.name}
-              {f.hasCopy && <span style={{ fontSize: "11px", fontWeight: 500, opacity: 0.85 }}>· {t("transfer.hasCopy")}</span>}
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span>
+              {f.hasCopy && <span style={{ fontSize: "11px", fontWeight: 500, opacity: 0.85, flexShrink: 0 }}>· {t("transfer.hasCopy")}</span>}
             </button>
           );
         })}
       </div>
       <p style={{ fontSize: "12px", color: COLORS.inkSoft, margin: "0 0 12px", lineHeight: 1.45 }}>
-        {t("transfer.explain")}
-        {selectedHasCopy && ` ${t("transfer.explainExisting")}`}
+        {canMove ? t("transfer.explain") : t("transfer.explainCopyOnly")}
+        {selectedHasCopy && canMove && ` ${t("transfer.explainExisting")}`}
       </p>
       <div style={{ display: "flex", gap: "8px" }}>
-        {[
-          { mode: "move", label: copyPointless ? t("transfer.completeMove") : t("transfer.move"), primary: true },
-          { mode: "copy", label: t("transfer.copy"), primary: false },
-        ].map(({ mode, label, primary }) => (
-          <button
-            key={mode}
-            type="button"
-            onClick={() => run(mode)}
-            disabled={!selected.length || !!busy || (mode === "copy" && copyPointless)}
-            style={{
-              flex: 1,
-              minHeight: "44px",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: "6px",
-              borderRadius: "8px",
-              fontSize: "14px",
-              fontWeight: 700,
-              background: primary ? COLORS.forest : "transparent",
-              color: primary ? "#F3EFE6" : COLORS.forest,
-              border: `1px solid ${COLORS.forest}`,
-              cursor: !selected.length || busy || (mode === "copy" && copyPointless) ? "default" : "pointer",
-              opacity: !selected.length || (busy && busy !== mode) || (mode === "copy" && copyPointless) ? 0.5 : 1,
-            }}
-          >
-            {busy === mode && <Loader2 size={14} className="spin" />}
-            {label}
-          </button>
-        ))}
+        {actions.map(({ mode, label, primary }) => {
+          const off = !selected.length || !!busy || (mode === "copy" && copyPointless);
+          return (
+            <button
+              key={mode}
+              type="button"
+              onClick={() => run(mode)}
+              disabled={off}
+              style={{
+                flex: 1,
+                minHeight: "44px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "6px",
+                borderRadius: "8px",
+                fontSize: "14px",
+                fontWeight: 700,
+                background: primary ? COLORS.forest : "transparent",
+                color: primary ? "#F3EFE6" : COLORS.forest,
+                border: `1px solid ${COLORS.forest}`,
+                cursor: off ? "default" : "pointer",
+                opacity: !selected.length || (busy && busy !== mode) || (mode === "copy" && copyPointless) ? 0.5 : 1,
+              }}
+            >
+              {busy === mode && <Loader2 size={14} className="spin" />}
+              {label}
+            </button>
+          );
+        })}
       </div>
       {resultBox}
     </div>
   );
 }
 
-function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavorite, onChangeCategory, onEdit, onAddToShopping, onSendNotification, onStartCooking, onRetryTranslation, transferFamilies = [], onTransfer, transferAutoOpen, onTransferOpened, copies = [], onSelectCopy }) {
+// Basılı tutma menüsünden açılan küçük pencere: liste ekranının üstünde, arkası bulanık.
+// Tarif ekranına gidilmez; aile ve işlem burada seçilir.
+function TransferModal({ title, info, familyNameById, onTransfer, onClose }) {
+  const { t } = useLanguage();
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 90, display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" }}>
+      <div
+        onClick={onClose}
+        style={{ position: "absolute", inset: 0, background: "rgba(42,38,32,0.45)", backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)" }}
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("transfer.modalTitle")}
+        style={{
+          position: "relative",
+          width: "100%",
+          maxWidth: "380px",
+          maxHeight: "calc(100vh - 32px)",
+          overflowY: "auto",
+          boxSizing: "border-box",
+          background: COLORS.panel,
+          borderRadius: "16px",
+          boxShadow: "0 8px 40px rgba(0,0,0,0.3)",
+          padding: "18px",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "8px", marginBottom: "10px" }}>
+          <div style={{ minWidth: 0 }}>
+            <h3 style={{ fontFamily: SERIF, fontSize: "17px", color: COLORS.ink, margin: 0 }}>{t("transfer.modalTitle")}</h3>
+            {title && <div style={{ fontSize: "13px", color: COLORS.inkSoft, marginTop: "2px", overflowWrap: "anywhere" }}>{title}</div>}
+          </div>
+          <button
+            onClick={onClose}
+            aria-label={t("common.close")}
+            style={{ background: "transparent", border: "none", cursor: "pointer", color: COLORS.inkSoft, padding: "4px", display: "flex", flexShrink: 0 }}
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <RecipeTransfer variant="modal" info={info} familyNameById={familyNameById} onTransfer={onTransfer} onClose={onClose} />
+      </div>
+    </div>
+  );
+}
+
+// Ortak ad güncellemesinin kısmi sonucu (bkz. src/recipeTitles.js).
+function RenameIssueBanner({ issue, placeName, onRetry, onDismiss }) {
+  const { t } = useLanguage();
+  const failedPlaces = [...new Set(issue.failed.map((f) => placeName(f.scopeKey)))].join(", ");
+  const lockedPlaces = [...new Set(issue.locked.map(placeName))].join(", ");
+  return (
+    <div role="status" style={{ display: "flex", alignItems: "flex-start", gap: "10px", marginBottom: "12px", padding: "10px 12px", borderRadius: "10px", background: "#F6EBCF", color: COLORS.ink, fontSize: "13px" }}>
+      <AlertCircle size={16} style={{ flexShrink: 0, marginTop: "1px", color: COLORS.mustardDark }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        {failedPlaces && <div>{t("rename.partial", { places: failedPlaces })}</div>}
+        {lockedPlaces && <div style={{ marginTop: failedPlaces ? "4px" : 0 }}>{t("rename.locked", { places: lockedPlaces })}</div>}
+        {issue.failed.length > 0 && (
+          <button
+            type="button"
+            onClick={onRetry}
+            disabled={!!issue.retrying}
+            style={{ marginTop: "8px", display: "inline-flex", alignItems: "center", gap: "6px", padding: "6px 12px", borderRadius: "8px", fontSize: "13px", fontWeight: 700, background: COLORS.forest, color: "#F3EFE6", border: "none", cursor: issue.retrying ? "default" : "pointer", opacity: issue.retrying ? 0.6 : 1 }}
+          >
+            {issue.retrying ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />}
+            {t("rename.retry")}
+          </button>
+        )}
+      </div>
+      <button type="button" onClick={onDismiss} aria-label={t("common.close")} style={{ background: "transparent", border: "none", color: COLORS.inkSoft, cursor: "pointer", padding: "2px", display: "flex", flexShrink: 0 }}>
+        <X size={14} />
+      </button>
+    </div>
+  );
+}
+
+// Tarif ekranındaki ana işlem düğmeleri (Pişirmeye Başla, Tarifi Düzenle, Alışveriş
+// Listesine Ekle, Aileye taşı veya kopyala) aynı genişlik ve yükseklikte; ikon ve yazı ortada.
+const DETAIL_ACTION_BUTTON = {
+  marginTop: "8px",
+  width: "100%",
+  height: "46px",
+  boxSizing: "border-box",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: "8px",
+  padding: "0 16px",
+  borderRadius: "8px",
+  fontSize: "14px",
+  fontWeight: 700,
+  lineHeight: 1.2,
+  cursor: "pointer",
+};
+
+function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavorite, onChangeCategory, onEdit, onAddToShopping, onSendNotification, onStartCooking, onRetryTranslation, transferInfo, onTransfer, copies = [], onSelectCopy }) {
   const { t, language, categoryLabel, difficultyLabel } = useLanguage();
   const { title, servings, category, prep_time_minutes, difficulty, ingredients = [], instructions = [], nutrition = {}, assumptions, servings_note, isFavorite, addedBy } = recipe;
   // Yalnızca güvenli http(s) link href olur (eski/başka üyenin kaydındaki
@@ -5369,76 +5556,23 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
         )}
 
 
-        <button
-          onClick={onStartCooking}
-          style={{
-            marginTop: "12px",
-            width: "100%",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: "8px",
-            padding: "12px 16px",
-            borderRadius: "8px",
-            fontSize: "14px",
-            fontWeight: 700,
-            background: COLORS.mustard,
-            color: COLORS.forestDark,
-            border: "none",
-            cursor: "pointer",
-          }}
-        >
+        <button onClick={onStartCooking} style={{ ...DETAIL_ACTION_BUTTON, marginTop: "12px", background: COLORS.mustard, color: COLORS.forestDark, border: "none" }}>
           <ChefHat size={16} />
           {t("detail.startCooking")}
         </button>
 
-        <button
-          onClick={onEdit}
-          style={{
-            marginTop: "8px",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: "8px",
-            padding: "10px 16px",
-            borderRadius: "8px",
-            fontSize: "13px",
-            fontWeight: 600,
-            background: "transparent",
-            color: COLORS.forest,
-            border: `1px solid ${COLORS.forest}`,
-            cursor: "pointer",
-          }}
-        >
-          <Pencil size={14} />
+        <button onClick={onEdit} style={{ ...DETAIL_ACTION_BUTTON, background: "transparent", color: COLORS.forest, border: `1px solid ${COLORS.forest}` }}>
+          <Pencil size={16} />
           {t("detail.editRecipe")}
         </button>
 
-        <button
-          onClick={onAddToShopping}
-          style={{
-            marginTop: "8px",
-            width: "100%",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: "8px",
-            padding: "10px 16px",
-            borderRadius: "8px",
-            fontSize: "13px",
-            fontWeight: 600,
-            background: COLORS.forest,
-            color: "#F3EFE6",
-            border: "none",
-            cursor: "pointer",
-          }}
-        >
-          <ShoppingCart size={14} />
+        <button onClick={onAddToShopping} style={{ ...DETAIL_ACTION_BUTTON, background: COLORS.forest, color: "#F3EFE6", border: "none" }}>
+          <ShoppingCart size={16} />
           {t("detail.addToShopping")}
         </button>
 
         {/* Grup kimliğiyle: taşıma sonrası aile kopyasına geçilince sonuç mesajı kaybolmaz. */}
-        <RecipeTransfer key={groupIdOf(recipe, PERSONAL)} families={transferFamilies} familyNameById={familyNameById} onTransfer={onTransfer} autoOpen={transferAutoOpen} onAutoOpened={onTransferOpened} />
+        <RecipeTransfer key={groupIdOf(recipe, PERSONAL)} info={transferInfo} familyNameById={familyNameById} onTransfer={onTransfer} />
       </div>
 
       <div className="md-detail-row" style={{ display: "flex", flexDirection: "column", gap: "20px", alignItems: "flex-start" }}>
@@ -6529,7 +6663,13 @@ function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setS
   const addTip = () => setTips((prev) => [...prev, { _key: uid(), text: "" }]);
   const removeTip = (key) => setTips((prev) => prev.filter((x) => x._key !== key));
 
+  // Kayıt sürerken ikinci basış yok sayılır: yeni tarifte her basış yeni kimlikli bir
+  // tarif yazıyordu (kişisel + ailede iki ayrı kart). Ref, aynı karede gelen ikinci
+  // olayı da durdurur; state düğmeyi kapalı gösterir.
+  const savingRef = useRef(false);
+  const [saving, setSaving] = useState(false);
   const handleSave = () => {
+    if (savingRef.current) return;
     if (!title.trim()) {
       setError(t("editor.errorNeedTitle"));
       return;
@@ -6571,6 +6711,8 @@ function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setS
         ? { servings_basis: nextServings ? "kullanici" : undefined, servings_calc: undefined, servings_note: undefined, servings_range: undefined, servings_oneri: undefined }
         : {};
 
+    savingRef.current = true;
+    setSaving(true);
     Promise.resolve(onSave({
       ...servingsFields,
       title: title.trim(),
@@ -6592,7 +6734,12 @@ function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setS
         carbs_g: carbs.trim() ? Number(carbs) : undefined,
         fat_g: fat.trim() ? Number(fat) : undefined,
       },
-    })).catch((e) => setError(e?.message || t("errors.saveFailed")));
+    }))
+      .catch((e) => setError(e?.message || t("errors.saveFailed")))
+      .finally(() => {
+        savingRef.current = false;
+        setSaving(false);
+      });
   };
 
   return (
@@ -6892,6 +7039,8 @@ function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setS
       <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
         <button
           onClick={handleSave}
+          disabled={saving}
+          aria-busy={saving}
           style={{
             display: "flex",
             alignItems: "center",
@@ -6903,10 +7052,11 @@ function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setS
             background: COLORS.mustard,
             color: COLORS.forestDark,
             border: "none",
-            cursor: "pointer",
+            cursor: saving ? "default" : "pointer",
+            opacity: saving ? 0.7 : 1,
           }}
         >
-          <Check size={16} />
+          {saving ? <Loader2 size={16} className="spin" /> : <Check size={16} />}
           {t("common.save")}
         </button>
         <button
@@ -7400,6 +7550,7 @@ function CategoryChips({ value, onChange, extra, compact, scopes }) {
 
 function CategoryCreateModal({ customCategories, recipeCountOf, onCreate, onRemove, onClose }) {
   const { t } = useLanguage();
+  const { labelOf } = React.useContext(CategoriesContext);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -7537,7 +7688,8 @@ function CategoryCreateModal({ customCategories, recipeCountOf, onCreate, onRemo
                     style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 10px", borderRadius: "8px", border: `1px solid ${COLORS.line}`, background: COLORS.paper }}
                   >
                     <span style={{ flex: 1, minWidth: 0, fontSize: "13px", fontWeight: 600, color: COLORS.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {cat.name}
+                      {/* Uygulama dilindeki gösterim (asıl ad ve kimlik değişmez). */}
+                      {labelOf({ fixed: false, name: cat.name, lang: cat.lang, ref: null })}
                     </span>
                     <span style={{ fontSize: "12px", color: COLORS.inkSoft, flexShrink: 0 }}>{t("categories.recipeCount", { n: count })}</span>
                     {count === 0 && (
