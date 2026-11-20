@@ -14,7 +14,7 @@ import { isTikTokLink, tiktokTranscript } from "./_lib/tiktok.js";
 import { notifyText, failedBody } from "./_lib/jobNotifyText.js";
 import { parseSocialUrl, SUPPORTED_LINK_MESSAGE } from "./_lib/socialUrl.js";
 import { guardAiRequest, reserveAiBudget, sendGuardError, deferResponse, checkDataWriteLimit, clientIp } from "./_lib/aiGuard.js";
-import { isAcceptableRecipeCategory } from "../shared/categories.js";
+import { isAcceptableRecipeCategory, isFixedCategory, cleanCategoryRef } from "../shared/categories.js";
 import { recipeForFamily, familyCopyId } from "../shared/recipeIds.js";
 import { DEFAULT_CONTENT_LANG, isContentLanguage } from "../shared/recipeLocales.js";
 
@@ -341,7 +341,7 @@ async function processRecipeJob({ release, ...job }) {
   }
 }
 
-async function runRecipeJob({ uid, jobId, sourceUrl, caption, category, addedBy, language, lockKey, targets, title }) {
+async function runRecipeJob({ uid, jobId, sourceUrl, caption, category, categoryRef, addedBy, language, lockKey, targets, title }) {
   const startedAt = Date.now();
   const timings = {};
   let recipe = null;
@@ -407,6 +407,8 @@ async function runRecipeJob({ uid, jobId, sourceUrl, caption, category, addedBy,
       createdAt: Date.now(),
       link: sourceUrl,
       category,
+      // Özel kategorinin kimliği/sahibi (bkz. shared/categories.js); sabit kategoride yok.
+      ...(categoryRef ? { categoryRef } : {}),
       isFavorite: false,
       addedBy: addedBy || "",
       source: "share",
@@ -590,6 +592,8 @@ async function respondWithJob(res, uid, job, duplicate) {
 async function handlePost(req, res, user) {
   const uid = user.uid;
   const { requestId, sourceUrl, caption, category, addedBy, language } = req.body || {};
+  // Özel kategori bağı: yalnızca özel (sabit olmayan) kategoride ve biçimi temizse.
+  const categoryRef = isFixedCategory(category) ? null : cleanCategoryRef((req.body || {}).categoryRef);
   const targets = parseTargets(req.body);
   if (!targets) {
     res.status(400).json({ error: "Geçersiz kayıt hedefi." });
@@ -735,6 +739,7 @@ async function handlePost(req, res, user) {
         sourceUrl: url,
         caption: captionText,
         category,
+        categoryRef,
         addedBy: typeof addedBy === "string" ? addedBy.slice(0, 60) : "",
         // Yalnızca çıktı dili; bilinmeyen değer varsayılan dile (tr) düşer.
         language: isContentLanguage(language) ? language : DEFAULT_CONTENT_LANG,

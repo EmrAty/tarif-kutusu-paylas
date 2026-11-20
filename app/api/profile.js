@@ -1,6 +1,17 @@
 import { requireUser } from "./_lib/auth.js";
 import { getProfile, updateProfile } from "./_lib/profile.js";
-import { cleanCategoryName, categoryKey, normalizeCustomCategories, validateNewCategory } from "../shared/categories.js";
+import crypto from "node:crypto";
+import { redisGetJSON } from "./_lib/redis.js";
+import { verifiedFamilyIds } from "./_lib/families.js";
+import { isContentLanguage } from "../shared/recipeLocales.js";
+import {
+  cleanCategoryName,
+  categoryKey,
+  normalizeCustomCategories,
+  validateNewCategory,
+  cleanCategoryRef,
+  isAcceptableRecipeCategory,
+} from "../shared/categories.js";
 
 // isPlus şu an gerçek bir ödeme sistemine bağlı değil — kullanıcının kendisi
 // açıp kapatabildiği bir test bayrağı. Ödeme entegrasyonu eklendiğinde bu
@@ -18,7 +29,10 @@ export default async function handler(req, res) {
     // Grup 5 (B5): bozuk profil (getProfile 502 profile_unreadable fırlatır) ya
     // da Redis hatası yakalanmamış istisna olarak sızmasın; 502 + kod döner.
     try {
-      res.status(200).json(publicProfile(await getProfile(user.uid)));
+      const profile = await getProfile(user.uid);
+      const out = publicProfile(profile);
+      if (req.query && req.query.familyCategories === "1") out.familyCategories = await familyCategories(user.uid, profile);
+      res.status(200).json(out);
     } catch (e) {
       res.status(e.status || 502).json({ error: e.status ? e.message : "Profil okunamadı.", ...(e.code ? { code: e.code } : {}) });
     }
@@ -30,7 +44,7 @@ export default async function handler(req, res) {
     // Özel kategoriler: kullanıcının kendi listesi (bkz. shared/categories.js).
     if (action === "addCategory" || action === "removeCategory") {
       try {
-        res.status(200).json(await changeCategories(user.uid, action, (req.body || {}).name));
+        res.status(200).json(await changeCategories(user.uid, action, req.body || {}));
       } catch (e) {
         res.status(e.status || 502).json({ error: e.message || "Profil güncellenemedi.", ...(e.code ? { code: e.code } : {}) });
       }
@@ -70,33 +84,73 @@ const CATEGORY_ERRORS = {
 };
 
 // Ekleme/kaldırma atomik (profil CAS): iki cihazdan aynı anda yapılan değişiklikler
-// birbirini ezmez. Aynı ad zaten varsa ekleme, yoksa kaldırma değişiklik yapmaz
-// (tekrar gönderilen istek hata vermez). Kaldırma yalnızca listeden çıkarır;
-// tariflerin kategorisine dokunmaz (istemci yalnızca boş kategoride önerir).
-export async function changeCategories(uid, action, rawName) {
-  const name = cleanCategoryName(rawName);
+// birbirini ezmez. Aynı ad zaten varsa ekleme değişiklik yapmaz (o kategori döner);
+// kaldırma kimlikle yapılır, yoksa değişiklik yok (tekrar gönderilen istek hata
+// vermez). Kaldırma yalnızca listeden çıkarır; tariflerin kategorisine dokunmaz
+// (istemci yalnızca boş kategoride önerir). Kimlik sunucuda üretilir.
+export async function changeCategories(uid, action, body = {}) {
+  let rejected = null;
+  let created = null;
+  if (action === "removeCategory") {
+    const id = typeof body.id === "string" ? body.id : "";
+    const updated = await updateProfile(uid, (p) => {
+      const current = normalizeCustomCategories(p.categories);
+      const next = current.filter((c) => c.id !== id);
+      return next.length === current.length ? undefined : { ...p, categories: next };
+    });
+    return publicProfile(updated.value);
+  }
+  const name = cleanCategoryName(body.name);
   if (!name) throw Object.assign(new Error(CATEGORY_ERRORS.category_empty), { status: 400, code: "category_empty" });
   const key = categoryKey(name);
-  let rejected = null;
+  const lang = isContentLanguage(body.lang) ? body.lang : "tr";
   const updated = await updateProfile(uid, (p) => {
     rejected = null;
     const current = normalizeCustomCategories(p.categories);
-    if (action === "removeCategory") {
-      const next = current.filter((c) => categoryKey(c) !== key);
-      return next.length === current.length ? undefined : { ...p, categories: next };
+    const existing = current.find((c) => categoryKey(c.name) === key);
+    if (existing) {
+      created = existing;
+      return undefined;
     }
-    if (current.some((c) => categoryKey(c) === key)) return undefined;
     const code = validateNewCategory(name, current);
     if (code) {
       rejected = code;
       return undefined;
     }
-    return { ...p, categories: [...current, name] };
+    created = { id: newCategoryId(), name, lang };
+    return { ...p, categories: [...current, created] };
   });
   if (rejected) throw Object.assign(new Error(CATEGORY_ERRORS[rejected]), { status: 400, code: rejected });
-  return publicProfile(updated.value);
+  return { ...publicProfile(updated.value), created };
+}
+
+function newCategoryId() {
+  return `c${crypto.randomBytes(8).toString("hex")}`;
 }
 
 export function publicProfile(profile) {
   return { ...profile, categories: normalizeCustomCategories(profile && profile.categories) };
+}
+
+// Paylaşım paneli için: üyesi olduğun (Plus ile erişilebilen) ailelerin tariflerinde
+// BAŞKA üyelerin kullandığı özel kategoriler. Yalnızca aile tariflerinde zaten
+// görünen bilgi döner (ad, kimlik, sahibin uid'i/adı, dil); tarif içeriği dönmez.
+export async function familyCategories(uid, profile) {
+  const ids = await verifiedFamilyIds(uid, profile);
+  const out = [];
+  await Promise.all(
+    ids.map(async (familyId) => {
+      const list = await redisGetJSON(`family:${familyId}:recipes`, []);
+      const seen = new Set();
+      for (const r of Array.isArray(list) ? list : []) {
+        const ref = cleanCategoryRef(r && r.categoryRef);
+        if (!ref || ref.uid === uid || !isAcceptableRecipeCategory(r.category)) continue;
+        const k = `${ref.uid}:${ref.id}`;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push({ familyId, name: r.category, ref });
+      }
+    })
+  );
+  return out;
 }

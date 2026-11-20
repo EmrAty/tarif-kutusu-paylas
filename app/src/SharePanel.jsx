@@ -3,8 +3,7 @@ import { ChefHat, Link2, Loader2, AlertCircle, Check, Plus } from "lucide-react"
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "./firebase.js";
 import { COLORS, SERIF, BODY, uid, storageGet, authedFetch, fetchCaption } from "./App.jsx";
-import { CATEGORIES } from "../shared/recipeExtraction.js";
-import { normalizeCustomCategories } from "../shared/categories.js";
+import { normalizeCustomCategories, categoryOptions, categoryFields, cleanCategoryRef } from "../shared/categories.js";
 import { useLanguage } from "./i18n.jsx";
 
 // Android paylaşım paneli. Native ShareActivity, kaynak uygulamanın (TikTok vb.)
@@ -65,10 +64,13 @@ export default function SharePanel() {
   const [caption, setCaption] = useState("");
   const [fetchingCaption, setFetchingCaption] = useState(false);
   const [captionError, setCaptionError] = useState("");
-  const [category, setCategory] = useState("");
-  // Kullanıcının kendi kategorileri (profil). Alınamazsa yalnızca sabit kategoriler.
+  const [category, setCategory] = useState(null); // kategori tanımlayıcısı (shared/categories.js)
+  // Kullanıcının kendi kategorileri + üyesi olduğu ailelerde diğer üyelerin aile
+  // tariflerinde kullandığı kategoriler (profil ucu). Alınamazsa yalnızca sabitler.
   // Yeni kategori panelde değil, uygulamada oluşturulur (panel sade kalsın).
   const [customCategories, setCustomCategories] = useState([]);
+  const [familyCategories, setFamilyCategories] = useState([]);
+  const [categoryNames, setCategoryNames] = useState({}); // "<dil>\n<ad>" -> gösterim çevirisi
   const [status, setStatus] = useState("idle"); // "idle" | "sending" | "sent"
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
@@ -118,15 +120,21 @@ export default function SharePanel() {
   useEffect(() => {
     if (!authUser) return;
     let cancelled = false;
-    authedFetch("/api/profile")
+    authedFetch("/api/profile?familyCategories=1")
       .then((data) => {
-        if (!cancelled) setCustomCategories(normalizeCustomCategories(data && data.categories));
+        if (cancelled) return;
+        setCustomCategories(normalizeCustomCategories(data && data.categories));
+        setFamilyCategories(Array.isArray(data && data.familyCategories) ? data.familyCategories : []);
       })
+      .catch(() => {});
+    // Özel kategori adlarının uygulama dilindeki gösterimi (sunucu önbellekli).
+    authedFetch("/api/translate-recipe", { method: "POST", body: { mode: "categories", target: language } })
+      .then((data) => !cancelled && setCategoryNames((data && data.categories) || {}))
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [authUser]);
+  }, [authUser, language]);
 
   // Seçili aile listede yoksa (liste yenilendi/boş geldi) seçimden çıkar;
   // hiçbir yer kalmazsa kişisel seçilir.
@@ -137,6 +145,25 @@ export default function SharePanel() {
       return kept.length ? kept : [PERSONAL_TARGET];
     });
   }, [familyInfo]);
+
+  // Seçenekler: sabitler + kendi kategorilerim + SEÇİLİ ailelerde diğer üyelerin kategorileri.
+  const me = { uid: authUser?.uid || "", name: storageGet("person-name")?.value || "" };
+  const categoryChoices = categoryOptions(
+    { me, mine: customCategories },
+    familyCategories
+      .filter((fc) => fc && targets.includes(fc.familyId) && cleanCategoryRef(fc.ref))
+      .map((fc) => ({ category: fc.name, categoryRef: fc.ref }))
+  );
+  const labelOf = (cat) => {
+    if (cat.fixed) return categoryLabel(cat.name);
+    const base = (cat.lang !== language && categoryNames[`${cat.lang}\n${cat.name}`]) || cat.name;
+    return cat.ref && cat.ref.uid !== me.uid ? `${base} (${cat.ref.by || t("categories.someone")})` : base;
+  };
+  const choiceKeys = categoryChoices.map((c) => c.key).join("|");
+  useEffect(() => {
+    // Aile seçimi kaldırılınca o ailenin kategorisi seçili kalmasın.
+    if (category && !choiceKeys.split("|").includes(category.key)) setCategory(null);
+  }, [choiceKeys, category]);
 
   const toggleTarget = (id) =>
     setTargets((prev) => {
@@ -192,7 +219,7 @@ export default function SharePanel() {
           requestId: requestIdRef.current,
           sourceUrl: link,
           caption: caption.trim(),
-          category,
+          ...categoryFields(category),
           addedBy: storageGet("person-name")?.value || "",
           // Tarif metinleri uygulamanın dilinde üretilsin (kaynak videonun dili değil).
           language,
@@ -339,11 +366,11 @@ export default function SharePanel() {
 
       <label style={labelStyle}>{t("addForm.categoryLabel")}</label>
       <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "16px" }}>
-        {[...CATEGORIES, ...customCategories].map((cat) => {
-          const selected = category === cat;
+        {categoryChoices.map((cat) => {
+          const selected = !!category && category.key === cat.key;
           return (
             <button
-              key={cat}
+              key={cat.key}
               type="button"
               onClick={() => setCategory(cat)}
               style={{
@@ -361,7 +388,7 @@ export default function SharePanel() {
                 whiteSpace: "nowrap",
               }}
             >
-              {categoryLabel(cat)}
+              {labelOf(cat)}
             </button>
           );
         })}

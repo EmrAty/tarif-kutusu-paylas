@@ -18,6 +18,7 @@ process.env.ANTHROPIC_API_KEY = "test-key";
 
 const { default: profileHandler } = await import("../api/profile.js");
 const { default: recipeJobs } = await import("../api/recipe-jobs.js");
+const { default: translateHandler } = await import("../api/translate-recipe.js");
 const { extractRecipeFromCaption } = await import("../api/_lib/extractRecipe.js");
 const { RECIPE_SYSTEM_PROMPT } = await import("../shared/recipeExtraction.js");
 const { translationPayload } = await import("../shared/recipeLocales.js");
@@ -68,27 +69,97 @@ function reset() {
 
 // ---- Özel kategoriler: profil ----
 
-test("kategori ekle/kaldır: profilde atomik, ad olduğu gibi, tekrar eklemek değişiklik yapmaz", async () => {
+test("kategori ekle/kaldır: kimlik sunucuda üretilir, ad olduğu gibi, dil saklanır; aynı ad ikinci kez eklenmez", async () => {
   reset();
-  let r = await invoke(profileHandler, { uid: "A", body: { action: "addCategory", name: "  Çorbalar  " } });
+  let r = await invoke(profileHandler, { uid: "A", body: { action: "addCategory", name: "  Çorbalar  ", lang: "tr" } });
   assert.equal(r.status, 200, JSON.stringify(r.body));
-  assert.deepEqual(r.body.categories, ["Çorbalar"]);
+  const soups = r.body.created;
+  assert.match(soups.id, /^c[0-9a-f]{16}$/);
+  assert.deepEqual(r.body.categories, [{ id: soups.id, name: "Çorbalar", lang: "tr" }]);
   r = await invoke(profileHandler, { uid: "A", body: { action: "addCategory", name: "ÇORBALAR" } });
   assert.equal(r.status, 200);
-  assert.deepEqual(r.body.categories, ["Çorbalar"], "aynı ad farklı harf büyüklüğüyle ikinci kez eklenmez");
-  await invoke(profileHandler, { uid: "A", body: { action: "addCategory", name: "Meal Prep" } });
+  assert.equal(r.body.created.id, soups.id, "aynı ad: mevcut kategori döner, yenisi açılmaz");
+  assert.equal(r.body.categories.length, 1);
+  r = await invoke(profileHandler, { uid: "A", body: { action: "addCategory", name: "Meal Prep", lang: "en" } });
+  const prep = r.body.created;
   const profile = read("user:A:profile");
-  assert.deepEqual(profile.categories, ["Çorbalar", "Meal Prep"]);
+  assert.deepEqual(profile.categories, [{ id: soups.id, name: "Çorbalar", lang: "tr" }, { id: prep.id, name: "Meal Prep", lang: "en" }]);
   assert.equal(profile.isPlus, false, "diğer profil alanları korunur");
 
   r = await invoke(profileHandler, { method: "GET", uid: "A" });
-  assert.deepEqual(r.body.categories, ["Çorbalar", "Meal Prep"]);
+  assert.deepEqual(r.body.categories.map((c) => c.name), ["Çorbalar", "Meal Prep"]);
 
-  r = await invoke(profileHandler, { uid: "A", body: { action: "removeCategory", name: "çorbalar" } });
-  assert.deepEqual(r.body.categories, ["Meal Prep"]);
+  r = await invoke(profileHandler, { uid: "A", body: { action: "removeCategory", id: soups.id } });
+  assert.deepEqual(r.body.categories.map((c) => c.id), [prep.id]);
+  r = await invoke(profileHandler, { uid: "A", body: { action: "removeCategory", id: soups.id } });
+  assert.equal(r.status, 200, "tekrar kaldırma hata vermez");
   // Başka hesabın profili etkilenmez.
   r = await invoke(profileHandler, { method: "GET", uid: "B" });
   assert.deepEqual(r.body.categories, []);
+});
+
+test("d2254df profili (düz metin kategoriler) okunurken kimlik kazanır, veri yeniden yazılmaz", async () => {
+  reset();
+  db.set("user:A:profile", JSON.stringify({ isPlus: false, families: [], categories: ["Çorbalar"] }));
+  const r = await invoke(profileHandler, { method: "GET", uid: "A" });
+  assert.equal(r.body.categories[0].name, "Çorbalar");
+  assert.match(r.body.categories[0].id, /^l[0-9a-z]{7}$/);
+  assert.deepEqual(read("user:A:profile").categories, ["Çorbalar"]);
+});
+
+function familyWith(recipes) {
+  db.set("user:A:profile", JSON.stringify({ isPlus: true, families: ["F1"] }));
+  db.set("user:B:profile", JSON.stringify({ isPlus: true, families: ["F1"] }));
+  db.set("user:C:profile", JSON.stringify({ isPlus: true, families: [] }));
+  db.set("family:F1:meta", JSON.stringify({ name: "Ev", ownerUid: "A", inviteCode: "ABCDEFGHJK" }));
+  db.set("family:F1:members", JSON.stringify({ A: { joinedAt: 1, name: "Emre" }, B: { joinedAt: 2, name: "Ayşe" } }));
+  db.set("family:F1:recipes", JSON.stringify(recipes));
+}
+const EMRE_SOUPS = { id: "c00000000000000a1", uid: "A", by: "Emre", lang: "tr" };
+
+test("aile kategorileri: üyenin aile tariflerinde kullandığı kategori diğer üyeye döner; aileyle paylaşılmayan dönmez", async () => {
+  reset();
+  familyWith([
+    { id: "r1-fam-F1", title: "Ezogelin", category: "Çorbalar", categoryRef: EMRE_SOUPS },
+    { id: "r2-fam-F1", title: "Menemen", category: "Kahvaltı" },
+  ]);
+  const prof = JSON.parse(db.get("user:A:profile"));
+  db.set("user:A:profile", JSON.stringify({ ...prof, categories: [{ id: "c00000000000000a1", name: "Çorbalar", lang: "tr" }, { id: "c00000000000000a2", name: "Gizli", lang: "tr" }] }));
+  let r = await invoke(profileHandler, { method: "GET", uid: "B", query: { familyCategories: "1" } });
+  assert.deepEqual(r.body.familyCategories, [{ familyId: "F1", name: "Çorbalar", ref: EMRE_SOUPS }]);
+  assert.ok(!JSON.stringify(r.body).includes("Gizli"), "aileyle paylaşılmamış kategori başka hesaba açılmaz");
+  // Sahibin kendisine kendi kategorisi "aile kategorisi" olarak dönmez.
+  r = await invoke(profileHandler, { method: "GET", uid: "A", query: { familyCategories: "1" } });
+  assert.deepEqual(r.body.familyCategories, []);
+  // Üye olmayan hesaba hiçbir şey dönmez.
+  r = await invoke(profileHandler, { method: "GET", uid: "C", query: { familyCategories: "1" } });
+  assert.deepEqual(r.body.familyCategories, []);
+  // Sahip aileden ayrıldıktan sonra da aile tariflerindeki kategori seçenek olarak kalır.
+  db.set("family:F1:members", JSON.stringify({ B: { joinedAt: 2, name: "Ayşe" } }));
+  r = await invoke(profileHandler, { method: "GET", uid: "B", query: { familyCategories: "1" } });
+  assert.deepEqual(r.body.familyCategories.map((c) => c.ref.by), ["Emre"]);
+});
+
+test("kategori çevirisi: yalnızca farklı dildeki özel adlar, tek AI çağrısı, sonra önbellek; kişi adı gönderilmez", async () => {
+  reset();
+  familyWith([{ id: "r1-fam-F1", title: "Ezogelin", category: "Çorbalar", categoryRef: EMRE_SOUPS }]);
+  db.set("user:B:profile", JSON.stringify({ isPlus: true, families: ["F1"], categories: [{ id: "c00000000000000b1", name: "Meal Prep", lang: "en" }] }));
+  extracted = { titles: ["Soups"] };
+  let r = await invoke(translateHandler, { uid: "B", body: { mode: "categories", target: "en" } });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(r.body.categories, { "tr\nÇorbalar": "Soups" });
+  assert.equal(requests.length, 1);
+  const sent = JSON.stringify(requests[0].messages);
+  assert.ok(sent.includes("Çorbalar") && !sent.includes("Meal Prep") && !sent.includes("Emre"));
+  r = await invoke(translateHandler, { uid: "B", body: { mode: "categories", target: "en" } });
+  assert.deepEqual(r.body.categories, { "tr\nÇorbalar": "Soups" });
+  assert.equal(requests.length, 1, "ikinci istek önbellekten");
+  // Türkçe arayüzde yalnızca İngilizce adlı kategori çevrilir.
+  extracted = { titles: ["Haftalık Hazırlık"] };
+  r = await invoke(translateHandler, { uid: "B", body: { mode: "categories", target: "tr" } });
+  assert.deepEqual(r.body.categories, { "en\nMeal Prep": "Haftalık Hazırlık" });
+  // Kayıtlar değişmedi.
+  assert.equal(read("family:F1:recipes")[0].category, "Çorbalar");
 });
 
 test("kategori: hazır adlarla (iki dilde), Diğer ve boş adla çakışan istek 400 + kod", async () => {
@@ -132,10 +203,12 @@ async function runJob(extra) {
 
 test("paylaşım job'u özel kategoriyi kabul eder; tarif kaynağın püf noktalarıyla (temiz) kaydedilir", async () => {
   reset();
-  const job = await runJob({ category: "Kek & Kurabiye" });
+  const ref = { id: "c00000000000000c1", uid: "A", by: "Emre", lang: "tr", junk: "<x>" };
+  const job = await runJob({ category: "Kek & Kurabiye", categoryRef: ref });
   assert.equal(job.status, "completed");
   const [saved] = read("user:A:recipes");
   assert.equal(saved.category, "Kek & Kurabiye");
+  assert.deepEqual(saved.categoryRef, { id: "c00000000000000c1", uid: "A", by: "Emre", lang: "tr" }, "bağ temizlenerek yazılır");
   assert.deepEqual(saved.tips, ["Fırını önceden ısıtın.", "Kek 2 gün taze kalır."]);
   assert.equal(calls.filter((c) => c.url === ANTHROPIC).length, 1, "püf noktaları için ek AI çağrısı yok");
 });

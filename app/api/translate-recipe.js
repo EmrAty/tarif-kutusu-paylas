@@ -18,6 +18,8 @@ import crypto from "node:crypto";
 import { requireUser } from "./_lib/auth.js";
 import { redisGetJSON, redisCommand } from "./_lib/redis.js";
 import { assertFamilyAccess, verifiedFamilyIds } from "./_lib/families.js";
+import { getProfile } from "./_lib/profile.js";
+import { normalizeCustomCategories, cleanCategoryRef, isFixedCategory, CATEGORY_NAME_MAX } from "../shared/categories.js";
 import { checkRateLimit, reserveAiBudget, assertKillSwitchOff, clientIp, sendGuardError } from "./_lib/aiGuard.js";
 import { checkInputBudget, textChars, INPUT_TOO_LARGE_CODE } from "./_lib/aiInputBudget.js";
 import { CONTENT_LANGUAGES, contentLangOf, isContentLanguage, sameNumbers, translationPayload } from "../shared/recipeLocales.js";
@@ -342,6 +344,66 @@ async function translateTitles(uid, target, guard) {
   return { titles: result, translated: batch.length, skipped };
 }
 
+// Özel kategori adları (bkz. shared/categories.js): kullanıcının kendi kategorileri +
+// erişebildiği tariflerdeki categoryRef'li adlar. Ad hiçbir zaman değişmez; çeviri
+// yalnızca gösterim içindir ve kullanıcının önbelleğinde (user:<uid>:translations:<dil>,
+// alan c:<sürüm>:<sha1(dil + ad)>) kalır: aynı ad bir kez çevrilir. Kişi adı (parantez)
+// istemcide eklenir, çeviriye hiç gitmez.
+export const CATEGORY_TRANSLATE_MAX = 60;
+const categoryField = (lang, name) => `c:${PROMPT_VERSION}:${sha("sha1", `${lang}\n${name}`)}`;
+export const categoryTranslationKey = (lang, name) => `${lang}\n${name}`;
+
+async function translateCategories(uid, target, guard) {
+  const profile = await getProfile(uid);
+  const families = await verifiedFamilyIds(uid, profile);
+  const wanted = new Map(); // anahtar -> { lang, name }
+  const add = (name, lang) => {
+    if (typeof name !== "string" || !name || name.length > CATEGORY_NAME_MAX || isFixedCategory(name)) return;
+    const l = isContentLanguage(lang) ? lang : "tr";
+    if (l === target) return;
+    wanted.set(categoryTranslationKey(l, name), { lang: l, name });
+  };
+  for (const c of normalizeCustomCategories(profile.categories)) add(c.name, c.lang);
+  const buckets = await Promise.all([`user:${uid}`, ...families.map((f) => `family:${f}`)].map((o) => readRecipes(`${o}:recipes`)));
+  for (const list of buckets) {
+    for (const r of list) {
+      const ref = cleanCategoryRef(r && r.categoryRef);
+      if (ref) add(r.category, ref.lang);
+    }
+  }
+  const result = {};
+  if (!wanted.size) return { categories: result, translated: 0 };
+  const owner = `user:${uid}`;
+  const entries = [...wanted.entries()];
+  const cached = (await redisCommand(["HMGET", translationsKey(owner, target), ...entries.map(([, w]) => categoryField(w.lang, w.name))])) || [];
+  const missing = [];
+  entries.forEach(([key, w], i) => {
+    if (cached[i]) result[key] = cached[i];
+    else missing.push([key, w]);
+  });
+  const batch = missing.slice(0, CATEGORY_TRANSLATE_MAX);
+  if (batch.length) {
+    await guardTranslation(guard);
+    const { json } = await callClaude({
+      system: `${systemPrompt(target)}\n- The input is a list of recipe category names (section titles a user created, e.g. "Çorbalar", "Meal Prep"). Translate each one into a short, natural ${CONTENT_LANGUAGES[target].name} category name; keep proper names as they are. Return the same number of names in the same order, in "titles".`,
+      userText: `<recipe>\n${JSON.stringify({ titles: batch.map(([, w]) => w.name) })}\n</recipe>`,
+      schema: TITLES_SCHEMA,
+    });
+    const out = Array.isArray(json && json.titles) ? json.titles : [];
+    if (out.length === batch.length) {
+      const pairs = [];
+      batch.forEach(([key, w], i) => {
+        const tr = typeof out[i] === "string" ? out[i].replace(/\s+/g, " ").trim().slice(0, CATEGORY_NAME_MAX * 2) : "";
+        if (!tr) return;
+        result[key] = tr;
+        pairs.push(categoryField(w.lang, w.name), tr);
+      });
+      await cacheSet(owner, target, pairs).catch(() => {});
+    }
+  }
+  return { categories: result, translated: batch.length };
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
@@ -362,7 +424,11 @@ export default async function handler(req, res) {
   const guard = { uid: user.uid, isAnonymous: user.isAnonymous, ip: clientIp(req) };
   try {
     const result =
-      mode === "titles" ? await translateTitles(user.uid, target, guard) : await translateOne(user.uid, { recipeId, scope, target }, guard);
+      mode === "titles"
+        ? await translateTitles(user.uid, target, guard)
+        : mode === "categories"
+          ? await translateCategories(user.uid, target, guard)
+          : await translateOne(user.uid, { recipeId, scope, target }, guard);
     res.status(200).json(result);
   } catch (e) {
     if (sendGuardError(res, e)) return;

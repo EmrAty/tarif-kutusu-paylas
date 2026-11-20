@@ -1,3 +1,4 @@
+import { cleanCategoryRef } from "../shared/categories.js";
 import crypto from "node:crypto";
 import { requireUser } from "./_lib/auth.js";
 import { redisGetJSON, redisSetJSON } from "./_lib/redis.js";
@@ -83,6 +84,8 @@ function lockedSummary(list) {
       id: r.id,
       title: typeof r.title === "string" ? r.title.slice(0, SUMMARY_TITLE_MAX) : "",
       category: typeof r.category === "string" ? r.category.slice(0, 80) : "",
+      // Özel kategorinin bağı (kimlik/sahip/dil): kart doğru bölümde görünsün; içerik değil.
+      ...(cleanCategoryRef(r.categoryRef) ? { categoryRef: cleanCategoryRef(r.categoryRef) } : {}),
       createdAt: Number.isFinite(Number(r.createdAt)) ? Number(r.createdAt) : null,
       addedBy: typeof r.addedBy === "string" ? r.addedBy.slice(0, 40) : null,
       isFavorite: !!r.isFavorite,

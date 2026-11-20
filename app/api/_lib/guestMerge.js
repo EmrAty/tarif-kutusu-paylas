@@ -329,11 +329,22 @@ function assertMergeCapacity(bucket, nextRaw, previousRaw, nextCount, previousCo
 
 const recipeFingerprint = (r) => crypto.createHash("sha256").update(JSON.stringify(r)).digest("hex").slice(0, 8);
 
+// Misafirin kendi özel kategorisine bağlı tarif hedefte bağı (categoryRef) olmadan,
+// yalnızca adla taşınır: hedef hesap aynı adlı kategorisine (ya da taşınan
+// kategorilere) adla bağlar; misafirin uid'i başka bir kişinin kategorisi gibi
+// "(ad)" ekiyle görünmez.
+function withoutGuestCategoryRef(r, guestUid) {
+  if (!guestUid || !isPlainObject(r) || !isPlainObject(r.categoryRef) || r.categoryRef.uid !== guestUid) return r;
+  const { categoryRef, ...rest } = r;
+  return rest;
+}
+
 // Geçerli tarifleri hedef kişisel listeye ekler. { added, skipped }.
-async function mergeRecipesInto(targetUid, incoming) {
+async function mergeRecipesInto(targetUid, incoming, guestUid) {
   const accepted = [];
   let skipped = 0;
-  for (const r of incoming) {
+  for (const raw of incoming) {
+    const r = withoutGuestCategoryRef(raw, guestUid);
     if (!isPlainObject(r)) {
       skipped++;
       continue;
@@ -522,7 +533,7 @@ async function transferFamilyTargetFull(guestUid, targetUid, id) {
   const recipes = await readList(`family:${id}:recipes`);
   const pantry = await readList(`family:${id}:pantry-items`);
   const shopping = parseShopping((await readBucket(`family:${id}:shopping-list`)).raw);
-  const r = await mergeRecipesInto(targetUid, recipes);
+  const r = await mergeRecipesInto(targetUid, recipes, guestUid);
   const pantryAdded = await mergePantryInto(targetUid, pantry);
   const shoppingResult = await mergeShoppingInto(targetUid, shopping);
   // Bu arada biri katıldıysa aile silinmez (leaveAsLastMember yalnızca ayrılır).
@@ -563,7 +574,7 @@ async function runSteps(guestUid, targetUid) {
 
   if (!steps().recipes) {
     await assertTargetAlive(targetUid);
-    const r = await mergeRecipesInto(targetUid, await readList(`user:${guestUid}:recipes`));
+    const r = await mergeRecipesInto(targetUid, await readList(`user:${guestUid}:recipes`), guestUid);
     await markStep(guestUid, "recipes", (rep) => ({ ...rep, recipes: r.added, skippedRecipes: r.skipped }));
     await refresh();
   }

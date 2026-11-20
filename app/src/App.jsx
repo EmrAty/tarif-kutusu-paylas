@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 import { fetchAllTitles } from "./titleTranslation.js";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import {
   ChefHat, Plus, Minus, Link2, ExternalLink, Trash2, Loader2, ArrowLeft, ArrowRight, AlertCircle,
   FileText, Pencil, Check, ChevronDown, Star, Search, ShoppingCart, Clock, Gauge, Undo2, X, Package, Download,
@@ -30,7 +30,7 @@ import ShareReceiver from "./capacitorShare.js";
 import NativeSplash from "./capacitorSplash.js";
 import { scaleIngredient, FRACTION_GLYPHS, scaleNutrition, perServingNutrition, baseServingsOf, maxServingsFor, MIN_SERVINGS } from "./servings.js";
 import { CATEGORIES } from "../shared/recipeExtraction.js";
-import { categoryKey, categorySections, sectionOf, cleanCategoryName, validateNewCategory, normalizeCustomCategories, CATEGORY_NAME_MAX } from "../shared/categories.js";
+import { categoryOf, categoryOptions, categoryFields, cleanCategoryName, validateNewCategory, normalizeCustomCategories, CATEGORY_NAME_MAX } from "../shared/categories.js";
 import { tipsOf, normalizeTips } from "../shared/recipeTips.js";
 import { matchRecipes } from "./pantryMatch.js";
 import { MAX_IMAGES, validateImageBatch } from "../shared/imageLimits.js";
@@ -51,6 +51,7 @@ import { normalizeSuggestion, normalizeSuggestions } from "../shared/pantrySugge
 import { saveRecipeToTargets, extractionSignature, savedRecipeId } from "./saveTargets.js";
 import { familyCopyId } from "../shared/recipeIds.js";
 import { transferRecipe } from "./recipeTransfer.js";
+import { groupCopies, copiesOf, groupIdOf } from "./recipeGroups.js";
 import { saveTicket as saveGuestMergeTicket, clearTicket as clearGuestMergeTicket, syncGuestMerge } from "./guestMergeClient.js";
 import { useLanguage, LANGUAGES, translate } from "./i18n.jsx";
 
@@ -282,7 +283,8 @@ function LockedOverlay({ size = 22 }) {
 const SCREEN_EXIT_MS = 200; // mobil "ekran" kapanış animasyonunun süresi (gerçek view değişiminden önce)
 // Mobilde/Capacitor'da tarif listesinin (Sidebar) üstünde kalmayıp onun yerine
 // tam ekran açılan, kendi giriş/çıkış animasyonu + scroll-üste-sıfırlama olan view'lar.
-const FULLSCREEN_VIEWS = ["detail", "add", "manual", "shopping", "pantry", "cook", "favorites"];
+// "edit": Tarifi Düzenle, Pişirme modu gibi ayrı ekran (mobilde liste gizlenir, geri → tarif).
+const FULLSCREEN_VIEWS = ["detail", "add", "manual", "shopping", "pantry", "cook", "favorites", "edit"];
 
 // "Elimde Bunlar Var" AI önerileri kategori döndürmüyor (bkz. suggest-recipes.js
 // şeması); normal recipe şemasında kategori zorunlu olduğu için kaydederken bu
@@ -900,7 +902,7 @@ export default function TarifKutusu() {
   const [caption, setCaption] = useState("");
   const [notes, setNotes] = useState("");
   const [images, setImages] = useState([]);
-  const [category, setCategory] = useState("");
+  const [category, setCategory] = useState(null); // kategori tanımlayıcısı (shared/categories.js) | null
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [undoState, setUndoState] = useState(null); // { recipe, index }
@@ -1004,7 +1006,7 @@ export default function TarifKutusu() {
       return;
     }
     if (closingScreenRef.current) return;
-    const backTarget = view === "shopping" ? shoppingReturnView : view === "cook" ? "detail" : "list";
+    const backTarget = view === "shopping" ? shoppingReturnView : view === "cook" || view === "edit" ? "detail" : "list";
     const reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const isMobileWidth = window.innerWidth < 768;
     if (reduceMotion || !isMobileWidth) {
@@ -1720,23 +1722,98 @@ export default function TarifKutusu() {
     [lockedIds, lockedFamilyRecipeIds]
   );
 
-  // Özel kategoriler. Liste profilde (sunucuda atomik); tarif kategorisini ad olarak
-  // taşır. Seçim yerlerinde: sabitler + kendi kategorilerim + kişisel tariflerimde
-  // geçen adlar (ör. misafirken açılıp taşınan). Aile üyesinin kategorisi yalnızca
-  // o aile tarifinin bölümü olarak görünür, benim seçim listeme girmez.
-  const categoryRequest = useCallback(async (action, name) => {
-    try {
-      const profile = await authedFetch("/api/profile", { method: "POST", body: { action, name } });
-      setCustomCategories(normalizeCustomCategories(profile && profile.categories));
-    } catch (e) {
-      if (e && typeof e.code === "string" && e.code.startsWith("category_")) throw new Error(t(`categories.error.${e.code}`, { max: CATEGORY_NAME_MAX }));
-      throw e;
-    }
-  }, [t]);
-  const pickerCategories = useMemo(() => categorySections(customCategories, recipeBuckets[PERSONAL] || []), [customCategories, recipeBuckets]);
+  // Özel kategoriler (bkz. shared/categories.js). Kendi listem profilde (sunucuda
+  // atomik, kimlikli); tarif kategorisini ad + categoryRef olarak taşır. Seçiciler
+  // kaydedilecek yerlere göre: sabitler + kendi kategorilerim + o yerlerin
+  // tariflerinde geçen kategoriler (aile üyelerininkiler "Ad (Kişi)" görünür).
+  const categoryCtx = useMemo(
+    () => ({ me: { uid: authUser?.uid || "", name: personName || "" }, mine: customCategories }),
+    [authUser, personName, customCategories]
+  );
+  const categoryRequest = useCallback(
+    async (action, body) => {
+      try {
+        const profile = await authedFetch("/api/profile", { method: "POST", body: { action, ...body } });
+        setCustomCategories(normalizeCustomCategories(profile && profile.categories));
+        return profile;
+      } catch (e) {
+        if (e && typeof e.code === "string" && e.code.startsWith("category_")) throw new Error(t(`categories.error.${e.code}`, { max: CATEGORY_NAME_MAX }));
+        throw e;
+      }
+    },
+    [t]
+  );
+  const describeCategory = useCallback((r) => categoryOf(r, categoryCtx), [categoryCtx]);
+  const categoryOptionsFor = useCallback(
+    (scopes) => categoryOptions(categoryCtx, (scopes && scopes.length ? scopes : [PERSONAL]).flatMap((s) => recipeBuckets[s] || [])),
+    [categoryCtx, recipeBuckets]
+  );
+  const memberNameByUid = useMemo(() => {
+    const map = {};
+    families.forEach((f) => (f.members || []).forEach((m) => m && m.uid && m.name && (map[m.uid] = m.name)));
+    return map;
+  }, [families]);
+  // Özel kategori adlarının gösterim çevirisi (asıl ad ve kimlik değişmez). Sunucu
+  // önbellekli; burada yalnızca bu oturumun belleği. Kişi adı çeviriye gitmez.
+  const [categoryTranslations, setCategoryTranslations] = useState({}); // dil -> { "<dil>\n<ad>": çeviri }
+  const categoryLabelOf = useCallback(
+    (desc) => {
+      if (!desc) return "";
+      if (desc.fixed) return categoryLabel(desc.name);
+      const tr = desc.lang !== language ? (categoryTranslations[language] || {})[`${desc.lang}\n${desc.name}`] : null;
+      const base = tr || desc.name;
+      if (desc.ref && desc.ref.uid !== categoryCtx.me.uid) {
+        return `${base} (${memberNameByUid[desc.ref.uid] || desc.ref.by || t("categories.someone")})`;
+      }
+      return base;
+    },
+    [categoryLabel, categoryTranslations, language, categoryCtx, memberNameByUid, t]
+  );
+  const categoriesAskedRef = useRef({});
+  useEffect(() => {
+    if (!authUser) return;
+    const asked = categoriesAskedRef.current[language] || (categoriesAskedRef.current[language] = new Set());
+    const needed = new Set();
+    customCategories.forEach((c) => c.lang !== language && needed.add(`${c.lang}\n${c.name}`));
+    recipes.forEach((r) => {
+      const d = r && r.categoryRef ? categoryOf(r, categoryCtx) : null;
+      if (d && d.ref && d.lang !== language) needed.add(`${d.lang}\n${d.name}`);
+    });
+    const fresh = [...needed].filter((k) => !asked.has(k));
+    if (!fresh.length) return;
+    const timer = setTimeout(async () => {
+      fresh.forEach((k) => asked.add(k));
+      try {
+        const data = await authedFetch("/api/translate-recipe", { method: "POST", body: { mode: "categories", target: language } });
+        setCategoryTranslations((prev) => ({ ...prev, [language]: { ...(prev[language] || {}), ...((data && data.categories) || {}) } }));
+      } catch (e) {
+        // adlar asıl hâliyle kalır
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [authUser, language, customCategories, recipes, categoryCtx]);
   const requestCreateCategory = useCallback((onCreated) => setCategoryModal({ onCreated: onCreated || null }), []);
-  const categoriesContext = useMemo(() => ({ pickerCategories, requestCreate: requestCreateCategory }), [pickerCategories, requestCreateCategory]);
-  const categoryRecipeCount = useCallback((cat) => recipes.filter((r) => r && categoryKey(r.category) === categoryKey(cat)).length, [recipes]);
+  const categoriesContext = useMemo(
+    () => ({
+      optionsFor: categoryOptionsFor,
+      sectionsOf: (list) => categoryOptions(categoryCtx, list),
+      labelOf: categoryLabelOf,
+      describe: describeCategory,
+      requestCreate: requestCreateCategory,
+    }),
+    [categoryOptionsFor, categoryCtx, categoryLabelOf, describeCategory, requestCreateCategory]
+  );
+  // "Aileye taşı veya kopyala": Plus, en az bir aile, kişisel ve kilitsiz kayıt.
+  const canTransferRecipe = useCallback(
+    (r) => !!r && isPlus && families.length > 0 && !r._lockedFamily && (r._scopes || [r._scope]).includes(PERSONAL) && !isRecipeLocked(r),
+    [isPlus, families, isRecipeLocked]
+  );
+  // Basılı tutma menüsünden açılınca tarif ekranında taşıma paneli açık gelir.
+  const [transferRequest, setTransferRequest] = useState(null);
+  const categoryRecipeCount = useCallback(
+    (cat) => recipes.filter((r) => r && describeCategory(r)?.key === `u:${categoryCtx.me.uid}:${cat.id}`).length,
+    [recipes, describeCategory, categoryCtx]
+  );
 
   // Bildirime tıklanınca (native pushNotificationActionPerformed ya da web
   // ?openRecipe= query param) hedef tarif henüz yüklenmemiş olabilir - ailenin
@@ -1864,10 +1941,37 @@ export default function TarifKutusu() {
 
   const placeName = (scopeKey) => (scopeKey === PERSONAL ? t("saveTarget.personal") : familyNameById[scopeKey] || t("common.family"));
 
+  // Kişisel kaydı kaldırmadan önce aile kopyası sunucudan TAZE okunur: kopya gerçekten
+  // var ve bu hesap o aileye (Plus + üyelik) hâlâ erişebiliyor mu. Önbellek kullanılmaz.
+  const verifyFamilyCopy = useCallback(async (familyId, copyId) => {
+    const { status, body } = await dataRequest("GET", { query: { bucket: "recipes", scope: "family", familyId } });
+    if (status !== 200 || !body) return false;
+    let list;
+    try {
+      list = JSON.parse(body.value || "[]");
+    } catch {
+      return false;
+    }
+    dataStore.refresh("recipes", familyId);
+    return Array.isArray(list) && list.some((r) => r && r.id === copyId);
+  }, []);
   const handleTransfer = async (id, familyIds, mode) => {
     const raw = (recipeBuckets[PERSONAL] || []).find((r) => r.id === id);
     if (!raw) throw new Error(t("transfer.notPersonal"));
-    return transferRecipe({ recipe: raw, familyIds, mode, mutate: mutateRecipes, personalKey: PERSONAL });
+    // Taşınırken ekran, kişisel kayıt kalkmadan ÖNCE aile kopyasına geçer (yoksa "açık
+    // tarif kayboldu" koruması listeye döner). Kaldırma başarısız olursa kişisele geri döner.
+    const out = await transferRecipe({
+      recipe: raw,
+      familyIds,
+      mode,
+      mutate: mutateRecipes,
+      verify: verifyFamilyCopy,
+      personalKey: PERSONAL,
+      // flushSync: kova değişikliği eşzamanlı çizildiği için geçiş ondan önce kesinleşmeli.
+      beforeRemove: (familyId) => flushSync(() => setActiveId(familyCopyId(id, familyId))),
+    });
+    if (mode === "move" && !out.removedFromPersonal) setActiveId(id);
+    return out;
   };
 
   // Kayıt hatası: Free sınırıysa uyarı penceresi (true döner), değilse genel
@@ -1932,7 +2036,7 @@ export default function TarifKutusu() {
       setCaption("");
       setNotes("");
       setImages([]);
-      setCategory("");
+      setCategory(null);
       setActiveId(openedRecipeId(recipe, saved));
       setView("detail");
     } catch (e) {
@@ -1960,14 +2064,14 @@ export default function TarifKutusu() {
     try {
       // Kayıt başarısız olup aynı girdilerle tekrar denenirse AI'a yeniden
       // gidilmez: ilk çıkarılan tarif (aynı id) yeniden kaydedilir.
-      const signature = extractionSignature({ link, caption, notes, images, category, language });
+      const signature = extractionSignature({ link, caption, notes, images, category: category ? category.key : "", language });
       let recipe = lastExtractionRef.current?.signature === signature ? lastExtractionRef.current.recipe : null;
       if (!recipe) {
         const parsed = await extractRecipe({ link, caption, notes, images, language });
         recipe = {
           id: uid(),
           createdAt: Date.now(),
-          category,
+          ...categoryFields(category),
           isFavorite: false,
           addedBy: personName || "",
           ...parsed,
@@ -2056,8 +2160,8 @@ export default function TarifKutusu() {
     await applyToAllScopes(id, (r) => ({ ...r, isFavorite: nextFavorite })).catch(showSaveError);
   };
 
-  const handleChangeCategory = async (id, newCategory) => {
-    await applyToAllScopes(id, (r) => ({ ...r, category: newCategory })).catch(showSaveError);
+  const handleChangeCategory = async (id, desc) => {
+    await applyToAllScopes(id, (r) => ({ ...r, ...categoryFields(desc) })).catch(showSaveError);
   };
 
   const handleManualSave = async (data) => {
@@ -2101,7 +2205,7 @@ export default function TarifKutusu() {
       id: uid(),
       createdAt: Date.now(),
       title: clean.title,
-      category: category || DEFAULT_PANTRY_CATEGORY,
+      ...(category ? categoryFields(category) : { category: DEFAULT_PANTRY_CATEGORY }),
       link: "",
       ingredients: clean.ingredients.map((i) => ({ name: i.name, amount: i.amount })),
       instructions: clean.instructions,
@@ -2156,6 +2260,8 @@ export default function TarifKutusu() {
   // açılmaz: hepsi `active` üzerinden çalışıyor.
   const activeCandidate = recipes.find((r) => r.id === activeId);
   const active = activeCandidate && !isRecipeLocked(activeCandidate) ? activeCandidate : undefined;
+  // Açık tarifin bütün kopyaları (kişisel + aile; türetilmiş kimlikle, adla değil).
+  const activeCopies = useMemo(() => (active ? copiesOf(active, recipes, PERSONAL) : []), [active, recipes]);
 
   // Tarif açıkken kilitlenirse (ör. Plus kapandı) boş ekranda kalınmasın.
   // Açık tarif tamamen kaybolursa da (ör. aileden çıkarıldın, aile silindi)
@@ -2370,7 +2476,12 @@ export default function TarifKutusu() {
             isPlus={isPlus}
             familyNameById={familyNameById}
             isRecipeLocked={isRecipeLocked}
-            customCategories={customCategories}
+            canTransfer={canTransferRecipe}
+            onOpenTransfer={(id) => {
+              listScrollYRef.current = window.scrollY;
+              setTransferRequest(id);
+              openRecipe(id);
+            }}
             onNewCategory={() => requestCreateCategory(null)}
             onSelect={(id) => {
               if (isRecipeLocked(id)) return;
@@ -2471,15 +2582,19 @@ export default function TarifKutusu() {
           )}
 
           {view === "edit" && active && (
-            <RecipeEditor
-              heading={t("editor.headingEdit")}
-              initial={active}
-              originalLang={contentLangOf(active)}
-              isPlus={isPlus}
-              families={families}
-              onSave={(data) => handleEditSave(active.id, data)}
-              onCancel={() => setView("detail")}
-            />
+            <div className={screenTransitionClass}>
+              <RecipeEditor
+                heading={t("editor.headingEdit")}
+                initial={active}
+                originalLang={contentLangOf(active)}
+                isPlus={isPlus}
+                families={families}
+                // Birden çok kopyası olan tarifte yalnızca bu kayıt değişir; bunu açıkça söyle.
+                editingPlace={activeCopies.length > 1 ? scopeLabels(active, familyNameById, t).join(" + ") : null}
+                onSave={(data) => handleEditSave(active.id, data)}
+                onCancel={closeActiveScreen}
+              />
+            </div>
           )}
 
           {view === "detail" && active && (
@@ -2496,16 +2611,24 @@ export default function TarifKutusu() {
                 onAddToShopping={() => addRecipeToShoppingList(active)}
                 onSendNotification={() => handleSendNotification(active)}
                 onStartCooking={() => setView("cook")}
+                // Kopyası olan aileler de listede kalır ("taşımayı tamamla"). Eski, aynı
+                // kimlikle bağlı kayıtlar (Grup 5) ayrı kopya değildir; o aile listelenmez.
                 transferFamilies={
-                  isPlus && active._scopes.includes(PERSONAL) && !isRecipeLocked(active)
-                    ? families.filter(
-                        (f) =>
-                          !active._scopes.includes(f.id) &&
-                          !(recipeBuckets[f.id] || []).some((r) => r && r.id === familyCopyId(active.id, f.id))
-                      )
+                  canTransferRecipe(active)
+                    ? families
+                        .filter((f) => !active._scopes.includes(f.id))
+                        .map((f) => ({
+                          id: f.id,
+                          name: f.name,
+                          hasCopy: (recipeBuckets[f.id] || []).some((r) => r && r.id === familyCopyId(active.id, f.id)),
+                        }))
                     : []
                 }
+                transferAutoOpen={transferRequest === active.id}
+                onTransferOpened={() => setTransferRequest(null)}
                 onTransfer={(familyIds, mode) => handleTransfer(active.id, familyIds, mode)}
+                copies={activeCopies.map((c) => ({ id: c.id, label: scopeLabels(c, familyNameById, t).join(" + ") }))}
+                onSelectCopy={(id) => setActiveId(id)}
               />
             </div>
           )}
@@ -2850,12 +2973,15 @@ export default function TarifKutusu() {
           customCategories={customCategories}
           recipeCountOf={categoryRecipeCount}
           onCreate={async (name) => {
-            await categoryRequest("addCategory", name);
+            const profile = await categoryRequest("addCategory", { name, lang: language });
+            const created = profile && profile.created;
             const onCreated = categoryModal.onCreated;
             setCategoryModal(null);
-            if (onCreated) onCreated(name);
+            if (onCreated && created) {
+              onCreated(categoryOf({ category: created.name, categoryRef: { id: created.id, uid: categoryCtx.me.uid, lang: created.lang } }, { ...categoryCtx, mine: [created] }));
+            }
           }}
-          onRemove={(name) => categoryRequest("removeCategory", name)}
+          onRemove={(cat) => categoryRequest("removeCategory", { id: cat.id })}
           onClose={() => setCategoryModal(null)}
         />
       )}
@@ -3396,7 +3522,8 @@ function scopeLabels(recipe, familyNameById, t) {
   return scopes.map((s) => (s === PERSONAL ? t("common.personal") : familyNameById?.[s] || t("families.fallbackName")));
 }
 
-function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus, familyNameById, isRecipeLocked, customCategories = [], onNewCategory, onSelect, onOpenPlus, onAdd, onManual, onPantry, onShopping, onToggleFavorite, onDelete, onSendNotification }) {
+function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus, familyNameById, isRecipeLocked, canTransfer, onOpenTransfer, onNewCategory, onSelect, onOpenPlus, onAdd, onManual, onPantry, onShopping, onToggleFavorite, onDelete, onSendNotification }) {
+  const { sectionsOf, labelOf, describe } = React.useContext(CategoriesContext);
   const { t, language, categoryLabel } = useLanguage();
   const personalLoadFailed = !!loadProblems && loadProblems.failed.includes(PERSONAL);
   const failedFamilyNames = (loadProblems?.failed || []).filter((s) => s !== PERSONAL).map((s) => familyNameById[s] || s);
@@ -3410,8 +3537,16 @@ function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus,
   const pressTimerRef = useRef(null);
   const longPressFiredRef = useRef(false);
 
-  const startPress = (r) => {
-    if (!isFamilyRecipeScope(r)) return;
+  // Basılı tutma menüsü: aile tarifinde "Canının çektiğini bildir", kişisel kopyası
+  // taşınabilen tarifte "Aileye taşı veya kopyala" (Plus + aile + kilitsiz).
+  const menuFor = (g) => ({
+    notifyRecipe: g.members.find((m) => isFamilyRecipeScope(m)) || null,
+    transferRecipe: g.members.find((m) => canTransfer?.(m)) || null,
+  });
+  const startPress = (g) => {
+    const m = menuFor(g);
+    if (!m.notifyRecipe && !m.transferRecipe) return;
+    const r = g.primary;
     longPressFiredRef.current = false;
     pressTimerRef.current = setTimeout(() => {
       longPressFiredRef.current = true;
@@ -3450,23 +3585,46 @@ function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus,
   const matches = (r) => [r.title, r._origTitle].some((x) => (x || "").toLocaleLowerCase("tr").includes(q));
 
   // Bölümler: 5 sabit kategori, kullanıcının kendi kategorileri, sonra tariflerde
-  // geçen diğer adlar (ör. aile üyesinin kategorisi). Kategorisiz tarifler "Diğer".
-  const sections = categorySections(customCategories, recipes);
-  const byCategory = (cat) => recipes.filter((r) => sectionOf(r, sections) === cat && (!isSearching || matches(r)));
-  const favorites = recipes.filter((r) => r.isFavorite && (!isSearching || matches(r)));
-  const uncategorized = recipes.filter((r) => !sectionOf(r, sections) && (!isSearching || matches(r)));
+  // geçen diğer kategoriler (ör. aile üyesinin "Çorbalar (Emre)"si) — kimlikle
+  // ayrılır, adla değil. Kategorisiz tarifler "Diğer".
+  // Aynı tarifin kişisel ve aile kopyaları aynı bölümdeyse TEK kart (bkz. src/recipeGroups.js).
+  const sections = sectionsOf(recipes);
+  const keyOf = (r) => describe(r)?.key || null;
+  const group = (list) => groupCopies(list, { personalKey: PERSONAL });
+  const byCategory = (cat) => group(recipes.filter((r) => keyOf(r) === cat.key && (!isSearching || matches(r))));
+  const favorites = group(recipes.filter((r) => r.isFavorite && (!isSearching || matches(r))));
+  const uncategorized = group(recipes.filter((r) => !keyOf(r) && (!isSearching || matches(r))));
   const listExpanded = isSearching ? true : listOpen;
 
-  const renderRecipeButton = (r) => {
+  const renderRecipeButton = (g) => {
+    const r = g.primary;
     const locked = !!isRecipeLocked?.(r);
-    const isActive = !locked && activeId === r.id;
-    const isFam = isFamilyRecipeScope(r);
-    const notifyOpen = isFam && longPressId === r.id;
-    const notifyStatus = quickNotify.id === r.id ? quickNotify.status : "idle";
+    const isActive = !locked && g.members.some((m) => m.id === activeId);
+    const menu = locked ? { notifyRecipe: null, transferRecipe: null } : menuFor(g);
+    const hasMenu = !!(menu.notifyRecipe || menu.transferRecipe);
+    const menuOpen = hasMenu && longPressId === r.id;
+    const notifyTarget = menu.notifyRecipe;
+    const notifyStatus = notifyTarget && quickNotify.id === notifyTarget.id ? quickNotify.status : "idle";
+    // Kartta bulunduğu bütün yerler; kişisel tek başına yazılmaz (varsayılan).
+    const placeLabels = [...new Set(g.members.flatMap((m) => scopeLabels(m, familyNameById, t)))];
+    const shownPlaces = g.members.length > 1 ? placeLabels : placeLabels.filter((l) => l !== t("common.personal"));
+    const menuButton = {
+      display: "flex",
+      alignItems: "center",
+      gap: "6px",
+      padding: "6px 10px",
+      borderRadius: "9999px",
+      border: "none",
+      background: "transparent",
+      fontSize: "12px",
+      fontWeight: 600,
+      cursor: "pointer",
+      textAlign: "left",
+    };
     return (
-      <div key={r.id} style={{ borderRadius: "6px", overflow: "hidden" }}>
+      <div key={g.key} style={{ borderRadius: "6px", overflow: "hidden" }}>
         <div
-          onPointerDown={() => !locked && startPress(r)}
+          onPointerDown={() => !locked && startPress(g)}
           onPointerUp={cancelPress}
           onPointerLeave={cancelPress}
           onPointerCancel={cancelPress}
@@ -3509,11 +3667,8 @@ function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus,
             <div style={{ fontSize: "13px", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {r.title || t("common.untitledRecipe")}
             </div>
-            <div style={{ fontSize: "11px", marginTop: "2px", color: isActive ? "#C9C2AE" : COLORS.inkSoft }}>
-              {(() => {
-                const labels = scopeLabels(r, familyNameById, t).filter((l) => l !== t("common.personal"));
-                return labels.length > 0 ? `${labels.join(" + ")} · ` : "";
-              })()}
+            <div style={{ fontSize: "11px", marginTop: "2px", color: isActive ? "#C9C2AE" : COLORS.inkSoft, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {shownPlaces.length > 0 ? `${shownPlaces.join(" + ")} · ` : ""}
               {r.addedBy ? `${r.addedBy} · ` : ""}
               {new Date(r.createdAt).toLocaleDateString(language === "en" ? "en-US" : "tr-TR")}
             </div>
@@ -3538,7 +3693,9 @@ function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus,
               />
             </button>
           )}
-          {!r._lockedFamily && (
+          {/* Birden çok kopyalı kartta silme yok: hangi kopyanın silineceği tarif
+              ekranında seçilir (yanlışlıkla diğer kopya silinmesin). */}
+          {!r._lockedFamily && g.members.length === 1 && (
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -3551,13 +3708,13 @@ function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus,
           </button>
           )}
         </div>
-        {isFam && (
-          <div style={{ display: "grid", gridTemplateRows: notifyOpen ? "1fr" : "0fr", transition: "grid-template-rows 220ms ease" }}>
+        {hasMenu && (
+          <div style={{ display: "grid", gridTemplateRows: menuOpen ? "1fr" : "0fr", transition: "grid-template-rows 220ms ease" }}>
             <div style={{ overflow: "hidden" }}>
               <div
                 style={{
                   display: "flex",
-                  alignItems: "center",
+                  alignItems: "flex-start",
                   gap: "8px",
                   padding: "6px 8px 8px",
                   marginTop: "2px",
@@ -3566,40 +3723,46 @@ function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus,
                   background: COLORS.panel,
                 }}
               >
-                <button
-                  onClick={() => handleQuickNotify(r)}
-                  disabled={notifyStatus === "sending"}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "6px",
-                    padding: "6px 10px",
-                    borderRadius: "9999px",
-                    border: "none",
-                    background: "transparent",
-                    color:
-                      notifyStatus === "error" ? COLORS.danger : notifyStatus === "empty" ? COLORS.mustardDark : notifyStatus === "done" ? COLORS.forest : COLORS.mustardDark,
-                    fontSize: "12px",
-                    fontWeight: 600,
-                    cursor: notifyStatus === "sending" ? "default" : "pointer",
-                    opacity: notifyStatus === "sending" ? 0.5 : 1,
-                  }}
-                >
-                  {notifyStatus === "sending" ? (
-                    <Loader2 size={15} className="spin" />
-                  ) : notifyStatus === "done" ? (
-                    <Check size={15} />
-                  ) : (
-                    <Bell size={15} />
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "2px", flex: 1, minWidth: 0 }}>
+                  {notifyTarget && (
+                    <button
+                      onClick={() => handleQuickNotify(notifyTarget)}
+                      disabled={notifyStatus === "sending"}
+                      style={{
+                        ...menuButton,
+                        color:
+                          notifyStatus === "error" ? COLORS.danger : notifyStatus === "empty" ? COLORS.mustardDark : notifyStatus === "done" ? COLORS.forest : COLORS.mustardDark,
+                        cursor: notifyStatus === "sending" ? "default" : "pointer",
+                        opacity: notifyStatus === "sending" ? 0.5 : 1,
+                      }}
+                    >
+                      {notifyStatus === "sending" ? (
+                        <Loader2 size={15} className="spin" />
+                      ) : notifyStatus === "done" ? (
+                        <Check size={15} />
+                      ) : (
+                        <Bell size={15} />
+                      )}
+                      {notifyStatus === "idle" || notifyStatus === "sending" ? t("sidebar.notifyFamily") : quickNotify.message}
+                    </button>
                   )}
-                  {notifyStatus === "idle" || notifyStatus === "sending"
-                    ? t("sidebar.notifyFamily")
-                    : quickNotify.message}
-                </button>
+                  {menu.transferRecipe && (
+                    <button
+                      onClick={() => {
+                        setLongPressId(null);
+                        onOpenTransfer?.(menu.transferRecipe.id);
+                      }}
+                      style={{ ...menuButton, color: COLORS.forest }}
+                    >
+                      <Users size={15} />
+                      {t("transfer.open")}
+                    </button>
+                  )}
+                </div>
                 <button
                   onClick={() => setLongPressId(null)}
                   aria-label={t("common.close")}
-                  style={{ marginLeft: "auto", padding: "6px", background: "transparent", border: "none", color: COLORS.inkSoft, cursor: "pointer" }}
+                  style={{ padding: "6px", background: "transparent", border: "none", color: COLORS.inkSoft, cursor: "pointer", flexShrink: 0 }}
                 >
                   <X size={13} />
                 </button>
@@ -3668,7 +3831,8 @@ function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus,
           >
             {t("sidebar.mealsTitle")}{" "}
             {isPlus ? (
-              recipes.length > 0 ? <span style={{ color: COLORS.inkSoft, fontSize: "15px" }}>({recipes.length})</span> : ""
+              // Kart sayısı: aynı tarifin kişisel + aile kopyaları tek kart.
+              recipes.length > 0 ? <span style={{ color: COLORS.inkSoft, fontSize: "15px" }}>({group(recipes).length})</span> : ""
             ) : (
               <span style={{ color: COLORS.inkSoft, fontSize: "15px" }}>
                 {/* Ücretsiz sınır yalnızca kişisel tarifleri sayar (kilitli aile kartları hariç). */}
@@ -3776,11 +3940,11 @@ function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus,
                 {sections.map((cat) => {
                   const items = byCategory(cat);
                   if (isSearching && items.length === 0) return null;
-                  const catOpen = isSearching ? true : !!openCats[cat];
+                  const catOpen = isSearching ? true : !!openCats[cat.key];
                   return (
-                    <div key={cat} style={{ borderRadius: "8px", border: `1px solid ${COLORS.line}`, overflow: "hidden" }}>
+                    <div key={cat.key} style={{ borderRadius: "8px", border: `1px solid ${COLORS.line}`, overflow: "hidden" }}>
                       <button
-                        onClick={() => toggleCat(cat)}
+                        onClick={() => toggleCat(cat.key)}
                         aria-expanded={catOpen}
                         style={{
                           width: "100%",
@@ -3795,7 +3959,7 @@ function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus,
                         }}
                       >
                         <span style={{ fontSize: "13px", fontWeight: 600, color: COLORS.ink, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {categoryLabel(cat)} <span style={{ fontWeight: 400, color: COLORS.inkSoft }}>({items.length})</span>
+                          {labelOf(cat)} <span style={{ fontWeight: 400, color: COLORS.inkSoft }}>({items.length})</span>
                         </span>
                         <ChevronDown
                           size={15}
@@ -4506,7 +4670,7 @@ function AddForm({ link, caption, notes, images, category, busy, error, setLink,
       <label style={labelStyle}>{t("addForm.categoryLabel")}</label>
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "8px" }}>
-        <CategoryChips value={category} onChange={setCategory} />
+        <CategoryChips value={category} onChange={setCategory} scopes={saveTargets} />
       </div>
 
       <SaveTargetPicker saveTargets={saveTargets} setSaveTargets={setSaveTargets} isPlus={isPlus} families={families} />
@@ -4759,7 +4923,44 @@ function IngredientList({ ingredients, language, recipe }) {
 // kalır). Taşımada önce aileye yazılır; seçilen her aileye yazılamadıysa kişisel
 // tarif silinmez. Tekrar denemek kopya üretmez (aynı id). Sonuç mesajı, taşıma
 // sonrası seçenekler kaybolsa da görünür kalır.
-function RecipeTransfer({ families, familyNameById, onTransfer }) {
+// Aynı tarifin bağımsız kopyaları arasında geçiş: düzenleme ve silme yalnızca
+// seçili kopyaya uygulanır (bunu da yazar).
+function CopySwitcher({ copies, activeId, onSelect }) {
+  const { t } = useLanguage();
+  return (
+    <div style={{ borderRadius: "12px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "12px 14px" }}>
+      <div style={{ fontSize: "12px", fontWeight: 700, color: COLORS.forest, marginBottom: "8px" }}>{t("copies.heading")}</div>
+      <div role="tablist" style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+        {copies.map((c) => {
+          const on = c.id === activeId;
+          return (
+            <button
+              key={c.id}
+              role="tab"
+              aria-selected={on}
+              onClick={() => !on && onSelect(c.id)}
+              style={{
+                padding: "7px 12px",
+                borderRadius: "9999px",
+                fontSize: "13px",
+                fontWeight: 600,
+                border: `1px solid ${on ? COLORS.forest : COLORS.line}`,
+                background: on ? COLORS.forest : "transparent",
+                color: on ? "#F3EFE6" : COLORS.inkSoft,
+                cursor: on ? "default" : "pointer",
+              }}
+            >
+              {c.label}
+            </button>
+          );
+        })}
+      </div>
+      <p style={{ fontSize: "12px", color: COLORS.inkSoft, margin: "8px 0 0" }}>{t("copies.hint")}</p>
+    </div>
+  );
+}
+
+function RecipeTransfer({ families, familyNameById, onTransfer, autoOpen, onAutoOpened }) {
   const { t } = useLanguage();
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState([]);
@@ -4767,6 +4968,14 @@ function RecipeTransfer({ families, familyNameById, onTransfer }) {
   const [result, setResult] = useState(null); // { tone: "ok" | "warn" | "error", text }
   const available = families || [];
   const availableIds = available.map((f) => f.id).join(",");
+  const panelRef = useRef(null);
+  useEffect(() => {
+    if (!autoOpen || !available.length) return;
+    setOpen(true);
+    setResult(null);
+    onAutoOpened?.();
+    setTimeout(() => panelRef.current?.scrollIntoView?.({ behavior: "smooth", block: "center" }), 250);
+  }, [autoOpen, available.length, onAutoOpened]);
 
   useEffect(() => {
     // Tek aile varsa doğrudan seçili; liste değişince geçersiz seçim atılır.
@@ -4788,6 +4997,9 @@ function RecipeTransfer({ families, familyNameById, onTransfer }) {
       const out = await onTransfer(selected, mode);
       const savedNames = out.saved.map(name).join(", ");
       const failedNames = out.failed.map((f) => name(f.scopeKey)).join(", ");
+      const existing = out.existing || [];
+      const existingNames = existing.map(name).join(", ");
+      const newNames = out.saved.filter((id) => !existing.includes(id)).map(name).join(", ");
       if (out.failed.length && !out.saved.length) {
         setResult({ tone: "error", text: t("transfer.failedAll", { places: failedNames }) });
       } else if (out.failed.length) {
@@ -4795,10 +5007,17 @@ function RecipeTransfer({ families, familyNameById, onTransfer }) {
           tone: "warn",
           text: t(mode === "move" ? "transfer.partialMove" : "transfer.partialCopy", { saved: savedNames, failed: failedNames }),
         });
+      } else if (mode === "move" && (out.verifyFailed || []).length) {
+        setResult({ tone: "warn", text: t("transfer.verifyFailed", { places: (out.verifyFailed || []).map(name).join(", ") }) });
       } else if (mode === "move" && !out.removedFromPersonal) {
         setResult({ tone: "warn", text: t("transfer.movedButKept", { places: savedNames }) });
+      } else if (mode === "move") {
+        setResult({ tone: "ok", text: existing.length ? t("transfer.movedKeptExisting", { places: existingNames }) : t("transfer.moved", { places: savedNames }) });
+        setOpen(false);
+      } else if (!newNames) {
+        setResult({ tone: "warn", text: t("transfer.alreadyThere", { places: existingNames }) });
       } else {
-        setResult({ tone: "ok", text: t(mode === "move" ? "transfer.moved" : "transfer.copied", { places: savedNames }) });
+        setResult({ tone: "ok", text: t("transfer.copied", { places: newNames }) + (existing.length ? ` ${t("transfer.alreadyThere", { places: existingNames })}` : "") });
         setOpen(false);
       }
     } catch (e) {
@@ -4860,8 +5079,11 @@ function RecipeTransfer({ families, familyNameById, onTransfer }) {
   }
 
   const toggle = (id) => setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  const selectedHasCopy = available.some((f) => f.hasCopy && selected.includes(f.id));
+  // Seçilen ailelerin hepsinde kopya zaten varsa "Kopyala" yapacak bir şey yok.
+  const copyPointless = selected.length > 0 && selected.every((id) => available.find((f) => f.id === id)?.hasCopy);
   return (
-    <div style={{ marginTop: "8px", padding: "14px", borderRadius: "10px", border: `1px solid ${COLORS.line}`, background: COLORS.paper }}>
+    <div ref={panelRef} style={{ marginTop: "8px", padding: "14px", borderRadius: "10px", border: `1px solid ${COLORS.line}`, background: COLORS.paper }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
         <span style={{ fontSize: "13px", fontWeight: 700, color: COLORS.forest }}>{t("transfer.heading")}</span>
         <button
@@ -4899,21 +5121,25 @@ function RecipeTransfer({ families, familyNameById, onTransfer }) {
             >
               {on && <Check size={13} />}
               {f.name}
+              {f.hasCopy && <span style={{ fontSize: "11px", fontWeight: 500, opacity: 0.85 }}>· {t("transfer.hasCopy")}</span>}
             </button>
           );
         })}
       </div>
-      <p style={{ fontSize: "12px", color: COLORS.inkSoft, margin: "0 0 12px", lineHeight: 1.45 }}>{t("transfer.explain")}</p>
+      <p style={{ fontSize: "12px", color: COLORS.inkSoft, margin: "0 0 12px", lineHeight: 1.45 }}>
+        {t("transfer.explain")}
+        {selectedHasCopy && ` ${t("transfer.explainExisting")}`}
+      </p>
       <div style={{ display: "flex", gap: "8px" }}>
         {[
-          { mode: "move", label: t("transfer.move"), primary: true },
+          { mode: "move", label: copyPointless ? t("transfer.completeMove") : t("transfer.move"), primary: true },
           { mode: "copy", label: t("transfer.copy"), primary: false },
         ].map(({ mode, label, primary }) => (
           <button
             key={mode}
             type="button"
             onClick={() => run(mode)}
-            disabled={!selected.length || !!busy}
+            disabled={!selected.length || !!busy || (mode === "copy" && copyPointless)}
             style={{
               flex: 1,
               minHeight: "44px",
@@ -4927,8 +5153,8 @@ function RecipeTransfer({ families, familyNameById, onTransfer }) {
               background: primary ? COLORS.forest : "transparent",
               color: primary ? "#F3EFE6" : COLORS.forest,
               border: `1px solid ${COLORS.forest}`,
-              cursor: !selected.length || busy ? "default" : "pointer",
-              opacity: !selected.length || (busy && busy !== mode) ? 0.5 : 1,
+              cursor: !selected.length || busy || (mode === "copy" && copyPointless) ? "default" : "pointer",
+              opacity: !selected.length || (busy && busy !== mode) || (mode === "copy" && copyPointless) ? 0.5 : 1,
             }}
           >
             {busy === mode && <Loader2 size={14} className="spin" />}
@@ -4941,7 +5167,7 @@ function RecipeTransfer({ families, familyNameById, onTransfer }) {
   );
 }
 
-function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavorite, onChangeCategory, onEdit, onAddToShopping, onSendNotification, onStartCooking, onRetryTranslation, transferFamilies = [], onTransfer }) {
+function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavorite, onChangeCategory, onEdit, onAddToShopping, onSendNotification, onStartCooking, onRetryTranslation, transferFamilies = [], onTransfer, transferAutoOpen, onTransferOpened, copies = [], onSelectCopy }) {
   const { t, language, categoryLabel, difficultyLabel } = useLanguage();
   const { title, servings, category, prep_time_minutes, difficulty, ingredients = [], instructions = [], nutrition = {}, assumptions, servings_note, isFavorite, addedBy } = recipe;
   // Yalnızca güvenli http(s) link href olur (eski/başka üyenin kaydındaki
@@ -4984,6 +5210,7 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
     setEditing(false);
   };
 
+  const { labelOf: categoryLabelOf, describe: describeCategory } = React.useContext(CategoriesContext);
   // Sabit ya da özel; yalnızca kategorisi hiç olmayan (eski) tarif uyarı gösterir.
   const hasValidCategory = typeof category === "string" && category.trim() !== "";
   const scopeLabel = scopeLabels(recipe, familyNameById, t).join(" + ");
@@ -4993,7 +5220,7 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
 
   const metaParts = [
     servings ? servingsLabel(t, recipe) : null,
-    hasValidCategory ? categoryLabel(category) : null,
+    hasValidCategory ? categoryLabelOf(describeCategory(recipe)) : null,
     prep_time_minutes ? t("detail.prepTime", { n: prep_time_minutes }) : null,
     difficulty ? difficultyLabel(difficulty) : null,
     addedBy ? t("detail.addedBy", { name: addedBy }) : null,
@@ -5002,6 +5229,7 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+      {copies.length > 1 && <CopySwitcher copies={copies} activeId={recipe.id} onSelect={onSelectCopy} />}
       <TranslationStatus status={recipe._translation} onRetry={onRetryTranslation} />
       <div style={{ borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "24px", boxShadow: CARD_SHADOW }}>
         <div className="detail-title-row" style={{ display: "flex", flexDirection: "column", alignItems: "stretch", justifyContent: "flex-start", gap: "12px" }}>
@@ -5135,7 +5363,7 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
               {t("detail.noCategoryWarning")}
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-              <CategoryChips compact onChange={onChangeCategory} />
+              <CategoryChips compact onChange={onChangeCategory} scopes={recipe._scopes} />
             </div>
           </div>
         )}
@@ -5209,7 +5437,8 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
           {t("detail.addToShopping")}
         </button>
 
-        <RecipeTransfer key={recipe.id} families={transferFamilies} familyNameById={familyNameById} onTransfer={onTransfer} />
+        {/* Grup kimliğiyle: taşıma sonrası aile kopyasına geçilince sonuç mesajı kaybolmaz. */}
+        <RecipeTransfer key={groupIdOf(recipe, PERSONAL)} families={transferFamilies} familyNameById={familyNameById} onTransfer={onTransfer} autoOpen={transferAutoOpen} onAutoOpened={onTransferOpened} />
       </div>
 
       <div className="md-detail-row" style={{ display: "flex", flexDirection: "column", gap: "20px", alignItems: "flex-start" }}>
@@ -5737,6 +5966,35 @@ function RoundingInfoSheet({ name, pairs, onClose }) {
   );
 }
 
+// Yazılan satır kadar büyüyen metin alanı (elle boyutlandırma tutamacı yok).
+// Yükseklik her değişimde içeriğe göre ayarlanır; mobil klavyede imleç görünür kalsın
+// diye odaklanınca alan görünür alana kaydırılır.
+function AutoGrowTextarea({ value, onChange, placeholder, style, minRows = 1 }) {
+  const ref = useRef(null);
+  const resize = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight + 2}px`;
+  }, []);
+  React.useLayoutEffect(resize, [value, resize]);
+  useEffect(() => {
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, [resize]);
+  return (
+    <textarea
+      ref={ref}
+      value={value}
+      rows={minRows}
+      onChange={onChange}
+      onFocus={() => setTimeout(() => ref.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" }), 300)}
+      placeholder={placeholder}
+      style={{ ...style, resize: "none", overflow: "hidden", lineHeight: 1.45, minHeight: "44px" }}
+    />
+  );
+}
+
 function TipList({ tips }) {
   return (
     <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: "10px" }}>
@@ -6196,13 +6454,15 @@ function NutritionRow({ label, value, unit, last }) {
   );
 }
 
-function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setSaveTargets, isPlus, families, personalCount, onFreeLimit, onSave, onCancel }) {
+function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setSaveTargets, isPlus, families, personalCount, onFreeLimit, onSave, onCancel, editingPlace }) {
   const { t, categoryLabel, difficultyLabel, language } = useLanguage();
   // Düzenleme her zaman asıl (kayıtlı) metin üzerinde; uygulama başka dildeyse bunu söyle.
   // Kaydedince içerik değişir, çeviri önbelleğinin anahtarı da değişir (eski çeviri kullanılmaz).
   const showsOriginalNote = !isNew && originalLang && originalLang !== language;
   const [title, setTitle] = useState(initial?.title || "");
-  const [category, setCategory] = useState(initial?.category || "");
+  const { describe: describeCategory } = React.useContext(CategoriesContext);
+  const initialCategory = useMemo(() => (initial ? describeCategory(initial) : null), [initial, describeCategory]);
+  const [category, setCategory] = useState(initialCategory);
   const [servings, setServings] = useState(initial?.servings != null ? String(initial.servings) : "");
   const [prepTime, setPrepTime] = useState(initial?.prep_time_minutes != null ? String(initial.prep_time_minutes) : "");
   const [difficulty, setDifficulty] = useState(initial?.difficulty || "");
@@ -6314,7 +6574,7 @@ function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setS
     Promise.resolve(onSave({
       ...servingsFields,
       title: title.trim(),
-      category,
+      ...categoryFields(category),
       servings: nextServings,
       prep_time_minutes: prepTime.trim() ? Number(prepTime) : undefined,
       difficulty: difficulty || undefined,
@@ -6342,6 +6602,12 @@ function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setS
         <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: showsOriginalNote ? "0 0 12px" : "0 0 20px" }}>
           {t("editor.hint")}
         </p>
+        {editingPlace && (
+          <div style={{ display: "flex", alignItems: "flex-start", gap: "8px", fontSize: "13px", padding: "10px 12px", borderRadius: "8px", background: "#E4EDE3", color: COLORS.ink, margin: "0 0 12px" }}>
+            <Info size={14} style={{ marginTop: "2px", flexShrink: 0 }} />
+            <span>{t("editor.editingPlace", { place: editingPlace })}</span>
+          </div>
+        )}
         {showsOriginalNote && (
           <div style={{ display: "flex", alignItems: "flex-start", gap: "8px", fontSize: "13px", padding: "10px 12px", borderRadius: "8px", background: "#EFE9D8", color: COLORS.inkSoft, margin: "0 0 20px" }}>
             <AlertCircle size={14} style={{ marginTop: "2px", flexShrink: 0 }} />
@@ -6360,7 +6626,7 @@ function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setS
 
         <label style={labelStyle}>{t("addForm.categoryLabel")}</label>
         <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "16px" }}>
-          <CategoryChips value={category} onChange={setCategory} extra={initial?.category} />
+          <CategoryChips value={category} onChange={setCategory} extra={initialCategory} scopes={isNew ? saveTargets : initial?._scopes} />
         </div>
 
         {isNew && <SaveTargetPicker saveTargets={saveTargets} setSaveTargets={setSaveTargets} isPlus={isPlus} families={families} />}
@@ -6564,12 +6830,11 @@ function RecipeEditor({ heading, initial, originalLang, isNew, saveTargets, setS
             {tips.map((tip) => (
               <div key={tip._key} style={{ display: "flex", alignItems: "flex-start", gap: "8px" }}>
                 <Lightbulb size={16} color={COLORS.mustardDark} style={{ flexShrink: 0, marginTop: "12px" }} />
-                <textarea
+                <AutoGrowTextarea
                   value={tip.text}
                   onChange={(e) => updateTip(tip._key, e.target.value)}
                   placeholder={t("editor.tipPlaceholder")}
-                  rows={2}
-                  style={{ ...inputStyle, flex: 1, resize: "vertical" }}
+                  style={{ ...inputStyle, flex: 1 }}
                 />
                 <button
                   onClick={() => removeTip(tip._key)}
@@ -7078,13 +7343,23 @@ function FreeLimitModal({ onUpgrade, onClose }) {
 // Çıkar, elle oluşturma/düzenleme, kategorisiz tarif uyarısı, öneri kaydetme) aynı
 // listeyi bu context'ten okur: sabitler + kullanıcının kendi kategorileri + kişisel
 // tariflerinde geçen adlar. "+ Yeni" çipi aynı oluşturma penceresini açar.
-const CategoriesContext = React.createContext({ pickerCategories: CATEGORIES, requestCreate: null });
+const CategoriesContext = React.createContext({
+  optionsFor: () => categoryOptions({ me: {}, mine: [] }, []),
+  sectionsOf: (list) => categoryOptions({ me: {}, mine: [] }, list),
+  labelOf: (d) => (d ? d.name : ""),
+  describe: (r) => categoryOf(r, { me: {}, mine: [] }),
+  requestCreate: null,
+});
 
-function CategoryChips({ value, onChange, extra, compact }) {
-  const { categoryLabel, t } = useLanguage();
-  const { pickerCategories, requestCreate } = React.useContext(CategoriesContext);
-  // Düzenlenen tarifin kategorisi listede yoksa (ör. başka üyenin aile kategorisi) yine seçili görünür.
-  const options = extra && !pickerCategories.some((c) => categoryKey(c) === categoryKey(extra)) ? [...pickerCategories, extra] : pickerCategories;
+// value / extra / onChange: kategori tanımlayıcısı (bkz. shared/categories.js).
+// scopes: tarifin kaydedileceği yerler; aile üyelerinin kategorileri yalnızca o
+// aileye kaydederken seçenek olur.
+function CategoryChips({ value, onChange, extra, compact, scopes }) {
+  const { t } = useLanguage();
+  const { optionsFor, labelOf, requestCreate } = React.useContext(CategoriesContext);
+  const base = optionsFor(scopes);
+  // Düzenlenen tarifin kategorisi listede yoksa yine seçili görünür.
+  const options = extra && !base.some((c) => c.key === extra.key) ? [...base, extra] : base;
   const chip = (selected) => ({
     padding: compact ? "6px 12px" : "8px 14px",
     borderRadius: "9999px",
@@ -7102,10 +7377,10 @@ function CategoryChips({ value, onChange, extra, compact }) {
   return (
     <>
       {options.map((cat) => {
-        const selected = value != null && categoryKey(value) === categoryKey(cat);
+        const selected = !!value && value.key === cat.key;
         return (
-          <button key={cat} type="button" onClick={() => onChange(cat)} style={chip(selected)}>
-            {categoryLabel(cat)}
+          <button key={cat.key} type="button" onClick={() => onChange(cat)} style={chip(selected)}>
+            {labelOf(cat)}
           </button>
         );
       })}
@@ -7258,18 +7533,18 @@ function CategoryCreateModal({ customCategories, recipeCountOf, onCreate, onRemo
                 const count = recipeCountOf(cat);
                 return (
                   <div
-                    key={cat}
+                    key={cat.id}
                     style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 10px", borderRadius: "8px", border: `1px solid ${COLORS.line}`, background: COLORS.paper }}
                   >
                     <span style={{ flex: 1, minWidth: 0, fontSize: "13px", fontWeight: 600, color: COLORS.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {cat}
+                      {cat.name}
                     </span>
                     <span style={{ fontSize: "12px", color: COLORS.inkSoft, flexShrink: 0 }}>{t("categories.recipeCount", { n: count })}</span>
                     {count === 0 && (
                       <button
                         onClick={() => remove(cat)}
                         disabled={busy}
-                        aria-label={t("categories.remove", { name: cat })}
+                        aria-label={t("categories.remove", { name: cat.name })}
                         style={{ padding: "4px", background: "transparent", border: "none", cursor: busy ? "default" : "pointer", color: COLORS.inkSoft, display: "flex", flexShrink: 0 }}
                       >
                         <Trash2 size={14} />
