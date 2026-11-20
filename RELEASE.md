@@ -70,7 +70,7 @@ TEST APK `preview.tarifkutusu.app`'i canlı yükler; web/sunucu değişikliği i
 4. Aile: liste, "Canım çekti" bildirimi diğer cihaza geliyor; Plus kapat/aç (test düğmesi) → aile kilitlenip açılıyor
 5. Değişikliğin kendi özel senaryoları (Grup 5: `GROUP5_NOTES.md` §9 — misafir → hesap taşıma listesi; yayın adayı: §11)
 
-Şu an `preview.tarifkutusu.app` → `rc/haiku-group5` (15 Kasım 2026; Grup 5 + Haiku 5.5 + malzeme listesi). `verify:deploy` artık `/version.json` → `extractModel`'in `shared/extractModel.js` ile aynı olduğunu da kontrol eder (Preview'da test edilen model = yayına çıkacak model). Başka bir dalı test etmeden önce Vercel → Domains'ten yeniden bağla ve `verify:deploy --commit` ile doğrula.
+Şu an `preview.tarifkutusu.app` → `feature/categories-tips-pantry` (20 Kasım 2026'dan beri; önceki bağlar `rc/haiku-group5`, `feature/rename-multi-target-move`). `verify:deploy` artık `/version.json` → `extractModel`'in `shared/extractModel.js` ile aynı olduğunu da kontrol eder (Preview'da test edilen model = yayına çıkacak model). Başka bir dalı test etmeden önce Vercel → Domains'ten yeniden bağla ve `verify:deploy --commit` ile doğrula.
 
 ## Geri dönüş (rollback)
 
