@@ -23,3 +23,12 @@ export function recipeForFamily(recipe, familyId) {
   if (!familyId) return recipe;
   return { ...recipe, id: familyCopyId(recipe.id, familyId) };
 }
+
+// Aile kopyasının asıl kimliği (kişisel kopyanın kimliği). İlişki yalnızca
+// türetilmiş kimlikten kurulur, tarif adından asla. scopeKey kişiselse kimlik aynen döner.
+export function baseRecipeId(id, scopeKey) {
+  const s = String(id);
+  if (!scopeKey) return s;
+  const suffix = `${SEP}${scopeKey}`;
+  return s.endsWith(suffix) && s.length > suffix.length ? s.slice(0, -suffix.length) : s;
+}
