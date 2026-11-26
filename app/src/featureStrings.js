@@ -2,11 +2,12 @@
 // i18n.jsx sözlüklerine yayılır (QR tarayıcı metinleri: src/qr/qrStrings.js).
 export const FEATURE_STRINGS = {
   tr: {
-    "offline.cached": "İnternet yok. Bu cihazdaki kayıtlı kopya gösteriliyor ({date}). İnternete bağlanınca güncellenir; o zamana kadar değişiklik yapılamaz.",
+    "offline.cached": "Bu cihazdaki kayıtlı kopya gösteriliyor ({date}). İnternete bağlanınca güncellenir; o zamana kadar değişiklik yapılamaz.",
     "offline.cachedServer": "Sunucuya şu an ulaşılamıyor. Bu cihazdaki kayıtlı kopya gösteriliyor ({date}); değişiklik yapılamaz.",
-    "offline.notDownloaded": "İnternet bağlantısı yok ve tariflerin bu cihaza henüz indirilmedi. İnternete bağlanınca tariflerin açılır; sonra internetsiz de görüntüleyebilirsin.",
+    "offline.notDownloaded": "Tariflerin bu cihaza henüz indirilmedi. İnternete bağlanınca tariflerin açılır; sonra internetsiz de görüntüleyebilirsin.",
     "offline.readOnly": "İnternet yokken değişiklik yapılamaz. Bağlanınca tekrar dene.",
     "offline.retry": "Tekrar dene",
+    "offline.badge": "İnternet yok",
     "offline.needsNetwork": "Bunun için internet bağlantısı gerekiyor.",
     "share.qrButton": "QR ile paylaş",
     "share.qrTitle": "QR ile paylaş",
@@ -37,11 +38,12 @@ export const FEATURE_STRINGS = {
     "share.scanAgain": "Başka bir QR okut",
   },
   en: {
-    "offline.cached": "You're offline. Showing the copy saved on this device ({date}). It updates when you're back online; until then you can't make changes.",
+    "offline.cached": "Showing the copy saved on this device ({date}). It updates when you're back online; until then you can't make changes.",
     "offline.cachedServer": "Can't reach the server right now. Showing the copy saved on this device ({date}); you can't make changes.",
-    "offline.notDownloaded": "You're offline and your recipes haven't been downloaded to this device yet. Once you're online they'll open, and after that you can view them offline too.",
+    "offline.notDownloaded": "Your recipes haven't been downloaded to this device yet. Once you're online they'll open, and after that you can view them offline too.",
     "offline.readOnly": "You can't make changes while offline. Try again when you're connected.",
     "offline.retry": "Try again",
+    "offline.badge": "Offline",
     "offline.needsNetwork": "This needs an internet connection.",
     "share.qrButton": "Share with QR",
     "share.qrTitle": "Share with QR",

@@ -114,6 +114,20 @@ paylaşım kodu değil") ve bağlantı hatası ayrı mesajlarla gösterilir. `ve
   renk yönü — ters renkli QR'ı birçok okuyucu okuyamaz), uygulamanın çözücüsü okudu. Basılı tutma
   menüsüne "QR ile paylaş" eklendi. 619 test, Chrome e2e 18/18, verify 15/15.
 
+### 3.2 Telefon dipnotları 2. tur (26 Kasım)
+
+- "Aileye taşı" düğmeleri kayboldu: internetsiz açılıştan sonra internet dönünce Plus/aile bilgisi yalnız
+  "online" anında BİR kez isteniyordu (ağ o an hazır değilse uygulama kapanana dek boş kalıyordu; aile
+  listesi boş olduğu için aralıklı yenileme de başlamıyordu; profil hiç yeniden istenmiyordu). Artık
+  internetsiz durum ya da aile/Plus hatası sürdükçe 8 sn'de bir, "online" olayında ve uygulama öne
+  gelince liste + aileler + Plus + profil yeniden istenir. Yerelde: Plus + aile + tarif → sunucu kapalı
+  açılış → sunucu geri → sayfa yenilenmeden ~7 sn'de "Aileye taşı veya kopyala" geri geldi.
+- Üstteki internet yok bandı kaldırıldı: internetsizken menü düğmesindeki şef şapkası "internet yok"
+  simgesine döner; basılı tutunca açıklama + "Tekrar dene" penceresi (animasyonlu, arka plan bulanık).
+  Kısa dokunuş menüyü açmaya devam eder.
+- QR oluşturma hatası (ör. internetsiz) artık kutu içinde değil, doğrudan yeşil zeminde yazı.
+- Chrome e2e 19/19 (yeni: simge + basılı tutma penceresi, yenilemeden toparlanma).
+
 ## 4. Telefon test listesi (Tarif TEST v17, Preview bu dala bağlı)
 
 APK: `C:\Users\emrea\tk-preview-apk\tarif-test-qr-offline-v17.apk` (dal `preview-test-apk-qr`,
@@ -133,6 +147,8 @@ APK: `C:\Users\emrea\tk-preview-apk\tarif-test-qr-offline-v17.apk` (dal `preview
 8. İnternet açılınca bant kalkıyor mu; "Şimdi Güncelle" bandı yeni deploy sonrası çalışıyor mu.
 9. Aile: Plus kapat ya da aileden çık → çevrimiçi aç → sonra çevrimdışı aç: o ailenin tarifleri artık görünmemeli.
 10. Hesap değiştir / çıkış → çevrimdışı açılışta önceki hesabın tarifleri görünmemeli.
+12. İnternetsiz aç → sol üstte internet yok simgesi; basılı tut → açıklama penceresi; internet aç →
+    uygulamayı kapatmadan birkaç saniyede simge şef şapkasına döner, "Aileye taşı" düğmeleri (Plus + aile) görünür.
 11. Yeni görünüm: tarif kartına basılı tut → "QR ile paylaş"; pencereler animasyonlu açılıp kapanıyor,
     arka plan bulanık; Android geri tuşu da animasyonla kapatıyor; QR başka telefonun kamerasıyla da okunuyor.
 

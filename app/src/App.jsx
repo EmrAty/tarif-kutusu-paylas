@@ -287,6 +287,7 @@ function LockedOverlay({ size = 22 }) {
     </span>
   );
 }
+const RESYNC_INTERVAL_MS = 8000; // internetsiz açılıştan sonra sunucuyu yeniden deneme aralığı
 const SCREEN_EXIT_MS = 200; // mobil "ekran" kapanış animasyonunun süresi (gerçek view değişiminden önce)
 // Mobilde/Capacitor'da tarif listesinin (Sidebar) üstünde kalmayıp onun yerine
 // tam ekran açılan, kendi giriş/çıkış animasyonu + scroll-üste-sıfırlama olan view'lar.
@@ -984,6 +985,14 @@ export default function TarifKutusu() {
   const [manualPrefill, setManualPrefill] = useState(null);
   // QR paylaşımı (bkz. aşağıdaki "QR ile tarif paylaşımı" bölümü).
   const [shareQrFor, setShareQrFor] = useState(null); // { title, source } | null
+  // İnternet yok açıklaması: başlıktaki simgeye basılı tutunca açılan pencere. null | "open" | "closing"
+  const [offlineInfo, setOfflineInfo] = useState(null);
+  const offlineInfoTimer = useRef(null);
+  const closeOfflineInfo = useCallback(() => {
+    setOfflineInfo((v) => (v ? "closing" : v));
+    clearTimeout(offlineInfoTimer.current);
+    offlineInfoTimer.current = setTimeout(() => setOfflineInfo(null), QR_SHEET_EXIT_MS);
+  }, []);
   const [qrScanOpen, setQrScanOpen] = useState(false);
   // QR pencereleri kapanırken önce animasyon oynar, sonra kaldırılır (bkz. qr/qrTheme.js).
   const [shareQrClosing, setShareQrClosing] = useState(false);
@@ -1198,17 +1207,29 @@ export default function TarifKutusu() {
     let cancelled = false;
     const epoch = plusEpochRef.current;
     setCustomCategories([]);
+    profileOkRef.current = false;
     authedFetch("/api/profile")
       .then((data) => {
         if (!cancelled) setCustomCategories(normalizeCustomCategories(data.categories));
         if (!cancelled && epoch === plusEpochRef.current) applyPlusStatus(!!data.isPlus);
+        if (!cancelled) profileOkRef.current = true;
       })
       .catch(() => {
-        // alınamazsa son bilinen değer kullanılmaya devam eder
+        // alınamazsa son bilinen değer kullanılmaya devam eder; bağlantı dönünce
+        // yeniden denenir (bkz. reloadProfile ve "yeniden bağlanma" effect'i)
       });
     return () => {
       cancelled = true;
     };
+  }, [plusStatusKey, applyPlusStatus]);
+  const profileOkRef = useRef(false);
+  const reloadProfile = useCallback(async () => {
+    if (!plusStatusKey) return;
+    const epoch = plusEpochRef.current;
+    const data = await authedFetch("/api/profile");
+    setCustomCategories(normalizeCustomCategories(data.categories));
+    if (epoch === plusEpochRef.current) applyPlusStatus(!!data.isPlus);
+    profileOkRef.current = true;
   }, [plusStatusKey, applyPlusStatus]);
 
   // Aile durumu (üyelik, aile reisi, yönetim yetkisi, davet kodu, Plus/kilit)
@@ -1241,8 +1262,13 @@ export default function TarifKutusu() {
   const personNameRef = useRef(personName);
   personNameRef.current = personName;
 
+  // Aile/Plus bilgisi sunucudan alınamadı mı (ağ hatası)? Öyleyse yeniden bağlanma
+  // effect'i başarılı olana dek tekrar dener.
+  const [familiesSyncFailed, setFamiliesSyncFailed] = useState(false);
   const loadFamiliesState = useCallback(async () => {
     const result = await familySync.load({ name: personNameRef.current });
+    if (result.status === "applied") setFamiliesSyncFailed(false);
+    else if (result.status === "error") setFamiliesSyncFailed(true);
     // Daha yeni bir istek yoldaysa "yüklendi" kararını o verir.
     if (result.status !== "stale" && result.status !== "skipped") setFamiliesLoaded(true);
     return result;
@@ -1554,6 +1580,8 @@ export default function TarifKutusu() {
         CapacitorApp.minimizeApp();
       } else if (openRoundingSheet.close) {
         openRoundingSheet.close();
+      } else if (offlineInfo) {
+        closeOfflineInfo();
       } else if (qrScanOpen) {
         closeQrScan();
       } else if (shareQrFor) {
@@ -1581,7 +1609,7 @@ export default function TarifKutusu() {
     return () => {
       if (listenerHandle) listenerHandle.remove();
     };
-  }, [view, menuOpen, modalView, limitModalOpen, categoryModal, transferModal, qrScanOpen, shareQrFor, closeActiveScreen, closeModal, closeQrScan, closeShareQr]);
+  }, [view, menuOpen, modalView, limitModalOpen, categoryModal, transferModal, qrScanOpen, shareQrFor, closeActiveScreen, closeModal, closeQrScan, closeShareQr, offlineInfo, closeOfflineInfo]);
 
   // Yalnızca başarıyla yüklenmiş tarif kovaları (gösterim = onaylı veri +
   // bekleyen değişiklikler). Yüklenemeyen kova burada hiç yer almaz; boş liste
@@ -1758,17 +1786,38 @@ export default function TarifKutusu() {
     [offlineView, families]
   );
 
-  // İnternet geri gelince: liste ve aile/Plus durumu sunucudan yeniden doğrulanır.
+  // Yeniden bağlanma: uygulama internetsiz açıldıysa (ya da aile/Plus bilgisi
+  // alınamadıysa) liste, aileler, Plus ve profil sunucudan BAŞARILI olana dek
+  // yeniden istenir: "online" olayında, uygulama öne gelince ve bu durum sürdükçe
+  // aralıklarla. Eskiden yalnız "online" anında BİR kez deneniyordu; ağ o an
+  // henüz hazır değilse Plus/aile bilgisi uygulama kapanana dek boş kalıyor ve
+  // "Aileye taşı veya kopyala" düğmeleri kayboluyordu (26 Kasım, telefonda).
+  const resyncNeeded = !!offlineError || familiesSyncFailed;
+  const resync = useCallback(async () => {
+    dataStore.refresh("recipes", PERSONAL);
+    familiesRef.current.forEach((f) => dataStore.refresh("recipes", f.id));
+    await loadFamiliesState();
+    if (!profileOkRef.current) reloadProfile().catch(() => {});
+  }, [loadFamiliesState, reloadProfile]);
   useEffect(() => {
     if (!authUid) return undefined;
-    const onOnline = () => {
-      dataStore.refresh("recipes", PERSONAL);
-      familiesRef.current.forEach((f) => dataStore.refresh("recipes", f.id));
-      loadFamiliesState();
+    window.addEventListener("online", resync);
+    return () => window.removeEventListener("online", resync);
+  }, [authUid, resync]);
+  useEffect(() => {
+    if (!authUid || !resyncNeeded) return undefined;
+    const onVisible = () => {
+      if (document.visibilityState === "visible") resync();
     };
-    window.addEventListener("online", onOnline);
-    return () => window.removeEventListener("online", onOnline);
-  }, [authUid, loadFamiliesState]);
+    document.addEventListener("visibilitychange", onVisible);
+    const timer = setInterval(() => {
+      if (document.visibilityState !== "hidden") resync();
+    }, RESYNC_INTERVAL_MS);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [authUid, resyncNeeded, resync]);
 
   useEffect(() => {
     if (!familiesLoaded) return;
@@ -2749,7 +2798,18 @@ export default function TarifKutusu() {
           onDismiss={() => setGuestMerge((g) => (g ? { ...g, dismissed: true } : g))}
         />
       )}
-      <Header view={view} onBack={closeActiveScreen} authUser={authUser} onSignOut={handleSignOut} onOpenMenu={() => setMenuOpen(true)} />
+      <Header
+        view={view}
+        onBack={closeActiveScreen}
+        authUser={authUser}
+        onSignOut={handleSignOut}
+        onOpenMenu={() => setMenuOpen(true)}
+        offline={!!offlineError}
+        onOfflineInfo={() => {
+          clearTimeout(offlineInfoTimer.current);
+          setOfflineInfo("open");
+        }}
+      />
 
       <SideMenu
         open={menuOpen}
@@ -2814,13 +2874,6 @@ export default function TarifKutusu() {
           className={`md-sidebar${FULLSCREEN_VIEWS.includes(view) ? " list-sidebar-mobile-hidden" : ""}`}
           style={{ width: "100%" }}
         >
-          {offlineError && (
-            <OfflineNotice
-              savedAt={offlineView ? offlineView.buckets.personal.savedAt : null}
-              serverDown={Number.isInteger(offlineError.status)}
-              onRetry={retryRecipeLoads}
-            />
-          )}
           <Sidebar
             recipes={displayRecipes}
             loaded={loaded}
@@ -3067,6 +3120,18 @@ export default function TarifKutusu() {
         />
       )}
 
+      {offlineError && offlineInfo && (
+        <OfflineInfoSheet
+          closing={offlineInfo === "closing"}
+          savedAt={offlineView ? offlineView.buckets.personal.savedAt : null}
+          serverDown={Number.isInteger(offlineError.status)}
+          onRetry={() => {
+            retryRecipeLoads();
+            closeOfflineInfo();
+          }}
+          onClose={closeOfflineInfo}
+        />
+      )}
       {shareQrFor && <ShareQrSheet title={shareQrFor.title} source={shareQrFor.source} closing={shareQrClosing} onClose={closeShareQr} />}
 
       {modalView === "families" && (
@@ -3387,8 +3452,26 @@ export default function TarifKutusu() {
   );
 }
 
-function Header({ view, onBack, authUser, onSignOut, onOpenMenu }) {
+function Header({ view, onBack, authUser, onSignOut, onOpenMenu, offline, onOfflineInfo }) {
   const { t } = useLanguage();
+  // İnternet yokken menü düğmesindeki şef şapkası yerine "internet yok" simgesi;
+  // basılı tutunca açıklama penceresi açılır (kısa dokunuş menüyü açmaya devam eder).
+  const pressRef = useRef({ timer: null, fired: false });
+  const startPress = () => {
+    if (!offline) return;
+    pressRef.current.fired = false;
+    clearTimeout(pressRef.current.timer);
+    pressRef.current.timer = setTimeout(() => {
+      pressRef.current.fired = true;
+      try {
+        if (navigator.vibrate) navigator.vibrate(20);
+      } catch (e) {
+        // titreşim yoksa geç
+      }
+      onOfflineInfo?.();
+    }, 450);
+  };
+  const cancelPress = () => clearTimeout(pressRef.current.timer);
   return (
     <header style={{ width: "100%", background: COLORS.forest, position: "relative" }}>
       <div
@@ -3442,11 +3525,23 @@ function Header({ view, onBack, authUser, onSignOut, onOpenMenu }) {
             </button>
           ) : (
             <button
-              onClick={onOpenMenu}
-              aria-label={t("header.openMenu")}
-              style={{ padding: "9px", borderRadius: "9999px", background: COLORS.mustard, border: "none", cursor: "pointer", display: "flex" }}
+              onClick={() => {
+                if (pressRef.current.fired) {
+                  pressRef.current.fired = false;
+                  return;
+                }
+                onOpenMenu();
+              }}
+              onPointerDown={startPress}
+              onPointerUp={cancelPress}
+              onPointerLeave={cancelPress}
+              onPointerCancel={cancelPress}
+              onContextMenu={(e) => offline && e.preventDefault()}
+              aria-label={offline ? `${t("header.openMenu")} · ${t("offline.badge")}` : t("header.openMenu")}
+              title={offline ? t("offline.badge") : undefined}
+              style={{ padding: "9px", borderRadius: "9999px", background: COLORS.mustard, border: "none", cursor: "pointer", display: "flex", WebkitTouchCallout: "none", userSelect: "none", touchAction: "manipulation" }}
             >
-              <ChefHat size={17} color={COLORS.forestDark} />
+              {offline ? <WifiOff size={17} color={COLORS.forestDark} /> : <ChefHat size={17} color={COLORS.forestDark} />}
             </button>
           )}
           <div>
@@ -4787,16 +4882,32 @@ function ExtractReview({ review, onTitle, saveTargets, setSaveTargets, isPlus, f
 }
 
 // Çevrimdışı bandı: kayıtlı kopya gösteriliyor (tarihiyle) ya da henüz indirilmemiş.
-function OfflineNotice({ savedAt, serverDown, onRetry }) {
+// QR / internet yok penceresindeki hata ve bilgi yazısı: kutu yok, doğrudan yeşil zeminde.
+const QR_PLAIN_TEXT = { margin: "4px 2px 6px", fontSize: "15px", lineHeight: 1.5, color: "#F3EFE6", textAlign: "center" };
+
+// İnternet yok penceresi: başlıktaki simgeye basılı tutunca. Görünüm QR pencereleriyle
+// aynı (qr/qrTheme.js): dokulu yeşil kart, bulanık arka plan, açılış/kapanış animasyonu.
+function OfflineInfoSheet({ savedAt, serverDown, closing, onRetry, onClose }) {
   const { t, language } = useLanguage();
   const date = savedAt ? new Date(savedAt).toLocaleString(language === "tr" ? "tr-TR" : "en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
   const text = savedAt ? t(serverDown ? "offline.cachedServer" : "offline.cached", { date }) : t("offline.notDownloaded");
   return (
-    <div role="status" style={{ display: "flex", gap: "10px", alignItems: "flex-start", padding: "12px 14px", marginBottom: "12px", borderRadius: "12px", background: "#FBF3DF", border: `1px solid ${COLORS.mustard}`, color: COLORS.ink, fontSize: "13px", lineHeight: 1.45 }}>
-      <WifiOff size={18} color={COLORS.mustardDark} style={{ flexShrink: 0, marginTop: "1px" }} />
-      <div style={{ flex: 1 }}>
-        {text}
-        <button type="button" onClick={onRetry} style={{ display: "block", marginTop: "6px", padding: 0, background: "none", border: "none", color: COLORS.forest, fontWeight: 700, fontSize: "13px", cursor: "pointer" }}>
+    <div className={`qr-root${closing ? " is-closing" : ""}`} role="dialog" aria-modal="true" aria-label={t("offline.badge")} style={QR_STYLES.root}>
+      <style>{QR_SHEET_CSS}</style>
+      <div className="qr-backdrop" onClick={onClose} style={QR_STYLES.backdrop} />
+      <div className="qr-card" style={{ ...QR_STYLES.card, fontFamily: BODY, maxWidth: 360 }}>
+        <div style={QR_STYLES.header}>
+          <span style={{ width: 38, height: 38, borderRadius: 999, background: QR_COLORS.mustard, display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+            <WifiOff size={18} color={COLORS.forestDark} />
+          </span>
+          <h2 style={QR_STYLES.title}>{t("offline.badge")}</h2>
+          <button type="button" onClick={onClose} aria-label={t("common.close")} style={QR_STYLES.closeBtn}>
+            <X size={18} />
+          </button>
+        </div>
+        <p role="status" style={{ ...QR_PLAIN_TEXT, textAlign: "left", margin: 0 }}>{text}</p>
+        <button type="button" onClick={onRetry} style={{ ...QR_STYLES.goldBtn, width: "100%" }}>
+          <RefreshCw size={16} color={QR_COLORS.gold} />
           {t("offline.retry")}
         </button>
       </div>
@@ -4862,14 +4973,14 @@ function ShareQrSheet({ title, source, closing, onClose }) {
             <style>{`.spin { animation: spin 1s linear infinite; } @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
           </div>
         )}
-        {state.status === "error" && <p style={QR_STYLES.error}>{state.message}</p>}
-        {state.status === "stopped" && <p style={QR_STYLES.note}>{t("share.stopped")}</p>}
+        {state.status === "error" && <p style={QR_PLAIN_TEXT}>{state.message}</p>}
+        {state.status === "stopped" && <p style={QR_PLAIN_TEXT}>{t("share.stopped")}</p>}
         {state.status === "ready" && (
           <>
             <div style={QR_STYLES.codeTile}>
               <QrCodeView value={url} size={236} label={t("share.qrTitle")} dark={QR_COLORS.codeDark} light={QR_COLORS.codeLight} />
             </div>
-            {state.stopError && <p style={QR_STYLES.error}>{state.stopError}</p>}
+            {state.stopError && <p style={QR_PLAIN_TEXT}>{state.stopError}</p>}
             <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
               {typeof navigator !== "undefined" && navigator.clipboard && (
                 <button type="button" onClick={copy} style={{ ...QR_STYLES.solidGoldBtn, flex: 1, fontSize: "14px" }}>

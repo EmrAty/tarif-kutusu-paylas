@@ -228,8 +228,18 @@ try {
   await pa.waitFor(`document.body.innerText.includes("Fırın Makarna")`, { timeout: 25000, label: "çevrimdışı liste" });
   const offText = await pa.text();
   check("çevrimdışı: uygulama SW'den açıldı ve kayıtlı tarif listede", offText.includes("Fırın Makarna"));
-  check("çevrimdışı: kayıtlı kopya bandı", /kayıtlı kopya/i.test(offText), offText.slice(0, 160).replace(/\n/g, " | "));
+  // Bant yok; başlıktaki menü düğmesi "internet yok" simgesine döner, basılı tutunca açıklama.
+  check("çevrimdışı: üstte bant yok, menü düğmesinde internet yok simgesi", !/kayıtlı kopya/i.test(offText) && (await pa.evaluate(`!!document.querySelector('header button[aria-label*="İnternet yok"]')`)));
   await pa.screenshot("02-offline-list");
+  await pa.evaluate(`(() => { const b = document.querySelector('header button[aria-label*="İnternet yok"]'); b.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })); })()`);
+  await sleep(800);
+  await pa.evaluate(`(() => { const b = document.querySelector('header button[aria-label*="İnternet yok"]'); b.dispatchEvent(new PointerEvent("pointerup", { bubbles: true })); b.click(); })()`);
+  await pa.waitFor(`[...document.querySelectorAll('[role=dialog]')].some((d) => /kayıtlı kopya/.test(d.innerText))`, { label: "internet yok penceresi" });
+  check("çevrimdışı: basılı tutunca açıklama penceresi (menü açılmadan)", !(await pa.text()).includes("Ayarlar\nÇıkış") );
+  await sleep(400);
+  await pa.screenshot("02b-offline-info");
+  await pa.evaluate(`[...document.querySelectorAll('[role=dialog] button[aria-label]')].pop().click()`);
+  await pa.waitFor(`![...document.querySelectorAll('[role=dialog]')].some((d) => /kayıtlı kopya/.test(d.innerText))`, { label: "pencere kapandı" });
   await pa.clickText("Fırın Makarna");
   await pa.waitFor(`document.body.innerText.includes("kalem makarna")`, { label: "çevrimdışı detay" });
   const detail = await pa.text();
@@ -242,10 +252,12 @@ try {
   await pa.screenshot("04-offline-cook");
 
   // Çevrimdışı yazım denemesi sunucuyu etkilemez (sunucu kapalı zaten); dönüşte veri aynı.
-  stack = await startLocalStack({ port: PORT, dbFile });
+  // Sunucu geri gelince sayfa YENİLENMEDEN kendiliğinden toparlanmalı (yeniden bağlanma döngüsü).
   await pa.goto(ORIGIN + "/");
-  await pa.waitFor(`document.body.innerText.includes("Fırın Makarna") && !document.body.innerText.includes("kayıtlı kopya")`, { timeout: 25000, label: "çevrimiçi dönüş" });
-  check("çevrimiçi dönüş: bant kalktı, liste sunucudan", true);
+  await pa.waitFor(`!!document.querySelector('header button[aria-label*="İnternet yok"]')`, { timeout: 25000, label: "çevrimdışı liste (tekrar)" });
+  stack = await startLocalStack({ port: PORT, dbFile });
+  await pa.waitFor(`document.body.innerText.includes("Fırın Makarna") && !document.querySelector('header button[aria-label*="İnternet yok"]')`, { timeout: 30000, label: "çevrimiçi dönüş (yenilemeden)" });
+  check("çevrimiçi dönüş: sayfa yenilenmeden simge kalktı, liste sunucudan", true);
 
   // ---- Kullanıcı B ----
   B = await launchChrome("profileB", 9302);
