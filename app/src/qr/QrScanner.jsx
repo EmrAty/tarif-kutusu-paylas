@@ -3,6 +3,7 @@ import { X, Camera, Image as ImageIcon, RefreshCw } from "lucide-react";
 import { useLanguage } from "../i18n.jsx";
 import { parseShareToken } from "./qrLink.js";
 import { createFrameDecoder, decodeFromFile } from "./qrDecode.js";
+import { QR_COLORS, QR_SHEET_CSS, QR_STYLES } from "./qrTheme.js";
 
 const SCAN_INTERVAL_MS = 140; // ~7 scans/second
 const NOT_OURS_COOLDOWN_MS = 2500;
@@ -15,24 +16,33 @@ function errorKey(err) {
   return "qr.cameraError";
 }
 
+// Görünüm: qrTheme.js (dokulu yeşil kart, hardal vurgular, animasyonlu açılış).
 const S = {
-  backdrop: { position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, boxSizing: "border-box" },
-  card: { width: "100%", maxWidth: 420, maxHeight: "100%", overflowY: "auto", background: "#fff", color: "#1f2a1f", borderRadius: 20, padding: 16, boxSizing: "border-box", display: "flex", flexDirection: "column", gap: 12 },
-  header: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 },
-  title: { margin: 0, fontSize: 18, fontWeight: 700 },
-  iconBtn: { border: "none", background: "#eef0ec", borderRadius: 999, width: 40, height: 40, display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "inherit" },
-  hint: { margin: 0, fontSize: 14, opacity: 0.8 },
-  videoWrap: { position: "relative", width: "100%", aspectRatio: "1 / 1", background: "#0b0f0b", borderRadius: 16, overflow: "hidden" },
+  hint: { margin: 0, fontSize: 13, textAlign: "center", color: QR_COLORS.paperSoft },
+  videoWrap: { position: "relative", width: "100%", aspectRatio: "1 / 1", background: "#0E1A13", borderRadius: 20, overflow: "hidden", boxShadow: "inset 0 0 0 1px rgba(226,188,102,0.25)" },
   video: { width: "100%", height: "100%", objectFit: "cover", display: "block" },
-  frame: { position: "absolute", inset: "18%", border: "3px solid rgba(255,255,255,0.9)", borderRadius: 16, boxShadow: "0 0 0 999px rgba(0,0,0,0.35)", pointerEvents: "none" },
-  center: { position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 14, padding: 16, textAlign: "center" },
-  msg: { margin: 0, fontSize: 14, lineHeight: 1.4, padding: "10px 12px", borderRadius: 12, background: "#fdf3d8", color: "#5a4300" },
-  err: { margin: 0, fontSize: 14, lineHeight: 1.4, padding: "10px 12px", borderRadius: 12, background: "#fbe4e1", color: "#7a1f14" },
-  btn: { border: "none", borderRadius: 12, minHeight: 44, padding: "0 16px", fontSize: 15, fontWeight: 600, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8, cursor: "pointer", background: "#2d4a2d", color: "#fff" },
-  btn2: { background: "#eef0ec", color: "#1f2a1f" },
+  frame: { position: "absolute", inset: "17%", borderRadius: 18, boxShadow: "0 0 0 999px rgba(14,26,19,0.45)", pointerEvents: "none" },
+  center: { position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: QR_COLORS.paper, fontSize: 14, padding: 16, textAlign: "center" },
 };
 
-export default function QrScanner({ onToken, onClose, cameraAvailable = true, currentOrigin }) {
+// Çerçevenin dört köşesindeki hardal köşebentler.
+const CORNER = 34;
+const cornerStyle = (pos) => ({
+  position: "absolute",
+  width: CORNER,
+  height: CORNER,
+  borderColor: QR_COLORS.mustard,
+  borderStyle: "solid",
+  borderWidth: 0,
+  ...(pos.includes("t") ? { top: -3, borderTopWidth: 4 } : { bottom: -3, borderBottomWidth: 4 }),
+  ...(pos.includes("l") ? { left: -3, borderLeftWidth: 4 } : { right: -3, borderRightWidth: 4 }),
+  borderTopLeftRadius: pos === "tl" ? 18 : 0,
+  borderTopRightRadius: pos === "tr" ? 18 : 0,
+  borderBottomLeftRadius: pos === "bl" ? 18 : 0,
+  borderBottomRightRadius: pos === "br" ? 18 : 0,
+});
+
+export default function QrScanner({ onToken, onClose, cameraAvailable = true, currentOrigin, closing = false }) {
   const { t } = useLanguage();
   const videoRef = useRef(null);
   const fileRef = useRef(null);
@@ -169,6 +179,11 @@ export default function QrScanner({ onToken, onClose, cameraAvailable = true, cu
     };
   }, [cameraAvailable, runId, handleText, stopCamera]);
 
+  // Kapanış animasyonu başlarken kamera hemen bırakılır (geri tuşu yolu dahil).
+  useEffect(() => {
+    if (closing) stopCamera();
+  }, [closing, stopCamera]);
+
   // Hide the "not ours" notice after a while.
   useEffect(() => {
     if (!notice) return undefined;
@@ -202,11 +217,13 @@ export default function QrScanner({ onToken, onClose, cameraAvailable = true, cu
   const showVideo = cameraAvailable && status !== "error";
 
   return (
-    <div style={S.backdrop} role="dialog" aria-modal="true" aria-label={t("qr.scanTitle")}>
-      <div style={S.card}>
-        <div style={S.header}>
-          <h2 style={S.title}>{t("qr.scanTitle")}</h2>
-          <button type="button" style={S.iconBtn} onClick={close} aria-label={t("qr.close")}>
+    <div className={`qr-root${closing ? " is-closing" : ""}`} style={QR_STYLES.root} role="dialog" aria-modal="true" aria-label={t("qr.scanTitle")}>
+      <style>{QR_SHEET_CSS}</style>
+      <div className="qr-backdrop" style={QR_STYLES.backdrop} onClick={close} />
+      <div className="qr-card" style={QR_STYLES.card}>
+        <div style={QR_STYLES.header}>
+          <h2 style={QR_STYLES.title}>{t("qr.scanTitle")}</h2>
+          <button type="button" style={QR_STYLES.closeBtn} onClick={close} aria-label={t("qr.close")}>
             <X size={20} />
           </button>
         </div>
@@ -215,7 +232,11 @@ export default function QrScanner({ onToken, onClose, cameraAvailable = true, cu
           <>
             <div style={S.videoWrap}>
               <video ref={videoRef} style={S.video} playsInline muted autoPlay />
-              <div style={S.frame} />
+              <div style={S.frame}>
+                {["tl", "tr", "bl", "br"].map((p) => (
+                  <span key={p} style={cornerStyle(p)} />
+                ))}
+              </div>
               {status === "starting" && (
                 <div style={S.center}>
                   <Camera size={18} style={{ marginRight: 8 }} />
@@ -227,23 +248,23 @@ export default function QrScanner({ onToken, onClose, cameraAvailable = true, cu
           </>
         )}
 
-        {!cameraAvailable && <p style={S.msg}>{t("qr.needsAppUpdate")}</p>}
-        {status === "error" && errKey && <p style={S.err}>{t(errKey)}</p>}
+        {!cameraAvailable && <p style={QR_STYLES.note}>{t("qr.needsAppUpdate")}</p>}
+        {status === "error" && errKey && <p style={QR_STYLES.error}>{t(errKey)}</p>}
         {notice && (
-          <p style={S.msg} role="status">
+          <p style={QR_STYLES.note} role="status">
             {t(notice)}
           </p>
         )}
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {cameraAvailable && status === "error" && (
-            <button type="button" style={S.btn} onClick={() => setRunId((n) => n + 1)}>
+            <button type="button" style={QR_STYLES.solidGoldBtn} onClick={() => setRunId((n) => n + 1)}>
               <RefreshCw size={18} />
               {t("qr.retry")}
             </button>
           )}
-          <button type="button" style={{ ...S.btn, ...S.btn2 }} onClick={() => fileRef.current && fileRef.current.click()}>
-            <ImageIcon size={18} />
+          <button type="button" style={QR_STYLES.goldBtn} onClick={() => fileRef.current && fileRef.current.click()}>
+            <ImageIcon size={18} color={QR_COLORS.gold} />
             {t("qr.pickImage")}
           </button>
           <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={onPickFile} />

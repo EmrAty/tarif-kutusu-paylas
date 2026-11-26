@@ -3,7 +3,8 @@ import qrcode from "qrcode-generator";
 
 const QUIET = 4;
 
-export default function QrCodeView({ value, size = 240, label }) {
+// dark/light: modül ve zemin rengi. Okunabilirlik için dark her zaman koyu, light açık olmalı.
+export default function QrCodeView({ value, size = 240, label, dark = "#000", light = "#fff" }) {
   const model = useMemo(() => {
     const qr = qrcode(0, "M");
     qr.addData(String(value ?? ""));
@@ -26,10 +27,10 @@ export default function QrCodeView({ value, size = 240, label }) {
       shapeRendering="crispEdges"
       role="img"
       aria-label={label}
-      style={{ display: "block", maxWidth: "100%", height: "auto", background: "#fff", borderRadius: 8 }}
+      style={{ display: "block", maxWidth: "100%", height: "auto", background: light, borderRadius: 8 }}
     >
-      <rect width={total} height={total} fill="#fff" />
-      <path d={model.d} fill="#000" />
+      <rect width={total} height={total} fill={light} />
+      <path d={model.d} fill={dark} />
     </svg>
   );
 }

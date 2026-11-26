@@ -60,6 +60,7 @@ import { buildImportedRecipe, addSharedRecipeOnce, existingImports } from "./rec
 import { buildShareUrl, readShareTokenFromLocation, SHARE_PARAM } from "./qr/qrLink.js";
 import QrCodeView from "./qr/QrCodeView.jsx";
 import QrScanner from "./qr/QrScanner.jsx";
+import { QR_COLORS, QR_SHEET_CSS, QR_SHEET_EXIT_MS, QR_STYLES } from "./qr/qrTheme.js";
 
 // ShareReceiver/NativeSplash sadece Android tarafında yazılmış özel native plugin'ler
 // (bkz. app/android/.../ShareReceiverPlugin.java, NativeSplashPlugin.java) - iOS'ta
@@ -984,6 +985,36 @@ export default function TarifKutusu() {
   // QR paylaşımı (bkz. aşağıdaki "QR ile tarif paylaşımı" bölümü).
   const [shareQrFor, setShareQrFor] = useState(null); // { title, source } | null
   const [qrScanOpen, setQrScanOpen] = useState(false);
+  // QR pencereleri kapanırken önce animasyon oynar, sonra kaldırılır (bkz. qr/qrTheme.js).
+  const [shareQrClosing, setShareQrClosing] = useState(false);
+  const [qrScanClosing, setQrScanClosing] = useState(false);
+  const qrCloseTimers = useRef({});
+  const closeShareQr = useCallback(() => {
+    setShareQrClosing(true);
+    clearTimeout(qrCloseTimers.current.share);
+    qrCloseTimers.current.share = setTimeout(() => {
+      setShareQrFor(null);
+      setShareQrClosing(false);
+    }, QR_SHEET_EXIT_MS);
+  }, []);
+  const closeQrScan = useCallback(() => {
+    setQrScanClosing(true);
+    clearTimeout(qrCloseTimers.current.scan);
+    qrCloseTimers.current.scan = setTimeout(() => {
+      setQrScanOpen(false);
+      setQrScanClosing(false);
+    }, QR_SHEET_EXIT_MS);
+  }, []);
+  const openQrScan = useCallback(() => {
+    clearTimeout(qrCloseTimers.current.scan);
+    setQrScanClosing(false);
+    setQrScanOpen(true);
+  }, []);
+  const openShareQr = useCallback((value) => {
+    clearTimeout(qrCloseTimers.current.share);
+    setShareQrClosing(false);
+    setShareQrFor(value);
+  }, []);
   const [qrImport, setQrImport] = useState(null); // { token, status, data, title, category, error, busy, existing }
   const [pendingShareToken, setPendingShareToken] = useState(null);
   const { updateAvailable, updateRequired } = useUpdateAvailable();
@@ -1524,9 +1555,9 @@ export default function TarifKutusu() {
       } else if (openRoundingSheet.close) {
         openRoundingSheet.close();
       } else if (qrScanOpen) {
-        setQrScanOpen(false);
+        closeQrScan();
       } else if (shareQrFor) {
-        setShareQrFor(null);
+        closeShareQr();
       } else if (transferModal) {
         setTransferModal(null);
       } else if (categoryModal) {
@@ -1550,7 +1581,7 @@ export default function TarifKutusu() {
     return () => {
       if (listenerHandle) listenerHandle.remove();
     };
-  }, [view, menuOpen, modalView, limitModalOpen, categoryModal, transferModal, qrScanOpen, shareQrFor, closeActiveScreen, closeModal]);
+  }, [view, menuOpen, modalView, limitModalOpen, categoryModal, transferModal, qrScanOpen, shareQrFor, closeActiveScreen, closeModal, closeQrScan, closeShareQr]);
 
   // Yalnızca başarıyla yüklenmiş tarif kovaları (gösterim = onaylı veri +
   // bekleyen değişiklikler). Yüklenemeyen kova burada hiç yer almaz; boş liste
@@ -2729,7 +2760,7 @@ export default function TarifKutusu() {
             if (view !== "favorites") listScrollYRef.current = window.scrollY;
             setView(target);
           } else if (target === "qrScan") {
-            setQrScanOpen(true);
+            openQrScan();
           } else {
             setModalView(target);
           }
@@ -2806,6 +2837,10 @@ export default function TarifKutusu() {
             canTransfer={canTransferRecipe}
             // Basılı tutma menüsü: tarif ekranına gitmeden, listenin üstünde küçük pencere.
             onOpenTransfer={(id) => setTransferModal({ id, title: displayRecipes.find((r) => r.id === id)?.title || "" })}
+            onShareQr={(recipe) => {
+              const source = shareSourceOf(recipe);
+              if (source) openShareQr({ title: recipe.title || "", source });
+            }}
             onNewCategory={() => requestCreateCategory(null)}
             onSelect={(id) => {
               if (isRecipeLocked(id)) return;
@@ -2872,7 +2907,7 @@ export default function TarifKutusu() {
                 isPlus={isPlus}
                 families={families}
                 onSubmit={handleExtract}
-                onScanQr={() => setQrScanOpen(true)}
+                onScanQr={openQrScan}
                 onCancel={() => setView("list")}
                 review={extractReview}
                 onReviewTitle={(title) => setExtractReview((prev) => (prev ? { ...prev, title } : prev))}
@@ -2939,7 +2974,7 @@ export default function TarifKutusu() {
                 onAddToShopping={() => addRecipeToShoppingList(active)}
                 onSendNotification={() => handleSendNotification(active)}
                 onStartCooking={() => setView("cook")}
-                onShareQr={shareSourceOf(active) ? () => setShareQrFor({ title: active.title || "", source: shareSourceOf(active) }) : null}
+                onShareQr={shareSourceOf(active) ? () => openShareQr({ title: active.title || "", source: shareSourceOf(active) }) : null}
                 // Grubun kişisel kopyasından (seçili kopya aile kopyası olsa da) hesaplanır;
                 // kopyası olan aileler "kopyası var" ile kalır ("taşımayı tamamla").
                 transferInfo={transferInfoFor(active)}
@@ -2999,7 +3034,7 @@ export default function TarifKutusu() {
                 families={families}
                 onConfirm={handleConfirmQrImport}
                 onRetry={() => startQrImport(qrImport.token)}
-                onScanAgain={() => setQrScanOpen(true)}
+                onScanAgain={openQrScan}
                 onOpenExisting={(id) => {
                   setActiveId(id);
                   setView("detail");
@@ -3025,13 +3060,14 @@ export default function TarifKutusu() {
       {qrScanOpen && (
         <QrScanner
           onToken={startQrImport}
-          onClose={() => setQrScanOpen(false)}
+          onClose={closeQrScan}
+          closing={qrScanClosing}
           cameraAvailable={qrCameraAvailable}
           currentOrigin={window.location.origin}
         />
       )}
 
-      {shareQrFor && <ShareQrSheet title={shareQrFor.title} source={shareQrFor.source} onClose={() => setShareQrFor(null)} />}
+      {shareQrFor && <ShareQrSheet title={shareQrFor.title} source={shareQrFor.source} closing={shareQrClosing} onClose={closeShareQr} />}
 
       {modalView === "families" && (
         <ModalSheet title={t("menu.families")} onClose={closeModal} closing={modalClosing}>
@@ -3884,7 +3920,7 @@ function scopeLabels(recipe, familyNameById, t) {
   return scopes.map((s) => (s === PERSONAL ? t("common.personal") : familyNameById?.[s] || t("families.fallbackName")));
 }
 
-function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus, familyNameById, isRecipeLocked, canTransfer, onOpenTransfer, onNewCategory, onSelect, onOpenPlus, onAdd, onManual, onPantry, onShopping, onToggleFavorite, onDelete, onSendNotification }) {
+function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus, familyNameById, isRecipeLocked, canTransfer, onOpenTransfer, onShareQr, onNewCategory, onSelect, onOpenPlus, onAdd, onManual, onPantry, onShopping, onToggleFavorite, onDelete, onSendNotification }) {
   const { sectionsOf, labelOf, describe } = React.useContext(CategoriesContext);
   const { t, language, categoryLabel } = useLanguage();
   const personalLoadFailed = !!loadProblems && loadProblems.failed.includes(PERSONAL);
@@ -3904,10 +3940,12 @@ function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus,
   const menuFor = (g) => ({
     notifyRecipe: g.members.find((m) => isFamilyRecipeScope(m)) || null,
     transferRecipe: g.members.find((m) => canTransfer?.(m)) || null,
+    // QR ile paylaş: kişisel kopya varsa o, yoksa kartın ilk kopyası.
+    shareRecipe: onShareQr ? g.members.find((m) => !isFamilyRecipeScope(m)) || g.primary : null,
   });
   const startPress = (g) => {
     const m = menuFor(g);
-    if (!m.notifyRecipe && !m.transferRecipe) return;
+    if (!m.notifyRecipe && !m.transferRecipe && !m.shareRecipe) return;
     const r = g.primary;
     longPressFiredRef.current = false;
     pressTimerRef.current = setTimeout(() => {
@@ -3962,8 +4000,8 @@ function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus,
     const r = g.primary;
     const locked = !!isRecipeLocked?.(r);
     const isActive = !locked && g.members.some((m) => m.id === activeId);
-    const menu = locked ? { notifyRecipe: null, transferRecipe: null } : menuFor(g);
-    const hasMenu = !!(menu.notifyRecipe || menu.transferRecipe);
+    const menu = locked ? { notifyRecipe: null, transferRecipe: null, shareRecipe: null } : menuFor(g);
+    const hasMenu = !!(menu.notifyRecipe || menu.transferRecipe || menu.shareRecipe);
     const menuOpen = hasMenu && longPressId === r.id;
     const notifyTarget = menu.notifyRecipe;
     const notifyStatus = notifyTarget && quickNotify.id === notifyTarget.id ? quickNotify.status : "idle";
@@ -4118,6 +4156,18 @@ function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus,
                     >
                       <Users size={15} />
                       {t("transfer.open")}
+                    </button>
+                  )}
+                  {menu.shareRecipe && (
+                    <button
+                      onClick={() => {
+                        setLongPressId(null);
+                        onShareQr(menu.shareRecipe);
+                      }}
+                      style={{ ...menuButton, color: COLORS.forest }}
+                    >
+                      <QrCode size={15} />
+                      {t("share.qrButton")}
                     </button>
                   )}
                 </div>
@@ -4756,8 +4806,8 @@ function OfflineNotice({ savedAt, serverDown, onRetry }) {
 
 // Gönderen: tarifin QR'ı. Kod sunucuda oluşturulur (aynı tarif için açık paylaşım
 // varsa aynısı döner); "Paylaşımı durdur" kodu hemen geçersiz kılar.
-function ShareQrSheet({ title, source, onClose }) {
-  const { t, language } = useLanguage();
+function ShareQrSheet({ title, source, closing, onClose }) {
+  const { t } = useLanguage();
   const [state, setState] = useState({ status: "loading" });
   const [copied, setCopied] = useState(false);
   useEffect(() => {
@@ -4792,42 +4842,42 @@ function ShareQrSheet({ title, source, onClose }) {
       // pano yoksa sessizce geç
     }
   };
-  const date = state.expiresAt ? new Date(state.expiresAt).toLocaleDateString(language === "tr" ? "tr-TR" : "en-GB", { day: "numeric", month: "long" }) : "";
+  // Görünüm: qr/qrTheme.js — dokulu yeşil kart, hardal çerçeveli QR, bulanık arka plan.
+  // Açıklama yazıları bilerek yok (süre/gizlilik kuralları docs/qr-ve-cevrimdisi.md).
   return (
-    <div role="dialog" aria-modal="true" aria-label={t("share.qrTitle")} onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(42,38,32,0.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: "380px", maxHeight: "100%", overflowY: "auto", background: COLORS.panel, borderRadius: "18px", padding: "18px", boxSizing: "border-box", display: "flex", flexDirection: "column", gap: "12px", fontFamily: BODY }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <QrCode size={18} color={COLORS.forest} />
-          <h2 style={{ margin: 0, flex: 1, fontFamily: SERIF, fontSize: "20px", color: COLORS.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title || t("share.qrTitle")}</h2>
-          <button type="button" onClick={onClose} aria-label={t("common.close")} style={{ border: "none", background: COLORS.paper, borderRadius: "9999px", width: "36px", height: "36px", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+    <div className={`qr-root${closing ? " is-closing" : ""}`} role="dialog" aria-modal="true" aria-label={t("share.qrTitle")} style={QR_STYLES.root}>
+      <style>{QR_SHEET_CSS}</style>
+      <div className="qr-backdrop" onClick={onClose} style={QR_STYLES.backdrop} />
+      <div className="qr-card" style={{ ...QR_STYLES.card, fontFamily: BODY }}>
+        <div style={QR_STYLES.header}>
+          <QrCode size={20} color={QR_COLORS.gold} style={{ flexShrink: 0 }} />
+          <h2 style={QR_STYLES.title}>{title || t("share.qrTitle")}</h2>
+          <button type="button" onClick={onClose} aria-label={t("common.close")} style={QR_STYLES.closeBtn}>
             <X size={18} />
           </button>
         </div>
         {state.status === "loading" && (
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", color: COLORS.inkSoft, fontSize: "14px", padding: "24px 0", justifyContent: "center" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", color: QR_COLORS.paperSoft, fontSize: "14px", padding: "40px 0", justifyContent: "center" }}>
             <Loader2 size={16} className="spin" /> {t("share.qrCreating")}
+            <style>{`.spin { animation: spin 1s linear infinite; } @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
           </div>
         )}
-        {state.status === "error" && <InlineError message={state.message} />}
-        {state.status === "stopped" && <p style={{ margin: 0, fontSize: "14px", color: COLORS.ink }}>{t("share.stopped")}</p>}
+        {state.status === "error" && <p style={QR_STYLES.error}>{state.message}</p>}
+        {state.status === "stopped" && <p style={QR_STYLES.note}>{t("share.stopped")}</p>}
         {state.status === "ready" && (
           <>
-            <div style={{ alignSelf: "center", background: "#fff", padding: "8px", borderRadius: "12px", border: `1px solid ${COLORS.line}` }}>
-              <QrCodeView value={url} size={240} label={t("share.qrTitle")} />
+            <div style={QR_STYLES.codeTile}>
+              <QrCodeView value={url} size={236} label={t("share.qrTitle")} dark={QR_COLORS.codeDark} light={QR_COLORS.codeLight} />
             </div>
-            <p style={{ margin: 0, fontSize: "13px", color: COLORS.ink, lineHeight: 1.45 }}>{t("share.qrHint")}</p>
-            <p style={{ margin: 0, fontSize: "12px", color: COLORS.inkSoft, lineHeight: 1.45 }}>
-              {t("share.qrExpires", { date })} {t("share.qrPrivacy")}
-            </p>
-            {state.stopError && <InlineError message={state.stopError} />}
-            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+            {state.stopError && <p style={QR_STYLES.error}>{state.stopError}</p>}
+            <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
               {typeof navigator !== "undefined" && navigator.clipboard && (
-                <button type="button" onClick={copy} style={{ flex: 1, minHeight: "42px", borderRadius: "10px", border: `1px solid ${COLORS.forest}`, background: "transparent", color: COLORS.forest, fontWeight: 600, fontSize: "13px", cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px" }}>
-                  {copied ? <Check size={14} /> : <Copy size={14} />}
+                <button type="button" onClick={copy} style={{ ...QR_STYLES.solidGoldBtn, flex: 1, fontSize: "14px" }}>
+                  {copied ? <Check size={15} /> : <Copy size={15} />}
                   {copied ? t("share.copied") : t("share.copyLink")}
                 </button>
               )}
-              <button type="button" onClick={stop} disabled={state.stopping} style={{ flex: 1, minHeight: "42px", borderRadius: "10px", border: `1px solid ${COLORS.danger}`, background: "transparent", color: COLORS.danger, fontWeight: 600, fontSize: "13px", cursor: "pointer", opacity: state.stopping ? 0.6 : 1 }}>
+              <button type="button" onClick={stop} disabled={state.stopping} style={{ ...QR_STYLES.quietBtn, flex: 1, opacity: state.stopping ? 0.6 : 1 }}>
                 {t("share.stop")}
               </button>
             </div>

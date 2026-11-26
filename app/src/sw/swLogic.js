@@ -13,8 +13,12 @@
 //    betiğiyle (addDocumentStartJavaScript) ekler; önbellekten açılan sayfada da
 //    çalışır (emülatörde doğrulandı). Bu özelliği olmayan eski WebView'lerde köprü
 //    native vekilin HTML'e enjekte ettiği betiktir: yalnızca gerçek gezinme yanıtı
-//    saklandığı için o kopya da betiği içerir. Bu yüzden kabuk ASLA install
-//    sırasında fetch("/") ile önceden alınmaz (Accept text/html olmaz, enjeksiyon olmaz).
+//    saklandığı için o kopya da betiği içerir.
+//    Kurulumda da kabuk alınır (Accept: text/html ile; native vekil bu başlıkla
+//    köprüyü enjekte eder): yalnız gezinmeye bağlı kalınca kabuk ancak İKİNCİ
+//    internetli açılışta saklanıyordu ve yeni sürümü bir kez açıp internetsiz
+//    deneyen kullanıcı "Web sayfası mevcut değil" görüyordu (26 Kasım, telefonda).
+//    Yönlendirilen (ör. Vercel giriş sayfası) ya da 200 olmayan yanıt saklanmaz.
 //  - "/assets/*" (içerik özetli dosya adları): önbellek önce; yoksa ağ + sakla.
 //  - Birkaç statik dosya (manifest, ikonlar): ağ önce, yoksa önbellek.
 //  - Geri kalan her şey (api, version.json, sw.js, paylaşım paneli, başka
@@ -48,8 +52,21 @@ export function routeRequest(request, origin) {
 
 export function createSwLogic({ caches, fetch, build, assets, origin, timeoutMs = NAV_TIMEOUT_MS, setTimer = setTimeout, clearTimer = clearTimeout }) {
   const assetCache = `${ASSET_CACHE_PREFIX}${build}`;
+  const isHtml = (res) => /text\/html/i.test(res.headers.get("content-type") || "");
+
+  async function precacheShell() {
+    try {
+      const res = await fetch(
+        new Request(new URL("/", origin).href, { cache: "reload", credentials: "same-origin", headers: { Accept: "text/html" } })
+      );
+      if (res && res.status === 200 && !res.redirected && isHtml(res)) await (await caches.open(SHELL_CACHE)).put("/", res);
+    } catch (e) {
+      // ağ yoksa ilk gezinmede saklanır
+    }
+  }
 
   async function install() {
+    await precacheShell();
     const cache = await caches.open(assetCache);
     // Tek tek: bir dosya alınamazsa kurulum yine biter (ilk kullanımda ağdan gelir).
     await Promise.all(
@@ -77,8 +94,6 @@ export function createSwLogic({ caches, fetch, build, assets, origin, timeoutMs 
     const keep = new Set([assetCache, SHELL_CACHE, ...builds.slice(0, 1).map((b) => `${ASSET_CACHE_PREFIX}${b}`)]);
     await Promise.all(names.filter((n) => n.startsWith("tk-") && !keep.has(n)).map((n) => caches.delete(n)));
   }
-
-  const isHtml = (res) => /text\/html/i.test(res.headers.get("content-type") || "");
 
   async function shell(request) {
     const cache = await caches.open(SHELL_CACHE);

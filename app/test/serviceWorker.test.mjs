@@ -101,14 +101,44 @@ test("kurulum dosyaları önceden alır; etkinleştirme bu + bir önceki sürüm
   };
   const sw = createSwLogic({ caches, fetch, build: "100", assets: ["/assets/a.js", "/assets/broken.js"], origin: ORIGIN });
   await sw.install();
-  assert.deepEqual(fetched.sort(), ["/assets/a.js", "/assets/broken.js"]);
+  assert.deepEqual(fetched.sort(), ["/", "/assets/a.js", "/assets/broken.js"]);
+  // Yanıt HTML değil → kabuk olarak saklanmaz.
+  assert.equal(await (await caches.open(SHELL_CACHE)).match("/"), undefined);
   await sw.activate();
   const names = (await caches.keys()).sort();
-  assert.deepEqual(names, ["other-lib-cache", "tk-assets-100", "tk-assets-90"]);
+  assert.deepEqual(names, ["other-lib-cache", "tk-assets-100", "tk-assets-90", SHELL_CACHE]);
   // Çevrimdışı: önceden alınan dosya önbellekten.
   const off = createSwLogic({ caches, fetch: async () => { throw new TypeError("offline"); }, build: "100", assets: [], origin: ORIGIN });
   assert.equal(await (await off.handleFetch(get("/assets/a.js"))).text(), "js");
   await assert.rejects(off.handleFetch(get("/assets/missing.js")));
+});
+
+test("kurulum kabuğu da saklar (Accept: text/html): yeni sürüm bir kez açıldıktan sonra internetsiz açılır", async () => {
+  const caches = memoryCaches();
+  const seen = [];
+  const fetch = async (req) => {
+    seen.push({ path: new URL(req.url).pathname, accept: req.headers.get("accept") });
+    return new URL(req.url).pathname === "/" ? html("<html><script>/*capacitor-bridge*/</script>shell</html>") : new Response("js", { status: 200 });
+  };
+  await createSwLogic({ caches, fetch, build: "7", assets: ["/assets/a.js"], origin: ORIGIN }).install();
+  assert.equal(seen.find((s) => s.path === "/").accept, "text/html");
+  const off = createSwLogic({ caches, fetch: async () => { throw new TypeError("offline"); }, build: "7", assets: [], origin: ORIGIN });
+  assert.match(await (await off.handleFetch(nav("/"))).text(), /shell/);
+});
+
+test("kurulum: yönlendirilen ya da 200 olmayan kabuk yanıtı saklanmaz (ör. Vercel giriş sayfası)", async () => {
+  for (const make of [
+    () => new Response("login", { status: 401, headers: { "content-type": "text/html" } }),
+    () => {
+      const r = html("login");
+      Object.defineProperty(r, "redirected", { value: true });
+      return r;
+    },
+  ]) {
+    const caches = memoryCaches();
+    await createSwLogic({ caches, fetch: async () => make(), build: "7", assets: [], origin: ORIGIN }).install();
+    assert.equal(await (await caches.open(SHELL_CACHE)).match("/"), undefined);
+  }
 });
 
 test("derlenen sw.js: dist çıktısında sabitler ve çekirdek var (build sonrası)", { skip: !safeRead("dist/sw.js") }, () => {
