@@ -101,12 +101,24 @@ paylaşım kodu değil") ve bağlantı hatası ayrı mesajlarla gösterilir. `ve
   eski APK'daki "güncelle" mesajı cihazda görülmedi (yalnızca sürüm kontrolü kodu); iOS yok;
   Preview/production'da deneme yapılmadı.
 
-## 4. Telefon test listesi (Tarif TEST v17, Preview bu dala bağlanınca)
+### 3.1 Preview'a bağlandıktan sonra (26 Kasım)
+
+- Preview bu dala bağlandı (kullanıcı onayıyla). İlk dağıtım düştü: Vercel Hobby en fazla 12 fonksiyon;
+  paylaşım ucu `/api/data?resource=recipe-shares` altına alındı (`87143de`), test sınırı korur.
+- Telefon dipnotu: "internetsiz açılınca Web sayfası mevcut değil". Emülatörde gerçek Tarif TEST v17 +
+  gerçek Preview ile yeniden üretildi: ilk açılıştan sonra dosyalar saklı ama kabuk (`tk-shell-v1`) yok —
+  kabuk yalnızca ikinci internetli açılışta saklanıyordu. Düzeltme `b6dcf5e`: kabuk kurulumda da alınır.
+  Aynı emülatörde temiz veriyle bir kez aç → kapat → uçak modu → aç: uygulama açıldı, native köprü var.
+- Aynı commit: QR okutma/paylaşma pencereleri uygulama renklerinde (dokulu yeşil, hardal), bulanık arka
+  plan, açılış/kapanış animasyonu; açıklama yazıları kaldırıldı; QR koyu yeşil / açık hardal (normal
+  renk yönü — ters renkli QR'ı birçok okuyucu okuyamaz), uygulamanın çözücüsü okudu. Basılı tutma
+  menüsüne "QR ile paylaş" eklendi. 619 test, Chrome e2e 18/18, verify 15/15.
+
+## 4. Telefon test listesi (Tarif TEST v17, Preview bu dala bağlı)
 
 APK: `C:\Users\emrea\tk-preview-apk\tarif-test-qr-offline-v17.apk` (dal `preview-test-apk-qr`,
 `com.tarifkutusu.app.preview`, Preview koruma anahtarı local.properties'ten). Eski Tarif TEST'in
-üstüne kurulur (aynı paket ve debug anahtarı). Preview şu an `feature/categories-tips-pantry`'de:
-bu dala bağlanmadan yeni ekranlar görünmez.
+üstüne kurulur (aynı paket ve debug anahtarı). Preview 26 Kasım'dan beri bu dala bağlı.
 
 1. İki telefon (ya da telefon + tarayıcı): A tarif detayında "QR ile paylaş"; B menüden "QR ile tarif
    ekle" → kamera izni → okut → ad/kategori/yer → Kaydet. Malzeme bölümleri, "Yaklaşık" miktarlar,
@@ -115,12 +127,14 @@ bu dala bağlanmadan yeni ekranlar görünmez.
 3. A "Paylaşımı durdur" → B okutunca "artık geçerli değil".
 4. Kamera izni reddi ve tekrar deneme; "QR'ın fotoğrafını seç" ile ekran görüntüsünden ekleme.
 5. Play'deki eski sürümle (v16) "QR ile tarif ekle" → "uygulamayı güncelle" açıklaması + görsel seçeneği.
-6. Uygulamayı açıp tarifler yüklendikten sonra kapat → uçak modu → aç: liste, bant, detay, pişirme modu,
+6. (Yeniden dene — `b6dcf5e`) Uygulamayı açıp tarifler yüklendikten sonra kapat → uçak modu → aç: liste, bant, detay, pişirme modu,
    porsiyon değiştirme. Favori/düzenleme denemesi → "internet yokken değişiklik yapılamaz".
 7. Uçak modunda paylaşım menüsünden TikTok linki → panel "bağlanılamadı" (değişmemeli).
 8. İnternet açılınca bant kalkıyor mu; "Şimdi Güncelle" bandı yeni deploy sonrası çalışıyor mu.
 9. Aile: Plus kapat ya da aileden çık → çevrimiçi aç → sonra çevrimdışı aç: o ailenin tarifleri artık görünmemeli.
 10. Hesap değiştir / çıkış → çevrimdışı açılışta önceki hesabın tarifleri görünmemeli.
+11. Yeni görünüm: tarif kartına basılı tut → "QR ile paylaş"; pencereler animasyonlu açılıp kapanıyor,
+    arka plan bulanık; Android geri tuşu da animasyonla kapatıyor; QR başka telefonun kamerasıyla da okunuyor.
 
 ## 5. Bilinen sınırlamalar
 
