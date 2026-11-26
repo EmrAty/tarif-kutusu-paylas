@@ -9,10 +9,12 @@
 //  - "/" gezinmesi (sorgu dizesi ne olursa olsun; ?sharePanel=1 HARİÇ):
 //    ağ önce. Başarılı HTML yanıtı "/" anahtarıyla saklanır. Ağ yoksa ya da
 //    önbellekte kopya varken TIMEOUT içinde gelmezse saklanan kopya verilir.
-//    Android uygulamasında bu yanıt Capacitor'ın native vekilinden köprü betiği
-//    enjekte edilmiş hâliyle gelir; saklanan kopya da onu içerir. Bu yüzden kabuk
-//    ASLA install sırasında fetch("/") ile önceden alınmaz (o istekte Accept
-//    text/html olmadığı için enjeksiyon yapılmaz; uygulama native'i göremezdi).
+//    Android'de Capacitor 8 native köprüyü WebView destekliyorsa belge başı
+//    betiğiyle (addDocumentStartJavaScript) ekler; önbellekten açılan sayfada da
+//    çalışır (emülatörde doğrulandı). Bu özelliği olmayan eski WebView'lerde köprü
+//    native vekilin HTML'e enjekte ettiği betiktir: yalnızca gerçek gezinme yanıtı
+//    saklandığı için o kopya da betiği içerir. Bu yüzden kabuk ASLA install
+//    sırasında fetch("/") ile önceden alınmaz (Accept text/html olmaz, enjeksiyon olmaz).
 //  - "/assets/*" (içerik özetli dosya adları): önbellek önce; yoksa ağ + sakla.
 //  - Birkaç statik dosya (manifest, ikonlar): ağ önce, yoksa önbellek.
 //  - Geri kalan her şey (api, version.json, sw.js, paylaşım paneli, başka
