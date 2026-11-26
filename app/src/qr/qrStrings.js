@@ -1,0 +1,36 @@
+// Flat dotted keys, same shape as the `translations` blocks in i18n.jsx:
+// spread QR_STRINGS.tr / QR_STRINGS.en into the matching dictionary.
+export const QR_STRINGS = {
+  tr: {
+    "qr.scanTitle": "QR'ı okut",
+    "qr.scanHint": "Kamerayı arkadaşının telefonundaki tarif QR'ına tut.",
+    "qr.close": "Kapat",
+    "qr.starting": "Kamera açılıyor…",
+    "qr.notOurCode": "Bu bir Tarif Kutusu paylaşım kodu değil.",
+    "qr.pickImage": "QR'ın fotoğrafını seç",
+    "qr.imageNoCode": "Bu görselde QR kodu bulunamadı. Daha net ve yakından bir görsel dene.",
+    "qr.retry": "Tekrar dene",
+    "qr.cameraUnsupported": "Bu cihazda kamera kullanılamıyor. QR'ın fotoğrafını veya ekran görüntüsünü seçebilirsin.",
+    "qr.permissionDenied": "Kamera izni verilmedi. Telefonun ayarlarından Tarif Kutusu için kamera iznini açabilir ya da QR'ın fotoğrafını seçebilirsin.",
+    "qr.noCamera": "Kamera bulunamadı. QR'ın fotoğrafını veya ekran görüntüsünü seçebilirsin.",
+    "qr.cameraBusy": "Kamera başka bir uygulama tarafından kullanılıyor. O uygulamayı kapatıp tekrar dene.",
+    "qr.cameraError": "Kamera açılamadı. Tekrar deneyebilir ya da QR'ın fotoğrafını seçebilirsin.",
+    "qr.needsAppUpdate": "Kamerayla okutmak için uygulamanın son sürümü gerekiyor. Google Play'den Tarif Kutusu'nu güncelle. Şimdilik QR'ın fotoğrafını veya ekran görüntüsünü seçebilirsin.",
+  },
+  en: {
+    "qr.scanTitle": "Scan QR",
+    "qr.scanHint": "Point the camera at the recipe QR on your friend's phone.",
+    "qr.close": "Close",
+    "qr.starting": "Starting camera…",
+    "qr.notOurCode": "This is not a Recipe Box share code.",
+    "qr.pickImage": "Pick a photo of the QR",
+    "qr.imageNoCode": "No QR code found in this image. Try a sharper, closer image.",
+    "qr.retry": "Try again",
+    "qr.cameraUnsupported": "The camera isn't available on this device. You can pick a photo or screenshot of the QR instead.",
+    "qr.permissionDenied": "Camera permission was not granted. You can allow camera access for Recipe Box in your phone's settings, or pick a photo of the QR instead.",
+    "qr.noCamera": "No camera found. You can pick a photo or screenshot of the QR instead.",
+    "qr.cameraBusy": "The camera is being used by another app. Close it and try again.",
+    "qr.cameraError": "Couldn't start the camera. Try again, or pick a photo of the QR instead.",
+    "qr.needsAppUpdate": "Scanning with the camera needs the latest version of the app. Update Recipe Box from Google Play. For now you can still pick a photo or screenshot of the QR.",
+  },
+};

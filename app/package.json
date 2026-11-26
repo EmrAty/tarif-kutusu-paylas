@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint .",
-    "test": "node --test \"test/*.test.mjs\" \"src/*.test.mjs\" \"shared/*.test.mjs\"",
+    "test": "node --test \"test/*.test.mjs\" \"src/*.test.mjs\" \"src/qr/*.test.mjs\" \"shared/*.test.mjs\"",
     "check": "npm run lint && npm test && npm run build",
     "verify:deploy": "node scripts/verify-deploy.mjs",
     "release:check": "node scripts/release-check.mjs"
@@ -25,7 +25,9 @@
     "@vercel/functions": "^3.9.8",
     "firebase": "^12.18.0",
     "jose": "^6.2.12",
+    "jsqr": "1.4.0",
     "lucide-react": "^0.462.0",
+    "qrcode-generator": "1.4.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
