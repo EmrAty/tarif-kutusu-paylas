@@ -11,7 +11,8 @@
     "test": "node --test \"test/*.test.mjs\" \"src/*.test.mjs\" \"src/qr/*.test.mjs\" \"shared/*.test.mjs\"",
     "check": "npm run lint && npm test && npm run build",
     "verify:deploy": "node scripts/verify-deploy.mjs",
-    "release:check": "node scripts/release-check.mjs"
+    "release:check": "node scripts/release-check.mjs",
+    "local-stack": "node scripts/local-stack.mjs"
   },
   "dependencies": {
     "@capacitor-firebase/authentication": "^8.5.1",
