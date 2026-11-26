@@ -73,8 +73,12 @@ export function serializeBucketValue(bucket, value) {
  *   adlarını çevirme) saf dönüşüm; bir sonraki yazımda sunucuya da gider.
  * updateGate: bkz. src/updateRequired.js. Sunucu istemciyi eski bulursa (426)
  *   kapı kapanır; o andan sonra hiçbir değişiklik sunucuya gönderilmez.
+ * onAccept(bucket, scope, data, version): sunucunun ONAYLADIĞI veri (başarılı
+ *   okuma ya da kabul edilen yazım) her kabul edildiğinde; çevrimdışı kopya için
+ *   (src/offlineCache.js). Bekleyen niyetler ve hatalar buraya hiç gelmez.
+ *   Hata fırlatırsa yok sayılır.
  */
-export function createBucketStore({ transport, maxAttempts = 4, normalize, updateGate = createUpdateGate() } = {}) {
+export function createBucketStore({ transport, maxAttempts = 4, normalize, updateGate = createUpdateGate(), onAccept } = {}) {
   let entries = new Map();
   let generation = 0;
   let state = {};
@@ -143,6 +147,13 @@ export function createBucketStore({ transport, maxAttempts = 4, normalize, updat
     entry.status = BUCKET_STATUS.READY;
     entry.stale = false;
     entry.error = null;
+    if (onAccept) {
+      try {
+        onAccept(entry.bucket, entry.scope, data, version);
+      } catch (e) {
+        // çevrimdışı kopya yalnızca kolaylık
+      }
+    }
   }
 
   // force: hazır kovayı da sunucudan tazeler (yenileme). Hata fırlatmaz;

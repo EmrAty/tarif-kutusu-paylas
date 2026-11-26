@@ -1,4 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useMemo, useEffect } from "react";
+import { QR_STRINGS } from "./qr/qrStrings.js";
+import { FEATURE_STRINGS } from "./featureStrings.js";
 
 // Merkezi dil/çeviri sistemi. Tek kaynak burası: App.jsx ve SharePanel.jsx
 // hiçbir yerde kendi language state'ini tutmuyor, hepsi <LanguageProvider>
@@ -47,6 +49,8 @@ const DIFFICULTY_LABELS = {
 
 const translations = {
   tr: {
+    ...QR_STRINGS.tr,
+    ...FEATURE_STRINGS.tr,
     // Genel / tekrar kullanılan
     "common.close": "Kapat",
     "common.retry": "Tekrar dene",
@@ -603,6 +607,8 @@ const translations = {
   },
 
   en: {
+    ...QR_STRINGS.en,
+    ...FEATURE_STRINGS.en,
     "common.close": "Close",
     "common.retry": "Try again",
     "common.family": "Family",

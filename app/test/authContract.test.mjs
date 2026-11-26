@@ -22,6 +22,7 @@ const ENDPOINTS = {
   notify: ["POST"],
   profile: ["GET", "POST"],
   "recipe-jobs": ["GET", "POST"],
+  "recipe-shares": ["GET", "POST"],
   "suggest-recipes": ["POST"],
   "translate-recipe": ["POST"],
 };

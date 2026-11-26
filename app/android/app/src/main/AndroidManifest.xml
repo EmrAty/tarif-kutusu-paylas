@@ -67,4 +67,10 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- QR ile tarif ekleme: WebView içindeki kamera (getUserMedia). İzin yalnızca
+         kullanıcı QR okutmayı açınca istenir. Kamerası olmayan cihazlar da
+         uygulamayı kurabilsin diye özellik zorunlu değil (görselden okuma çalışır). -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 </manifest>

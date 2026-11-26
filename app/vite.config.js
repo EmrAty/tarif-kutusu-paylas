@@ -1,7 +1,7 @@
 import { extractionModel } from "./shared/extractModel.js";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import { writeFileSync } from "fs";
+import { writeFileSync, readFileSync, readdirSync } from "fs";
 import { execSync } from "child_process";
 import { fileURLToPath } from "url";
 import path from "path";
@@ -31,6 +31,36 @@ function safeGit(command) {
   }
 }
 
+// Çevrimdışı açılış için Service Worker (bkz. src/sw/swLogic.js): derlenen her
+// /assets dosyası önceden önbelleğe alınır; sürüm damgası değişince eski önbellek
+// temizlenir. Acil geri dönüş: TK_DISABLE_SW=1 ile derlenirse sw.js kendini ve
+// önbelleklerini kaldıran bir betik olur (kayıtlı cihazlar bir sonraki açılışta temizlenir).
+function buildServiceWorker() {
+  const dist = path.resolve(__dirname, "dist");
+  if (process.env.TK_DISABLE_SW === "1") {
+    return `self.addEventListener("install", () => self.skipWaiting());
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
+    caches.keys()
+      .then((names) => Promise.all(names.filter((n) => n.startsWith("tk-")).map((n) => caches.delete(n))))
+      .then(() => self.registration.unregister())
+  );
+});
+`;
+  }
+  const assets = readdirSync(path.join(dist, "assets"))
+    .filter((f) => !f.endsWith(".map"))
+    .map((f) => `/assets/${f}`)
+    .sort();
+  const logic = readFileSync(path.resolve(__dirname, "src/sw/swLogic.js"), "utf8").replace(/^export /gm, "");
+  const main = readFileSync(path.resolve(__dirname, "src/sw/swMain.js"), "utf8");
+  return `// Üretildi: vite.config.js (kaynak src/sw/). Elle düzenleme.
+const SW_BUILD = ${JSON.stringify(buildVersion)};
+const SW_ASSETS = ${JSON.stringify(assets)};
+${logic}
+${main}`;
+}
+
 export default defineConfig({
   plugins: [
     react(),
@@ -42,6 +72,7 @@ export default defineConfig({
           path.resolve(__dirname, "dist", "version.json"),
           JSON.stringify({ version: buildVersion, ...gitInfo() })
         );
+        writeFileSync(path.resolve(__dirname, "dist", "sw.js"), buildServiceWorker());
       },
     },
   ],

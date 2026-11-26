@@ -17,3 +17,12 @@ ReactDOM.createRoot(document.getElementById("root")).render(
     <LanguageProvider>{isSharePanel ? <SharePanel /> : <TarifKutusu />}</LanguageProvider>
   </React.StrictMode>
 );
+
+// Çevrimdışı açılış (bkz. src/sw/swLogic.js): yalnızca üretim derlemesinde ve
+// ana uygulamada kaydedilir. Kayıt başarısızsa uygulama aynen çalışır (yalnızca
+// internetsiz açılamaz). Paylaşım paneli kaydetmez; SW de panele karışmaz.
+if (!isSharePanel && import.meta.env.PROD && typeof navigator !== "undefined" && "serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
+  });
+}

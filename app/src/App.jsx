@@ -5,7 +5,7 @@ import {
   ChefHat, Plus, Minus, Link2, ExternalLink, Trash2, Loader2, ArrowLeft, ArrowRight, AlertCircle,
   FileText, Pencil, Check, ChevronDown, Star, Search, ShoppingCart, Clock, Gauge, Undo2, X, Package, Download,
   Mail, LogOut, Users, Crown, Settings, UserCircle, Copy, Sparkles, LogIn, Bell, Info, Lock, RefreshCw, MoreHorizontal,
-  Lightbulb, FolderPlus,
+  Lightbulb, FolderPlus, QrCode, ScanLine, WifiOff,
 } from "lucide-react";
 import { auth, googleProvider, retireWebPush } from "./firebase.js";
 import {
@@ -55,6 +55,11 @@ import { titleTargets, writeTitle } from "./recipeTitles.js";
 import { groupCopies, copiesOf, groupIdOf } from "./recipeGroups.js";
 import { saveTicket as saveGuestMergeTicket, clearTicket as clearGuestMergeTicket, syncGuestMerge } from "./guestMergeClient.js";
 import { useLanguage, LANGUAGES, translate } from "./i18n.jsx";
+import { createOfflineCache, createIdbStorage, isOfflineError } from "./offlineCache.js";
+import { buildImportedRecipe, addSharedRecipeOnce, existingImports } from "./recipeShareClient.js";
+import { buildShareUrl, readShareTokenFromLocation, SHARE_PARAM } from "./qr/qrLink.js";
+import QrCodeView from "./qr/QrCodeView.jsx";
+import QrScanner from "./qr/QrScanner.jsx";
 
 // ShareReceiver/NativeSplash sadece Android tarafında yazılmış özel native plugin'ler
 // (bkz. app/android/.../ShareReceiverPlugin.java, NativeSplashPlugin.java) - iOS'ta
@@ -285,7 +290,7 @@ const SCREEN_EXIT_MS = 200; // mobil "ekran" kapanış animasyonunun süresi (ge
 // Mobilde/Capacitor'da tarif listesinin (Sidebar) üstünde kalmayıp onun yerine
 // tam ekran açılan, kendi giriş/çıkış animasyonu + scroll-üste-sıfırlama olan view'lar.
 // "edit": Tarifi Düzenle, Pişirme modu gibi ayrı ekran (mobilde liste gizlenir, geri → tarif).
-const FULLSCREEN_VIEWS = ["detail", "add", "manual", "shopping", "pantry", "cook", "favorites", "edit"];
+const FULLSCREEN_VIEWS = ["detail", "add", "manual", "shopping", "pantry", "cook", "favorites", "edit", "qrImport"];
 
 // "Elimde Bunlar Var" AI önerileri kategori döndürmüyor (bkz. suggest-recipes.js
 // şeması); normal recipe şemasında kategori zorunlu olduğu için kaydederken bu
@@ -398,19 +403,27 @@ export async function authedFetch(path, { method = "GET", body } = {}) {
 // Tarif / alışveriş listesi / kiler verisi: sürümlü, çakışma güvenli depo
 // (bkz. src/syncedBuckets.js ve api/_lib/versionedBucket.js). Okuma hatası
 // asla "boş" sayılmaz; değişiklikler niyet (updater) olarak gönderilir.
+// Ağ hatası (internet yok, fetch hiç yanıt almadı) `network_error` kodunu taşır:
+// çevrimdışı görüntüleme bunu yetki hatasından ayırır (bkz. src/offlineCache.js).
+const networkError = (cause) => Object.assign(new Error(translate("offline.needsNetwork")), { code: "network_error", cause });
 async function dataRequest(method, { query, body }) {
   const user = auth.currentUser;
   if (!user) throw new Error(translate("errors.sessionNotFound"));
   const token = await user.getIdToken();
   const url = method === "GET" ? `/api/data?${new URLSearchParams(query).toString()}` : "/api/data";
-  const res = await fetch(url, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(body ? { "Content-Type": "application/json" } : {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  let res;
+  try {
+    res = await fetch(url, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(body ? { "Content-Type": "application/json" } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch (e) {
+    throw networkError(e);
+  }
   const data = await res.json().catch(() => null);
   return { status: res.status, body: data };
 }
@@ -421,11 +434,24 @@ function normalizeBucket(bucket, data) {
   return data.map((r) => (r && r.category && LEGACY_CATEGORY_MAP[r.category] ? { ...r, category: LEGACY_CATEGORY_MAP[r.category] } : r));
 }
 
+// Çevrimdışı görüntüleme (bkz. src/offlineCache.js, docs/qr-ve-cevrimdisi.md):
+// sunucunun onayladığı tarif listeleri hesap bazında cihaza (IndexedDB) yazılır.
+// Kopya yalnızca gösterilir; dataStore'a hiç girmez, üzerine yazım yapılamaz.
+const offlineCache = createOfflineCache({ storage: createIdbStorage() });
+let offlineCacheUid = null; // dataStore'un şu anki oturumu (reset ile birlikte değişir)
+
 const dataStore = createBucketStore({
   transport: createDataTransport(dataRequest),
   normalize: normalizeBucket,
   updateGate: appUpdateGate,
+  onAccept: (bucket, scope, data, version) => {
+    if (bucket === "recipes" && offlineCacheUid) offlineCache.saveBucket(offlineCacheUid, scope, version, data);
+  },
 });
+
+// Kamerayla QR okuma için kamera izni ilk kez bu Android sürümünde (versionCode)
+// var; daha eski APK'da kamera açılmaz, yalnızca görselden okuma sunulur.
+const QR_CAMERA_MIN_ANDROID_BUILD = 17;
 
 function useBucket(bucket, scopeKey) {
   const state = useSyncExternalStore(dataStore.subscribe, dataStore.getState);
@@ -440,6 +466,8 @@ const isSettled = (snap) => !!snap && (snap.status === BUCKET_STATUS.READY || sn
 
 // Kayıt hatasının kullanıcıya gösterilecek metni.
 function saveErrorMessage(e, t) {
+  if (e?.code === NOT_LOADED && isOfflineError(e.cause)) return t("offline.readOnly");
+  if (e?.code === "network_error") return t("offline.readOnly");
   if (e?.code === NOT_LOADED) return t("errors.dataNotLoaded");
   if (e?.code === CONFLICT_EXHAUSTED) return t("errors.saveConflict");
   if (e?.code === CLIENT_OUTDATED) return t("errors.clientOutdated");
@@ -953,6 +981,11 @@ export default function TarifKutusu() {
   const [modalClosing, setModalClosing] = useState(false);
   const modalClosingRef = React.useRef(false);
   const [manualPrefill, setManualPrefill] = useState(null);
+  // QR paylaşımı (bkz. aşağıdaki "QR ile tarif paylaşımı" bölümü).
+  const [shareQrFor, setShareQrFor] = useState(null); // { title, source } | null
+  const [qrScanOpen, setQrScanOpen] = useState(false);
+  const [qrImport, setQrImport] = useState(null); // { token, status, data, title, category, error, busy, existing }
+  const [pendingShareToken, setPendingShareToken] = useState(null);
   const { updateAvailable, updateRequired } = useUpdateAvailable();
   const listScrollYRef = React.useRef(0);
   const prevViewRef = React.useRef(view);
@@ -1072,6 +1105,9 @@ export default function TarifKutusu() {
 
   const handleSignOut = async () => {
     await unregisterPushForSignOut();
+    // Bu cihazdaki çevrimdışı tarif kopyası çıkışta silinir (sonraki hesap görmesin).
+    offlineCacheUid = null;
+    await offlineCache.purgeExcept(null).catch(() => {});
     await signOut(auth);
   };
 
@@ -1087,6 +1123,8 @@ export default function TarifKutusu() {
     } catch (e) {
       // depolama yoksa temizlenecek bir şey de yok
     }
+    offlineCacheUid = null;
+    await offlineCache.purgeExcept(null).catch(() => {});
     await signOut(auth).catch(() => {});
     window.location.replace("/");
   };
@@ -1151,6 +1189,8 @@ export default function TarifKutusu() {
   applyFamiliesRef.current = (split) => {
     setIsPlus(split.isPlus);
     applyPlusStatus(split.isPlus);
+    // Çevrimdışı kopya: yalnızca sunucunun doğruladığı (üye + Plus) ailelerinki kalır.
+    if (offlineCacheUid) offlineCache.retainFamilies(offlineCacheUid, split.families.map((f) => ({ id: f.id, name: f.name })), { isPlus: !!split.isPlus }).catch(() => {});
     // Üyeliği sunucuda doğrulanamayan aile (profilde var, üye listesinde yok)
     // veri yüklemeye ve hedef listelerine girmez; yalnızca Aileler ekranında
     // "tekrar katıl / ayrıl" kartı olarak görünür.
@@ -1345,6 +1385,16 @@ export default function TarifKutusu() {
       // ?openRecipe= : eskiden gösterilmiş bir web bildirimine tıklanınca
       // (firebase-messaging-sw.js) doğrudan o tarife gitmek için. Web push
       // artık kapalı; bağlantı geriye uyum için okunmaya devam ediyor.
+      // QR paylaşım bağlantısı tarayıcıda/uygulamada açıldıysa (?recipeShare=…).
+      const shareToken = readShareTokenFromLocation(window.location);
+      if (shareToken) {
+        const url = new URL(window.location.href);
+        url.searchParams.delete(SHARE_PARAM);
+        window.history.replaceState({}, "", url);
+        setPendingShareToken(shareToken);
+        return;
+      }
+
       const openRecipeId = params.get("openRecipe");
       if (openRecipeId) {
         setPendingRecipeId(openRecipeId);
@@ -1473,6 +1523,10 @@ export default function TarifKutusu() {
         CapacitorApp.minimizeApp();
       } else if (openRoundingSheet.close) {
         openRoundingSheet.close();
+      } else if (qrScanOpen) {
+        setQrScanOpen(false);
+      } else if (shareQrFor) {
+        setShareQrFor(null);
       } else if (transferModal) {
         setTransferModal(null);
       } else if (categoryModal) {
@@ -1496,7 +1550,7 @@ export default function TarifKutusu() {
     return () => {
       if (listenerHandle) listenerHandle.remove();
     };
-  }, [view, menuOpen, modalView, limitModalOpen, categoryModal, transferModal, closeActiveScreen, closeModal]);
+  }, [view, menuOpen, modalView, limitModalOpen, categoryModal, transferModal, qrScanOpen, shareQrFor, closeActiveScreen, closeModal]);
 
   // Yalnızca başarıyla yüklenmiş tarif kovaları (gösterim = onaylı veri +
   // bekleyen değişiklikler). Yüklenemeyen kova burada hiç yer almaz; boş liste
@@ -1608,9 +1662,82 @@ export default function TarifKutusu() {
   const authUid = authUser ? authUser.uid : null;
   useEffect(() => {
     dataStore.reset();
+    offlineCacheUid = authUid;
     if (!authUid) return;
     dataStore.load("recipes", PERSONAL);
   }, [authUid]);
+
+  // Çevrimdışı kopya: oturum belli olunca başka hesapların kopyası silinir (oturum
+  // yoksa hepsi), bu hesabınki okunur. Gösterim yalnızca kişisel liste ağ/sunucu
+  // hatasıyla yüklenemediğinde (bkz. offlineView).
+  const [offlineSnap, setOfflineSnap] = useState(null);
+  const personalLoadFailed = personalRecipesSnap?.status === BUCKET_STATUS.ERROR;
+  const personalLoadError = personalLoadFailed ? personalRecipesSnap.error : null;
+  useEffect(() => {
+    setOfflineSnap(null);
+    if (!authChecked) return undefined;
+    let cancelled = false;
+    offlineCache
+      .purgeExcept(authUid)
+      .catch(() => {})
+      .then(() => (authUid ? offlineCache.read(authUid) : null))
+      .then((snap) => {
+        if (!cancelled) setOfflineSnap(snap);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [authChecked, authUid]);
+  // Oturum içinde bağlantı koptuysa en güncel kopya yeniden okunur; hesap sunucuda
+  // silinmiş/geçersizse (401) bu cihazdaki kopyası da silinir.
+  useEffect(() => {
+    if (!personalLoadError || !authUid) return undefined;
+    if (personalLoadError.status === 401) {
+      offlineCache.purge(authUid).catch(() => {});
+      setOfflineSnap(null);
+      return undefined;
+    }
+    let cancelled = false;
+    offlineCache
+      .read(authUid)
+      .then((snap) => {
+        if (!cancelled) setOfflineSnap(snap);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [personalLoadError, authUid]);
+  const offlineError = personalLoadError && isOfflineError(personalLoadError) ? personalLoadError : null;
+  const offlineView = offlineError && offlineSnap && offlineSnap.buckets && offlineSnap.buckets.personal ? offlineSnap : null;
+  // Gösterim için: çevrimdışıyken sunucudan yüklenemeyen listelerin yerine cihazdaki
+  // son onaylı kopya. Yazma yolları (mutateRecipes → dataStore) bunu hiç görmez.
+  const viewBuckets = useMemo(() => {
+    if (!offlineView) return recipeBuckets;
+    const out = { ...recipeBuckets };
+    Object.entries(offlineView.buckets).forEach(([scope, entry]) => {
+      if (!out[scope]) out[scope] = entry.data;
+    });
+    return out;
+  }, [recipeBuckets, offlineView]);
+  // Çevrimdışı açılışta aile listesi sunucudan alınamaz: son doğrulanan aileler gösterilir.
+  const viewFamilies = useMemo(
+    () => (offlineView && families.length === 0 && Array.isArray(offlineView.meta?.families) ? offlineView.meta.families : families),
+    [offlineView, families]
+  );
+
+  // İnternet geri gelince: liste ve aile/Plus durumu sunucudan yeniden doğrulanır.
+  useEffect(() => {
+    if (!authUid) return undefined;
+    const onOnline = () => {
+      dataStore.refresh("recipes", PERSONAL);
+      familiesRef.current.forEach((f) => dataStore.refresh("recipes", f.id));
+      loadFamiliesState();
+    };
+    window.addEventListener("online", onOnline);
+    return () => window.removeEventListener("online", onOnline);
+  }, [authUid, loadFamiliesState]);
 
   useEffect(() => {
     if (!familiesLoaded) return;
@@ -1669,11 +1796,11 @@ export default function TarifKutusu() {
 
   const familyNameById = useMemo(() => {
     const map = {};
-    [...families, ...lockedFamilies].forEach((f) => {
+    [...viewFamilies, ...lockedFamilies].forEach((f) => {
       map[f.id] = f.name;
     });
     return map;
-  }, [families, lockedFamilies]);
+  }, [viewFamilies, lockedFamilies]);
 
   // Aynı tarif birden fazla yere (kişisel + bir ya da iki aile) kaydedilebiliyor —
   // her yerde AYNI id'yle saklanıyor. Burada id'ye göre tekilleştirip, o tarifin
@@ -1691,8 +1818,8 @@ export default function TarifKutusu() {
         }
       });
     };
-    addFrom(PERSONAL, recipeBuckets[PERSONAL] || []);
-    families.forEach((f) => addFrom(f.id, recipeBuckets[f.id] || []));
+    addFrom(PERSONAL, viewBuckets[PERSONAL] || []);
+    viewFamilies.forEach((f) => addFrom(f.id, viewBuckets[f.id] || []));
     // Kilitli aile tarifleri yalnızca kart olarak (özet; malzeme/yapılış yok).
     // Aynı tarif erişilebilir bir listede de varsa o kopya kullanılır ve kilitli
     // ailenin kapsamı ona EKLENMEZ (değişiklikler kilitli aileye yazılmaya
@@ -1703,7 +1830,7 @@ export default function TarifKutusu() {
       });
     });
     return Array.from(byId.values());
-  }, [recipeBuckets, families, lockedFamilies, lockedSummaries]);
+  }, [viewBuckets, viewFamilies, lockedFamilies, lockedSummaries]);
 
   // Free hesapta sınırı aşan en yeni kişisel tarifler kilitli (bkz.
   // src/recipeLocks.js). Türetilmiş durum: Redis'e yazılmaz; Plus açılınca,
@@ -1713,8 +1840,8 @@ export default function TarifKutusu() {
     () =>
       plusStatus === null
         ? new Set()
-        : lockedRecipeIds(recipeBuckets[PERSONAL] || [], { isPlus: plusStatus, limit: FREE_RECIPE_LIMIT }),
-    [plusStatus, recipeBuckets]
+        : lockedRecipeIds(viewBuckets[PERSONAL] || [], { isPlus: plusStatus, limit: FREE_RECIPE_LIMIT }),
+    [plusStatus, viewBuckets]
   );
   // Plus kapalıyken aile tariflerinin tamamı kilitli (Grup 4) — aynı yeşil
   // örtü ve kilit (LockedOverlay); kişisel sınır kilidiyle aynı yol.
@@ -1900,8 +2027,8 @@ export default function TarifKutusu() {
   // "Tekrar dene" bandı açılır ve true döner (çağıran tarif ekranına geçer).
   const [partialSave, setPartialSave] = useState(null); // { recipe, saved: [scopeKey], failed: [scopeKey], limit }
   const saveNewRecipe = useCallback(
-    async (recipe, targets) => {
-      const { saved, failed } = await saveRecipeToTargets(recipe, targets, mutateRecipes, PERSONAL);
+    async (recipe, targets, options) => {
+      const { saved, failed } = await saveRecipeToTargets(recipe, targets, mutateRecipes, PERSONAL, options);
       if (!failed.length) {
         setPartialSave(null);
         return saved;
@@ -2089,6 +2216,104 @@ export default function TarifKutusu() {
     // Ekrandan çıkınca inceleme kapanır; aynı girdilerle tekrar çıkarma yine AI'a gitmez (lastExtractionRef).
     if (view !== "add") setExtractReview(null);
   }, [view]);
+
+  // --- QR ile tarif paylaşımı (bkz. api/recipe-shares.js, docs/qr-ve-cevrimdisi.md) ---
+  // Gönderen: tarif detayından QR penceresi. Alıcı: menüden "QR ile tarif ekle" →
+  // kamera (ya da görsel) → "qrImport" ekranı → normal kayıt yolu (AI yok).
+  const [nativeBuild, setNativeBuild] = useState(null);
+  useEffect(() => {
+    if (!isAndroidNative) return;
+    CapacitorApp.getInfo()
+      .then((info) => setNativeBuild(Number(info?.build) || 0))
+      .catch(() => setNativeBuild(0));
+  }, []);
+  const qrCameraAvailable = !isAndroidNative || nativeBuild === null || nativeBuild >= QR_CAMERA_MIN_ANDROID_BUILD;
+
+  const shareSourceOf = (recipe) => {
+    if (!recipe) return null;
+    const scopes = recipe._scopes || [recipe._scope];
+    if (scopes.includes(PERSONAL)) return { scope: "personal", recipeId: recipe.id };
+    const familyId = scopes.find((s) => s && s !== PERSONAL);
+    return familyId ? { scope: "family", familyId, recipeId: recipe.id } : null;
+  };
+
+  const startQrImport = useCallback((token) => {
+    setQrScanOpen(false);
+    setQrImport({ token, status: "loading" });
+    setSaveTargets([PERSONAL]);
+    setView("qrImport");
+    authedFetch(`/api/recipe-shares?token=${encodeURIComponent(token)}`)
+      .then((data) => {
+        if (!data || !data.recipe || typeof data.shareId !== "string") throw new Error("invalid");
+        setQrImport((prev) =>
+          prev && prev.token === token
+            ? { token, status: "ready", data, title: data.recipe.title || "", category: data.recipe.category ? describeCategory({ category: data.recipe.category }) : null }
+            : prev
+        );
+      })
+      .catch((e) => {
+        const error = e?.code === "share_unavailable" ? "share.importUnavailable" : e?.code === "rate_limited" ? "share.importRateLimited" : e?.code ? "share.importUnavailable" : "share.importNetwork";
+        setQrImport((prev) => (prev && prev.token === token ? { token, status: "error", error } : prev));
+      });
+  }, [describeCategory]);
+  // Web bağlantısıyla açılırsa (?recipeShare=…): oturum açıldıktan sonra aynı ekran.
+  useEffect(() => {
+    if (pendingShareToken && authUser) {
+      const token = pendingShareToken;
+      setPendingShareToken(null);
+      startQrImport(token);
+    }
+  }, [pendingShareToken, authUser, startQrImport]);
+  useEffect(() => {
+    if (view !== "qrImport") setQrImport(null);
+  }, [view]);
+
+  const qrExisting = useMemo(() => {
+    if (!qrImport || qrImport.status !== "ready") return {};
+    return existingImports(viewBuckets, [PERSONAL, ...families.map((f) => f.id)], qrImport.data.shareId);
+  }, [qrImport, viewBuckets, families]);
+
+  const qrSavingRef = useRef(false);
+  const handleConfirmQrImport = async () => {
+    if (!qrImport || qrImport.status !== "ready" || qrSavingRef.current) return;
+    const targets = saveTargets.filter((k) => !qrExisting[k]);
+    if (!targets.length) return;
+    if (!qrImport.category) {
+      setQrImport((prev) => (prev ? { ...prev, saveError: t("share.needCategory") } : prev));
+      return;
+    }
+    if (targets.includes(PERSONAL) && !isPlus && (recipeBuckets[PERSONAL] || []).length >= FREE_RECIPE_LIMIT) {
+      setLimitModalOpen(true);
+      return;
+    }
+    const { data } = qrImport;
+    const recipe = buildImportedRecipe(data.recipe, {
+      shareId: data.shareId,
+      id: uid(),
+      title: qrImport.title,
+      categoryFields: categoryFields(qrImport.category),
+      addedBy: personName || "",
+    });
+    qrSavingRef.current = true;
+    setQrImport((prev) => (prev ? { ...prev, busy: true, saveError: "" } : prev));
+    try {
+      let saved = [];
+      try {
+        saved = await saveNewRecipe(recipe, targets, { addOnce: (r) => addSharedRecipeOnce(r, data.shareId) });
+      } catch (e) {
+        if (handleSaveFailure(e)) {
+          setQrImport((prev) => (prev ? { ...prev, busy: false } : prev));
+          return;
+        }
+      }
+      setActiveId(openedRecipeId(recipe, saved));
+      setView("detail");
+    } catch (e) {
+      setQrImport((prev) => (prev ? { ...prev, busy: false, saveError: e.message || t("common.genericError") } : prev));
+    } finally {
+      qrSavingRef.current = false;
+    }
+  };
 
   const handleConfirmExtract = async () => {
     if (!extractReview) return;
@@ -2503,6 +2728,8 @@ export default function TarifKutusu() {
           if (target === "favorites") {
             if (view !== "favorites") listScrollYRef.current = window.scrollY;
             setView(target);
+          } else if (target === "qrScan") {
+            setQrScanOpen(true);
           } else {
             setModalView(target);
           }
@@ -2556,10 +2783,21 @@ export default function TarifKutusu() {
           className={`md-sidebar${FULLSCREEN_VIEWS.includes(view) ? " list-sidebar-mobile-hidden" : ""}`}
           style={{ width: "100%" }}
         >
+          {offlineError && (
+            <OfflineNotice
+              savedAt={offlineView ? offlineView.buckets.personal.savedAt : null}
+              serverDown={Number.isInteger(offlineError.status)}
+              onRetry={retryRecipeLoads}
+            />
+          )}
           <Sidebar
             recipes={displayRecipes}
             loaded={loaded}
-            loadProblems={recipeLoadProblems}
+            loadProblems={
+              offlineError
+                ? { failed: recipeLoadProblems.failed.filter((s) => s !== PERSONAL && !(offlineView && offlineView.buckets[s])), stale: recipeLoadProblems.stale }
+                : recipeLoadProblems
+            }
             onRetryLoad={retryRecipeLoads}
             activeId={activeId}
             isPlus={isPlus}
@@ -2634,6 +2872,7 @@ export default function TarifKutusu() {
                 isPlus={isPlus}
                 families={families}
                 onSubmit={handleExtract}
+                onScanQr={() => setQrScanOpen(true)}
                 onCancel={() => setView("list")}
                 review={extractReview}
                 onReviewTitle={(title) => setExtractReview((prev) => (prev ? { ...prev, title } : prev))}
@@ -2700,6 +2939,7 @@ export default function TarifKutusu() {
                 onAddToShopping={() => addRecipeToShoppingList(active)}
                 onSendNotification={() => handleSendNotification(active)}
                 onStartCooking={() => setView("cook")}
+                onShareQr={shareSourceOf(active) ? () => setShareQrFor({ title: active.title || "", source: shareSourceOf(active) }) : null}
                 // Grubun kişisel kopyasından (seçili kopya aile kopyası olsa da) hesaplanır;
                 // kopyası olan aileler "kopyası var" ile kalır ("taşımayı tamamla").
                 transferInfo={transferInfoFor(active)}
@@ -2745,6 +2985,29 @@ export default function TarifKutusu() {
             </div>
           )}
 
+          {view === "qrImport" && qrImport && (
+            <div className={screenTransitionClass}>
+              <QrImportView
+                state={qrImport}
+                existing={qrExisting}
+                placeName={placeName}
+                onTitle={(title) => setQrImport((prev) => (prev ? { ...prev, title } : prev))}
+                onCategory={(category) => setQrImport((prev) => (prev ? { ...prev, category, saveError: "" } : prev))}
+                saveTargets={saveTargets}
+                setSaveTargets={setSaveTargets}
+                isPlus={isPlus}
+                families={families}
+                onConfirm={handleConfirmQrImport}
+                onRetry={() => startQrImport(qrImport.token)}
+                onScanAgain={() => setQrScanOpen(true)}
+                onOpenExisting={(id) => {
+                  setActiveId(id);
+                  setView("detail");
+                }}
+              />
+            </div>
+          )}
+
           {view === "favorites" && (
             <div className={screenTransitionClass}>
               <FavoritesView
@@ -2758,6 +3021,17 @@ export default function TarifKutusu() {
           )}
         </main>
       </div>
+
+      {qrScanOpen && (
+        <QrScanner
+          onToken={startQrImport}
+          onClose={() => setQrScanOpen(false)}
+          cameraAvailable={qrCameraAvailable}
+          currentOrigin={window.location.origin}
+        />
+      )}
+
+      {shareQrFor && <ShareQrSheet title={shareQrFor.title} source={shareQrFor.source} onClose={() => setShareQrFor(null)} />}
 
       {modalView === "families" && (
         <ModalSheet title={t("menu.families")} onClose={closeModal} closing={modalClosing}>
@@ -3178,6 +3452,7 @@ function SideMenu({ open, onClose, isPlus, onNavigate }) {
   const items = [
     { key: "account", label: t("menu.account"), icon: UserCircle },
     { key: "favorites", label: t("menu.favorites"), icon: Star },
+    { key: "qrScan", label: t("share.menuScan"), icon: ScanLine },
     { key: "families", label: t("menu.families"), icon: Users },
     { key: "plus", label: t("menu.plus"), icon: Crown },
     { key: "settings", label: t("menu.settings"), icon: Settings },
@@ -4461,6 +4736,205 @@ function ExtractReview({ review, onTitle, saveTargets, setSaveTargets, isPlus, f
   );
 }
 
+// Çevrimdışı bandı: kayıtlı kopya gösteriliyor (tarihiyle) ya da henüz indirilmemiş.
+function OfflineNotice({ savedAt, serverDown, onRetry }) {
+  const { t, language } = useLanguage();
+  const date = savedAt ? new Date(savedAt).toLocaleString(language === "tr" ? "tr-TR" : "en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
+  const text = savedAt ? t(serverDown ? "offline.cachedServer" : "offline.cached", { date }) : t("offline.notDownloaded");
+  return (
+    <div role="status" style={{ display: "flex", gap: "10px", alignItems: "flex-start", padding: "12px 14px", marginBottom: "12px", borderRadius: "12px", background: "#FBF3DF", border: `1px solid ${COLORS.mustard}`, color: COLORS.ink, fontSize: "13px", lineHeight: 1.45 }}>
+      <WifiOff size={18} color={COLORS.mustardDark} style={{ flexShrink: 0, marginTop: "1px" }} />
+      <div style={{ flex: 1 }}>
+        {text}
+        <button type="button" onClick={onRetry} style={{ display: "block", marginTop: "6px", padding: 0, background: "none", border: "none", color: COLORS.forest, fontWeight: 700, fontSize: "13px", cursor: "pointer" }}>
+          {t("offline.retry")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Gönderen: tarifin QR'ı. Kod sunucuda oluşturulur (aynı tarif için açık paylaşım
+// varsa aynısı döner); "Paylaşımı durdur" kodu hemen geçersiz kılar.
+function ShareQrSheet({ title, source, onClose }) {
+  const { t, language } = useLanguage();
+  const [state, setState] = useState({ status: "loading" });
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    authedFetch("/api/recipe-shares", { method: "POST", body: { action: "create", ...source } })
+      .then((data) => {
+        if (!cancelled) setState({ status: "ready", token: data.token, expiresAt: data.expiresAt });
+      })
+      .catch((e) => {
+        if (!cancelled) setState({ status: "error", message: e?.code === "recipe_locked" ? t("share.locked") : e?.code === "rate_limited" ? e.message : t("share.error") });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [source, t]);
+  const url = state.status === "ready" ? buildShareUrl(window.location.origin, state.token) : "";
+  const stop = async () => {
+    setState((s) => ({ ...s, stopping: true }));
+    try {
+      await authedFetch("/api/recipe-shares", { method: "POST", body: { action: "revoke", ...source } });
+      setState({ status: "stopped" });
+    } catch (e) {
+      setState((s) => ({ ...s, stopping: false, stopError: t("share.error") }));
+    }
+  };
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (e) {
+      // pano yoksa sessizce geç
+    }
+  };
+  const date = state.expiresAt ? new Date(state.expiresAt).toLocaleDateString(language === "tr" ? "tr-TR" : "en-GB", { day: "numeric", month: "long" }) : "";
+  return (
+    <div role="dialog" aria-modal="true" aria-label={t("share.qrTitle")} onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(42,38,32,0.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: "380px", maxHeight: "100%", overflowY: "auto", background: COLORS.panel, borderRadius: "18px", padding: "18px", boxSizing: "border-box", display: "flex", flexDirection: "column", gap: "12px", fontFamily: BODY }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <QrCode size={18} color={COLORS.forest} />
+          <h2 style={{ margin: 0, flex: 1, fontFamily: SERIF, fontSize: "20px", color: COLORS.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title || t("share.qrTitle")}</h2>
+          <button type="button" onClick={onClose} aria-label={t("common.close")} style={{ border: "none", background: COLORS.paper, borderRadius: "9999px", width: "36px", height: "36px", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+            <X size={18} />
+          </button>
+        </div>
+        {state.status === "loading" && (
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", color: COLORS.inkSoft, fontSize: "14px", padding: "24px 0", justifyContent: "center" }}>
+            <Loader2 size={16} className="spin" /> {t("share.qrCreating")}
+          </div>
+        )}
+        {state.status === "error" && <InlineError message={state.message} />}
+        {state.status === "stopped" && <p style={{ margin: 0, fontSize: "14px", color: COLORS.ink }}>{t("share.stopped")}</p>}
+        {state.status === "ready" && (
+          <>
+            <div style={{ alignSelf: "center", background: "#fff", padding: "8px", borderRadius: "12px", border: `1px solid ${COLORS.line}` }}>
+              <QrCodeView value={url} size={240} label={t("share.qrTitle")} />
+            </div>
+            <p style={{ margin: 0, fontSize: "13px", color: COLORS.ink, lineHeight: 1.45 }}>{t("share.qrHint")}</p>
+            <p style={{ margin: 0, fontSize: "12px", color: COLORS.inkSoft, lineHeight: 1.45 }}>
+              {t("share.qrExpires", { date })} {t("share.qrPrivacy")}
+            </p>
+            {state.stopError && <InlineError message={state.stopError} />}
+            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+              {typeof navigator !== "undefined" && navigator.clipboard && (
+                <button type="button" onClick={copy} style={{ flex: 1, minHeight: "42px", borderRadius: "10px", border: `1px solid ${COLORS.forest}`, background: "transparent", color: COLORS.forest, fontWeight: 600, fontSize: "13px", cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px" }}>
+                  {copied ? <Check size={14} /> : <Copy size={14} />}
+                  {copied ? t("share.copied") : t("share.copyLink")}
+                </button>
+              )}
+              <button type="button" onClick={stop} disabled={state.stopping} style={{ flex: 1, minHeight: "42px", borderRadius: "10px", border: `1px solid ${COLORS.danger}`, background: "transparent", color: COLORS.danger, fontWeight: 600, fontSize: "13px", cursor: "pointer", opacity: state.stopping ? 0.6 : 1 }}>
+                {t("share.stop")}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Alıcı: QR'dan gelen tarifin önizlemesi + ad, kategori ve kayıt yerleri. Kayıt
+// normal yoldan (sürümlü /api/data); aynı koddan zaten eklenmiş yerler seçilemez.
+function QrImportView({ state, existing, placeName, onTitle, onCategory, saveTargets, setSaveTargets, isPlus, families, onConfirm, onRetry, onScanAgain, onOpenExisting }) {
+  const { t } = useLanguage();
+  const card = { borderRadius: "14px", border: `1px solid ${COLORS.line}`, background: COLORS.panel, padding: "20px", boxShadow: CARD_SHADOW, display: "flex", flexDirection: "column", gap: "12px" };
+  const secondary = { padding: "10px", background: "transparent", border: "none", color: COLORS.forest, fontSize: "14px", fontWeight: 600, cursor: "pointer" };
+  if (state.status === "loading") {
+    return (
+      <div style={{ ...card, alignItems: "center", color: COLORS.inkSoft, fontSize: "14px" }}>
+        <Loader2 size={20} className="spin" />
+        {t("share.importLoading")}
+        <style>{`.spin { animation: spin 1s linear infinite; } @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
+  if (state.status === "error") {
+    return (
+      <div style={card}>
+        <h2 style={{ fontFamily: SERIF, fontSize: "22px", margin: 0 }}>{t("share.importTitle")}</h2>
+        <InlineError message={t(state.error)} />
+        {state.error !== "share.importUnavailable" && (
+          <button type="button" onClick={onRetry} style={secondary}>
+            {t("offline.retry")}
+          </button>
+        )}
+        <button type="button" onClick={onScanAgain} style={secondary}>
+          {t("share.scanAgain")}
+        </button>
+      </div>
+    );
+  }
+  const { recipe, own } = state.data;
+  const ingredients = Array.isArray(recipe.ingredients) ? recipe.ingredients : [];
+  const steps = Array.isArray(recipe.instructions) ? recipe.instructions.length : 0;
+  const tips = tipsOf(recipe).length;
+  const existingPlaces = Object.keys(existing);
+  const remaining = saveTargets.filter((k) => !existing[k]);
+  const firstExisting = existingPlaces.length ? existing[existingPlaces.includes(PERSONAL) ? PERSONAL : existingPlaces[0]] : null;
+  return (
+    <div style={card}>
+      <div style={{ display: "flex", alignItems: "center", gap: "8px", color: COLORS.forest }}>
+        <QrCode size={18} />
+        <h2 style={{ fontFamily: SERIF, fontSize: "22px", margin: 0 }}>{t("share.importTitle")}</h2>
+      </div>
+      <p style={{ fontSize: "13px", color: COLORS.inkSoft, margin: 0 }}>
+        {t("share.importSummary", { ingredients: ingredients.length, steps, tips })}
+        {recipe.servings ? ` · ${t("share.importServings", { n: recipe.servings })}` : ""}
+      </p>
+      {ingredients.length > 0 && (
+        <ul style={{ margin: 0, padding: "0 0 0 18px", fontSize: "13px", color: COLORS.ink, maxHeight: "160px", overflowY: "auto" }}>
+          {ingredients.map((ing, i) => (
+            <li key={i}>{[ing && ing.amount, ing && ing.name].filter(Boolean).join(" ")}</li>
+          ))}
+        </ul>
+      )}
+      {own && <p style={{ margin: 0, fontSize: "13px", color: COLORS.inkSoft }}>{t("share.importOwn")}</p>}
+      {existingPlaces.length > 0 && (
+        <div style={{ fontSize: "13px", color: COLORS.ink, background: COLORS.paper, borderRadius: "10px", padding: "10px 12px" }}>
+          {t("share.already", { places: existingPlaces.map(placeName).join(", ") })}
+          <button type="button" onClick={() => onOpenExisting(firstExisting)} style={{ ...secondary, display: "block", padding: "6px 0 0" }}>
+            {t("share.openExisting")}
+          </button>
+        </div>
+      )}
+      <label htmlFor="qr-import-title" style={{ display: "block", fontSize: "11px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", color: COLORS.inkSoft }}>
+        {t("review.titleLabel")}
+      </label>
+      <input
+        id="qr-import-title"
+        value={state.title}
+        onChange={(e) => onTitle(e.target.value)}
+        maxLength={120}
+        placeholder={recipe.title || ""}
+        style={{ width: "100%", boxSizing: "border-box", borderRadius: "8px", border: `1px solid ${COLORS.line}`, background: COLORS.paper, color: COLORS.ink, padding: "12px", fontSize: "16px", fontFamily: SERIF, outline: "none" }}
+      />
+      <div style={{ fontSize: "11px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", color: COLORS.inkSoft }}>{t("share.categoryLabel")}</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+        <CategoryChips value={state.category} onChange={onCategory} scopes={saveTargets} />
+      </div>
+      <SaveTargetPicker saveTargets={saveTargets} setSaveTargets={setSaveTargets} isPlus={isPlus} families={families} />
+      {state.saveError && <InlineError message={state.saveError} />}
+      <button
+        onClick={onConfirm}
+        disabled={state.busy || remaining.length === 0}
+        style={{ width: "100%", minHeight: "48px", display: "flex", alignItems: "center", justifyContent: "center", gap: "8px", borderRadius: "10px", fontSize: "15px", fontWeight: 700, background: COLORS.mustard, color: COLORS.forestDark, border: "none", cursor: state.busy ? "default" : "pointer", opacity: state.busy || remaining.length === 0 ? 0.6 : 1 }}
+      >
+        {state.busy ? <Loader2 size={16} className="spin" /> : <Check size={16} />}
+        {state.busy ? t("review.saving") : t("review.save")}
+      </button>
+      <button type="button" onClick={onScanAgain} disabled={state.busy} style={secondary}>
+        {t("share.scanAgain")}
+      </button>
+      <style>{`.spin { animation: spin 1s linear infinite; } @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
+
 function SaveTargetPicker({ saveTargets, setSaveTargets, isPlus, families }) {
   const { t } = useLanguage();
   const options = [
@@ -4525,7 +4999,7 @@ function SaveTargetPicker({ saveTargets, setSaveTargets, isPlus, families }) {
   );
 }
 
-function AddForm({ link, caption, notes, images, category, busy, error, setLink, setCaption, setNotes, setImages, setCategory, saveTargets, setSaveTargets, isPlus, families, onSubmit, onCancel, review, onReviewTitle, onConfirmReview, onBackFromReview }) {
+function AddForm({ link, caption, notes, images, category, busy, error, setLink, setCaption, setNotes, setImages, setCategory, saveTargets, setSaveTargets, isPlus, families, onSubmit, onScanQr, onCancel, review, onReviewTitle, onConfirmReview, onBackFromReview }) {
   const { t, categoryLabel } = useLanguage();
   const [fetchingCaption, setFetchingCaption] = useState(false);
   const [captionFetchError, setCaptionFetchError] = useState("");
@@ -4637,6 +5111,17 @@ function AddForm({ link, caption, notes, images, category, busy, error, setLink,
       <p style={{ fontSize: "14px", color: COLORS.inkSoft, margin: "0 0 20px" }}>
         {t("addForm.introPart1")} <strong>{t("addForm.introStrong")}</strong> {t("addForm.introPart2")}
       </p>
+
+      {onScanQr && (
+        <button
+          type="button"
+          onClick={onScanQr}
+          style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "8px", width: "100%", minHeight: "44px", marginBottom: "20px", borderRadius: "10px", border: `1px dashed ${COLORS.forest}`, background: "transparent", color: COLORS.forest, fontSize: "14px", fontWeight: 600, cursor: "pointer" }}
+        >
+          <ScanLine size={16} />
+          {t("share.addFromQr")}
+        </button>
+      )}
 
       <label style={labelStyle}>{t("addForm.videoLink")}</label>
       <div
@@ -5354,7 +5839,7 @@ const DETAIL_ACTION_BUTTON = {
   cursor: "pointer",
 };
 
-function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavorite, onChangeCategory, onEdit, onAddToShopping, onSendNotification, onStartCooking, onRetryTranslation, transferInfo, onTransfer, copies = [], onSelectCopy }) {
+function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavorite, onChangeCategory, onEdit, onAddToShopping, onSendNotification, onStartCooking, onShareQr, onRetryTranslation, transferInfo, onTransfer, copies = [], onSelectCopy }) {
   const { t, language, categoryLabel, difficultyLabel } = useLanguage();
   const { title, servings, category, prep_time_minutes, difficulty, ingredients = [], instructions = [], nutrition = {}, assumptions, servings_note, isFavorite, addedBy } = recipe;
   // Yalnızca güvenli http(s) link href olur (eski/başka üyenin kaydındaki
@@ -5570,6 +6055,13 @@ function RecipeDetail({ recipe, familyNameById, onDelete, onRename, onToggleFavo
           <ShoppingCart size={16} />
           {t("detail.addToShopping")}
         </button>
+
+        {onShareQr && (
+          <button onClick={onShareQr} style={{ ...DETAIL_ACTION_BUTTON, background: "transparent", color: COLORS.forest, border: `1px solid ${COLORS.forest}` }}>
+            <QrCode size={16} />
+            {t("share.qrButton")}
+          </button>
+        )}
 
         {/* Grup kimliğiyle: taşıma sonrası aile kopyasına geçilince sonuç mesajı kaybolmaz. */}
         <RecipeTransfer key={groupIdOf(recipe, PERSONAL)} info={transferInfo} familyNameById={familyNameById} onTransfer={onTransfer} />
