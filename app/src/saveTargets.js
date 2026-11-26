@@ -18,13 +18,15 @@ export const addRecipeOnce = (recipe) => (list) => (list.some((r) => r && r.id =
 
 // mutate(scopeKey, updater) → Promise. Kişisel liste önce (Free sınırı hatası
 // belirgin olsun), aileler paralel. Hiçbir hata dışarı fırlatılmaz.
-export async function saveRecipeToTargets(recipe, targets, mutate, personalKey) {
+// addOnce: hedef kopyayı listeye ekleyen updater üreticisi (QR ile gelen tarif
+// "bu paylaşımdan zaten var mı" kuralıyla ekler; bkz. src/recipeShareClient.js).
+export async function saveRecipeToTargets(recipe, targets, mutate, personalKey, { addOnce = addRecipeOnce } = {}) {
   const ordered = [...new Set(targets)];
   const saved = [];
   const failed = [];
   const run = async (scopeKey) => {
     try {
-      await mutate(scopeKey, addRecipeOnce(scopeKey === personalKey ? recipe : recipeForFamily(recipe, scopeKey)));
+      await mutate(scopeKey, addOnce(scopeKey === personalKey ? recipe : recipeForFamily(recipe, scopeKey)));
       saved.push(scopeKey);
     } catch (error) {
       failed.push({ scopeKey, error });

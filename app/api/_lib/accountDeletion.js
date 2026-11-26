@@ -5,6 +5,7 @@ import { fcmTokensKey, pushTargetsKey, releasePushOwnership } from "./fcm.js";
 import { bucketAuxKeys } from "./versionedBucket.js";
 import { getServiceAccountToken } from "./googleAuth.js";
 import { deleteMergedGuestsOf, deleteOwnMergeState } from "./guestMerge.js";
+import { deleteSharesOf } from "./recipeShareKeys.js";
 
 // Hesap silme (DELETE /api/account). Sıra bilerek böyle:
 //   1. "silindi" işareti  -> eski ID token'la gelen istekler ve yarıda kalmış
@@ -159,6 +160,9 @@ export async function deleteAccount(uid, { keepGuestMergeState = false } = {}) {
   // hesaba aitse kaldırılır. Hata silmeyi durdurmaz: kalan işaret silinmiş
   // uid'yi gösterir ve hiçbir hesaba bildirim götürmez.
   await releasePushOwnership(uid).catch(() => {});
+  // QR paylaşımları: kayıtlar sahibin hesabını her okumada doğruladığı için
+  // hata silmeyi durdurmaz (kalan kayıt hiçbir tarife açılmaz, süresi dolar).
+  await deleteSharesOf(uid).catch(() => {});
   await deleteKeys(personalKeys(uid));
   const scanned = [];
   for (const pattern of jobKeyPatterns(uid)) {
