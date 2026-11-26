@@ -4103,15 +4103,20 @@ function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus,
     // Kartta bulunduğu bütün yerler; kişisel tek başına yazılmaz (varsayılan).
     const placeLabels = [...new Set(g.members.flatMap((m) => scopeLabels(m, familyNameById, t)))];
     const shownPlaces = g.members.length > 1 ? placeLabels : placeLabels.filter((l) => l !== t("common.personal"));
+    // Basılı tutma menüsündeki her seçenek satır genişliğinde, çerçeveli bir kutu:
+    // yazının yanına/sağına dokunmak da seçeneği açar (tek elle kullanım).
     const menuButton = {
       display: "flex",
       alignItems: "center",
-      gap: "6px",
-      padding: "6px 10px",
-      borderRadius: "9999px",
-      border: "none",
-      background: "transparent",
-      fontSize: "12px",
+      gap: "8px",
+      width: "100%",
+      minHeight: "42px",
+      boxSizing: "border-box",
+      padding: "8px 12px",
+      borderRadius: "10px",
+      border: `1px solid ${COLORS.line}`,
+      background: COLORS.paper,
+      fontSize: "13px",
       fontWeight: 600,
       cursor: "pointer",
       textAlign: "left",
@@ -4218,7 +4223,7 @@ function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus,
                   background: COLORS.panel,
                 }}
               >
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "2px", flex: 1, minWidth: 0 }}>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: "6px", flex: 1, minWidth: 0 }}>
                   {notifyTarget && (
                     <button
                       onClick={() => handleQuickNotify(notifyTarget)}
@@ -4261,7 +4266,7 @@ function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus,
                       }}
                       style={{ ...menuButton, color: COLORS.forest }}
                     >
-                      <QrCode size={15} />
+                      <QrCode size={15} color={COLORS.forest} />
                       {t("share.qrButton")}
                     </button>
                   )}
