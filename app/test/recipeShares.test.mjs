@@ -6,7 +6,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { invoke, resetDb, db } from "./helpers/fakeServices.mjs";
 
-const { default: shares } = await import("../api/recipe-shares.js");
+const { default: dataRoute } = await import("../api/data.js");
+// Paylaşımlar /api/data?resource=recipe-shares üzerinden (Hobby 12 fonksiyon sınırı).
+const shares = (req, res) => {
+  req.query = { ...(req.query || {}), resource: "recipe-shares" };
+  return dataRoute(req, res);
+};
 const { default: dataHandler } = await import("../api/data.js");
 const { createBucketStore, createDataTransport } = await import("../src/syncedBuckets.js");
 const { buildImportedRecipe, addSharedRecipeOnce, existingImports } = await import("../src/recipeShareClient.js");

@@ -1,17 +1,21 @@
 // QR ile tarif paylaşımı. Kurallar: api/_lib/recipeShares.js, docs/qr-ve-cevrimdisi.md.
 //
-//   GET  /api/recipe-shares?token=…                      → alıcı: paylaşılan tarifi okur (AI yok)
-//   GET  /api/recipe-shares?status=1&scope=…&recipeId=…  → sahip: bu tarifin açık paylaşımı
-//   POST /api/recipe-shares { action: "create", scope, familyId?, recipeId } → sahip: QR bağlantısı
-//   POST /api/recipe-shares { action: "revoke", scope, familyId?, recipeId } → sahip: paylaşımı durdur
+// Ayrı bir api/ dosyası DEĞİL: Vercel Hobby planı dağıtım başına en fazla 12
+// sunucu fonksiyonuna izin veriyor (13. dosya dağıtımı düşürdü). Bu yüzden
+// api/data.js, ?resource=recipe-shares gelen istekleri buraya devreder.
+//
+//   GET  /api/data?resource=recipe-shares&token=…                      → alıcı: paylaşılan tarifi okur (AI yok)
+//   GET  /api/data?resource=recipe-shares&status=1&scope=…&recipeId=…  → sahip: bu tarifin açık paylaşımı
+//   POST /api/data?resource=recipe-shares { action: "create", scope, familyId?, recipeId } → sahip: QR bağlantısı
+//   POST /api/data?resource=recipe-shares { action: "revoke", scope, familyId?, recipeId } → sahip: paylaşımı durdur
 //
 // Kayıt bu uçta YAPILMAZ: alıcı tarifi kendi listesine normal kayıt yoluyla
 // (/api/data, sürümlü yazım) ekler. Böylece Free sınırı, aile üyeliği ve Plus
 // kilidi tek yerde (api/data.js) uygulanır ve paylaşım bunları aşamaz.
-import { requireUser } from "./_lib/auth.js";
-import { redisPipeline } from "./_lib/redis.js";
-import { checkDataWriteLimit, clientIp, sendGuardError } from "./_lib/aiGuard.js";
-import { createShare, revokeShare, resolveShare, shareStatus } from "./_lib/recipeShares.js";
+import { requireUser } from "./auth.js";
+import { redisPipeline } from "./redis.js";
+import { checkDataWriteLimit, clientIp, sendGuardError } from "./aiGuard.js";
+import { createShare, revokeShare, resolveShare, shareStatus } from "./recipeShares.js";
 
 // Okuma hız sınırı (token tahminini ve kazımayı anlamsız kılmak için; token
 // zaten 144 bit). Redis'e ulaşılamazsa geçirilir: okumanın kendisi orada düşer.

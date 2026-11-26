@@ -8,6 +8,7 @@ import { assertFamilyAccess } from "./_lib/families.js";
 import { checkRecipeList } from "./_lib/recipeInput.js";
 import { checkBucketShape, checkBucketSize, parseStored } from "./_lib/bucketLimits.js";
 import { checkDataWriteLimit, clientIp, sendGuardError } from "./_lib/aiGuard.js";
+import recipeSharesHandler from "./_lib/recipeSharesHandler.js";
 
 const ALLOWED_BUCKETS = new Set(["recipes", "shopping-list", "pantry-items"]);
 
@@ -92,7 +93,12 @@ function lockedSummary(list) {
     }));
 }
 
+export const RECIPE_SHARES_RESOURCE = "recipe-shares";
+
 export default async function handler(req, res) {
+  // QR paylaşımları ayrı bir fonksiyon değil (Hobby: en fazla 12 fonksiyon);
+  // kendi kimlik doğrulaması ve hız sınırlarıyla _lib/recipeSharesHandler.js'te.
+  if (req.query?.resource === RECIPE_SHARES_RESOURCE) return recipeSharesHandler(req, res);
   let user;
   try {
     user = await requireUser(req);

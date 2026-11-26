@@ -2217,7 +2217,7 @@ export default function TarifKutusu() {
     if (view !== "add") setExtractReview(null);
   }, [view]);
 
-  // --- QR ile tarif paylaşımı (bkz. api/recipe-shares.js, docs/qr-ve-cevrimdisi.md) ---
+  // --- QR ile tarif paylaşımı (bkz. api/_lib/recipeSharesHandler.js, docs/qr-ve-cevrimdisi.md) ---
   // Gönderen: tarif detayından QR penceresi. Alıcı: menüden "QR ile tarif ekle" →
   // kamera (ya da görsel) → "qrImport" ekranı → normal kayıt yolu (AI yok).
   const [nativeBuild, setNativeBuild] = useState(null);
@@ -2242,7 +2242,7 @@ export default function TarifKutusu() {
     setQrImport({ token, status: "loading" });
     setSaveTargets([PERSONAL]);
     setView("qrImport");
-    authedFetch(`/api/recipe-shares?token=${encodeURIComponent(token)}`)
+    authedFetch(`/api/data?resource=recipe-shares&token=${encodeURIComponent(token)}`)
       .then((data) => {
         if (!data || !data.recipe || typeof data.shareId !== "string") throw new Error("invalid");
         setQrImport((prev) =>
@@ -4762,7 +4762,7 @@ function ShareQrSheet({ title, source, onClose }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    authedFetch("/api/recipe-shares", { method: "POST", body: { action: "create", ...source } })
+    authedFetch("/api/data?resource=recipe-shares", { method: "POST", body: { action: "create", ...source } })
       .then((data) => {
         if (!cancelled) setState({ status: "ready", token: data.token, expiresAt: data.expiresAt });
       })
@@ -4777,7 +4777,7 @@ function ShareQrSheet({ title, source, onClose }) {
   const stop = async () => {
     setState((s) => ({ ...s, stopping: true }));
     try {
-      await authedFetch("/api/recipe-shares", { method: "POST", body: { action: "revoke", ...source } });
+      await authedFetch("/api/data?resource=recipe-shares", { method: "POST", body: { action: "revoke", ...source } });
       setState({ status: "stopped" });
     } catch (e) {
       setState((s) => ({ ...s, stopping: false, stopError: t("share.error") }));

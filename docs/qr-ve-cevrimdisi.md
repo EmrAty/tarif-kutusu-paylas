@@ -11,7 +11,7 @@ Dal: `feature/qr-offline` (`feature/categories-tips-pantry` `73f1f41` üstünde;
 detayı. AI'a hiç gidilmez. QR telefonun kendi kamerasıyla okutulursa bağlantı
 (`https://tarifkutusu.app/?recipeShare=…`) uygulamanın web sürümünde aynı ekranı açar.
 
-**Mimari.** `api/recipe-shares.js` + `api/_lib/recipeShares.js`, ortak kurallar
+**Mimari.** `/api/data?resource=recipe-shares` (işleyici `api/_lib/recipeSharesHandler.js`; ayrı dosya değil çünkü Vercel Hobby dağıtım başına en fazla 12 fonksiyon kabul ediyor — 13. dosya ilk Preview dağıtımını düşürdü) + `api/_lib/recipeShares.js`, ortak kurallar
 `shared/recipeShare.js`, alıcı tarafı `src/recipeShareClient.js`, tarayıcı/QR modülleri
 `src/qr/` (jsQR 1.4.0, qrcode-generator 1.4.4).
 
@@ -80,7 +80,7 @@ paylaşım kodu değil") ve bağlantı hatası ayrı mesajlarla gösterilir. `ve
 ## 3. Yapılan doğrulamalar (26 Kasım)
 
 - `npm run check`: lint + 617 test + build temiz. Yeni testler: `test/recipeShares.test.mjs`
-  (gerçek `/api/recipe-shares` + `/api/data` + istemci deposu), `test/offlineCache.test.mjs`,
+  (gerçek `/api/data?resource=recipe-shares` + `/api/data` + istemci deposu), `test/offlineCache.test.mjs`,
   `test/serviceWorker.test.mjs`, `src/qr/*.test.mjs` (jsQR gidiş-dönüş), `test/localStack.test.mjs`,
   yetki sözleşmesi tablosuna yeni uç.
 - **Gerçek Chrome** (başsız, iki ayrı profil = iki misafir hesap, gerçek Firebase oturumu, yerel

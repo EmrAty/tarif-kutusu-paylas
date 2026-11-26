@@ -218,7 +218,7 @@ try {
   await pa.waitFor(`!!document.querySelector('[role=dialog] svg[role=img]')`, { label: "QR görseli" });
   await pa.screenshot("01-share-qr");
   check("A: QR penceresi ve kod görseli", true);
-  const share = await api(pa, "POST", "/api/recipe-shares", { action: "create", scope: "personal", recipeId: RECIPE.id });
+  const share = await api(pa, "POST", "/api/data?resource=recipe-shares", { action: "create", scope: "personal", recipeId: RECIPE.id });
   check("A: aynı tarif için aynı paylaşım kodu", share.status === 200 && share.body.reused === true, JSON.stringify({ s: share.status, reused: share.body?.reused }));
   await pa.evaluate(`document.querySelector('[role=dialog] button[aria-label]').click()`);
 
@@ -270,7 +270,7 @@ try {
   await pb.screenshot("06-already");
 
   // A paylaşımı durdurur → B açamaz
-  const stop = await api(pa, "POST", "/api/recipe-shares", { action: "revoke", scope: "personal", recipeId: RECIPE.id });
+  const stop = await api(pa, "POST", "/api/data?resource=recipe-shares", { action: "revoke", scope: "personal", recipeId: RECIPE.id });
   check("A: paylaşım durduruldu", stop.body?.revoked === true);
   await pb.goto(`${ORIGIN}/?recipeShare=${share.body.token}`);
   await pb.waitFor(`document.body.innerText.includes("artık geçerli değil")`, { timeout: 20000, label: "geçersiz paylaşım" });

@@ -22,7 +22,6 @@ const ENDPOINTS = {
   notify: ["POST"],
   profile: ["GET", "POST"],
   "recipe-jobs": ["GET", "POST"],
-  "recipe-shares": ["GET", "POST"],
   "suggest-recipes": ["POST"],
   "translate-recipe": ["POST"],
 };
@@ -87,6 +86,9 @@ test("sözleşme tablosu api/ klasöründeki her ucu kapsıyor", () => {
     .map((f) => f.replace(/\.js$/, ""))
     .sort();
   assert.deepEqual(files, Object.keys(ENDPOINTS).sort(), "yeni uç eklendiyse yetki tablosuna da yazılmalı");
+  // Vercel Hobby planı dağıtım başına en fazla 12 sunucu fonksiyonu kabul eder;
+  // 13. dosya derlemeyi geçse de dağıtımı düşürür (26 Kasım, feature/qr-offline).
+  assert.ok(files.length <= 12, `api/ altında ${files.length} fonksiyon var; Hobby sınırı 12 — yeni ucu mevcut bir fonksiyona devret`);
 });
 
 for (const [label, token] of Object.entries(BAD_TOKENS)) {
