@@ -4026,6 +4026,15 @@ function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus,
   const [favOpen, setFavOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [longPressId, setLongPressId] = useState(null);
+  // Basılı tutma menüsü açıkken menünün dışında herhangi bir yere dokunmak onu kapatır.
+  useEffect(() => {
+    if (!longPressId) return undefined;
+    const onDown = (e) => {
+      if (!(e.target instanceof Element) || !e.target.closest("[data-longpress-menu]")) setLongPressId(null);
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    return () => document.removeEventListener("pointerdown", onDown, true);
+  }, [longPressId]);
   const [quickNotify, setQuickNotify] = useState({ id: null, status: "idle", message: "" }); // status: "idle" | "sending" | "done" | "empty" | "error"
   const pressTimerRef = useRef(null);
   const longPressFiredRef = useRef(false);
@@ -4212,11 +4221,12 @@ function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus,
           <div style={{ display: "grid", gridTemplateRows: menuOpen ? "1fr" : "0fr", transition: "grid-template-rows 220ms ease" }}>
             <div style={{ overflow: "hidden" }}>
               <div
+                data-longpress-menu=""
                 style={{
                   display: "flex",
                   alignItems: "flex-start",
                   gap: "8px",
-                  padding: "6px 8px 8px",
+                  padding: "8px",
                   marginTop: "2px",
                   borderRadius: "6px",
                   border: `1px solid ${COLORS.line}`,
@@ -4252,9 +4262,9 @@ function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus,
                         setLongPressId(null);
                         onOpenTransfer?.(menu.transferRecipe.id);
                       }}
-                      style={{ ...menuButton, color: COLORS.forest }}
+                      style={{ ...menuButton, color: COLORS.ink }}
                     >
-                      <Users size={15} />
+                      <Users size={15} color={COLORS.ink} />
                       {t("transfer.open")}
                     </button>
                   )}
@@ -4271,13 +4281,6 @@ function Sidebar({ recipes, loaded, loadProblems, onRetryLoad, activeId, isPlus,
                     </button>
                   )}
                 </div>
-                <button
-                  onClick={() => setLongPressId(null)}
-                  aria-label={t("common.close")}
-                  style={{ padding: "6px", background: "transparent", border: "none", color: COLORS.inkSoft, cursor: "pointer", flexShrink: 0 }}
-                >
-                  <X size={13} />
-                </button>
               </div>
             </div>
           </div>
