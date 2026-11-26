@@ -128,6 +128,13 @@ paylaşım kodu değil") ve bağlantı hatası ayrı mesajlarla gösterilir. `ve
 - QR oluşturma hatası (ör. internetsiz) artık kutu içinde değil, doğrudan yeşil zeminde yazı.
 - Chrome e2e 19/19 (yeni: simge + basılı tutma penceresi, yenilemeden toparlanma).
 
+### 3.3 Basılı tutma menüsü (26–27 Kasım, telefon dipnotları)
+
+- Her seçenek satır genişliğinde, çerçeveli, köşeleri yuvarlatılmış kutu; kutunun her yeri dokunmaya açık
+  (tek elle kullanım). "Aileye taşı veya kopyala" siyah (ink), "QR ile paylaş" yeşil (forest), "Aileye
+  bildir" sarı kalır (rengi gönderim durumunu gösterir). Çarpı kaldırıldı; menü dışında herhangi bir yere
+  dokunmak menüyü kapatır (`78216f9`). Kullanıcı telefonda beğendi; "köşesiz" yuvarlak köşe diye yorumlandı.
+
 ## 4. Telefon test listesi (Tarif TEST v17, Preview bu dala bağlı)
 
 APK: `C:\Users\emrea\tk-preview-apk\tarif-test-qr-offline-v17.apk` (dal `preview-test-apk-qr`,
