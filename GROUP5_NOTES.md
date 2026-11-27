@@ -2,7 +2,9 @@
 
 Dal `group-5-ci-release`, Grup 4'ün son commit'i `071fec2` üzerinden (Grup 4 worktree'si temizdi ve origin ile aynıydı; Grup 3–4 main'de değil, main `52e04fd`).
 Commit'ler: `98822c3` (testler), `ab5f413` (CI + yayın araçları), ardından bu not.
-Main'e merge / push ve production yayını YOK. Production verisine dokunulmadı (yalnızca kimliksiz, salt okunur `verify:deploy` istekleri).
+> **Güncel durum (27 Kasım 2026):** Bu dal ve yayın adayı `rc/haiku-group5` 17 Kasım'da main'e alındı (main `9d97c8f`), main koruması (§4/§6'daki öneri) aynı gün açıldı. Aşağıdaki "main'de değil / kural açık değil" ifadeleri yazıldıkları günün durumudur.
+
+(Yazıldığı gün:) Main'e merge / push ve production yayını YOK. Production verisine dokunulmadı (yalnızca kimliksiz, salt okunur `verify:deploy` istekleri).
 Yayın akışı ve komutlar: **[RELEASE.md](RELEASE.md)**.
 
 ## 1. AI maliyet sayacı testlerindeki kararsızlık — sebep ve çözüm
