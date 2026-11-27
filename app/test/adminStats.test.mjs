@@ -1,4 +1,4 @@
-// GET /api/admin-stats: yönetim paneli için toplu sayılar. Bellek içi Redis
+// GET /api/profile?admin=stats: yönetim paneli için toplu sayılar. Bellek içi Redis
 // (fakeServices), dışarıya istek gitmez. Uç yalnızca ADMIN_STATS_KEY ile açılır
 // ve yanıtta hiçbir kişisel tanımlayıcı (uid, aile id'si, tarif adı) bulunmaz.
 import test from "node:test";
@@ -6,7 +6,8 @@ import assert from "node:assert/strict";
 import { db, resetDb, invoke } from "./helpers/fakeServices.mjs";
 
 const KEY = "test-admin-key-0123456789abcdef";
-const { default: handler, localDay, statsDayKey } = await import("../api/admin-stats.js");
+const { localDay, statsDayKey } = await import("../api/_lib/adminStats.js");
+const { default: handler } = await import("../api/profile.js");
 
 const NOW = Date.now();
 const DAY = 86_400_000;
@@ -36,7 +37,7 @@ function seed() {
   db.set(`rl:global:ai:86400:${Math.floor(NOW / DAY)}`, "9");
 }
 
-const auth = (k = KEY) => ({ method: "GET", authorization: `Bearer ${k}` });
+const auth = (k = KEY) => ({ method: "GET", authorization: `Bearer ${k}`, query: { admin: "stats" } });
 
 test("anahtar tanımlı değilse 401 ve Redis'e gidilmez", async () => {
   seed();
@@ -49,9 +50,17 @@ test("yanlış ya da eksik anahtar 401", async () => {
   seed();
   process.env.ADMIN_STATS_KEY = KEY;
   assert.equal((await invoke(handler, auth("yanlis-anahtar-0123456789abcd"))).status, 401);
-  assert.equal((await invoke(handler, { method: "GET", authorization: "" })).status, 401);
+  assert.equal((await invoke(handler, { method: "GET", authorization: "", query: { admin: "stats" } })).status, 401);
   // Firebase kullanıcı token'ı bu uca giremez.
-  assert.equal((await invoke(handler, { method: "GET", uid: "U1" })).status, 401);
+  assert.equal((await invoke(handler, { method: "GET", uid: "U1", query: { admin: "stats" } })).status, 401);
+});
+
+test("admin parametresi olmayan istek normal profil ucudur", async () => {
+  seed();
+  process.env.ADMIN_STATS_KEY = KEY;
+  const out = await invoke(handler, { method: "GET", uid: "U1" });
+  assert.equal(out.status, 200);
+  assert.equal(out.body.isPlus, true);
 });
 
 test("yalnızca GET", async () => {

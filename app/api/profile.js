@@ -1,10 +1,13 @@
 import { requireUser } from "./_lib/auth.js";
 import { getProfile, updateProfile } from "./_lib/profile.js";
+import { adminStatsHandler } from "./_lib/adminStats.js";
 
 // isPlus şu an gerçek bir ödeme sistemine bağlı değil — kullanıcının kendisi
 // açıp kapatabildiği bir test bayrağı. Ödeme entegrasyonu eklendiğinde bu
 // endpoint'in POST kısmı ödeme sağlayıcısının webhook'una taşınmalı.
 export default async function handler(req, res) {
+  // Yönetim paneli istatistikleri (ADMIN_STATS_KEY ile; kullanıcı token'ı burada geçmez).
+  if (req.query?.admin === "stats") return adminStatsHandler(req, res);
   let user;
   try {
     user = await requireUser(req);

@@ -1,7 +1,9 @@
 import crypto from "node:crypto";
-import { redisCommand } from "./_lib/redis.js";
+import { redisCommand } from "./redis.js";
 
-// GET /api/admin-stats — yönetim paneli için toplu, kişisel veri içermeyen sayılar.
+// GET /api/profile?admin=stats — yönetim paneli için toplu, kişisel veri içermeyen sayılar.
+// Ayrı bir dosya/uç değil: Vercel Hobby planı en fazla 12 sunucu fonksiyonuna izin
+// veriyor, bu yüzden profile.js bu isteği kullanıcı doğrulamasından önce buraya yönlendiriyor.
 //
 // Yalnızca ADMIN_STATS_KEY ortam değişkeni tanımlıysa çalışır; istek
 // `Authorization: Bearer <ADMIN_STATS_KEY>` taşımalı. Anahtar tanımlı değilse ya
@@ -18,8 +20,6 @@ import { redisCommand } from "./_lib/redis.js";
 // Job kayıtları 7 günde silindiği ve AI sayacı yalnızca bugünü tuttuğu için, her
 // çağrıda günlük özet `stats:day:<YYYY-MM-DD>` anahtarına yazılır (400 gün TTL);
 // geçmiş grafikler buradan okunur. Uç saatte bir çağrılınca hiçbir gün kaçmaz.
-
-export const config = { maxDuration: 60 };
 
 const DAY_MS = 86_400_000;
 const TZ_OFFSET_MS = 3 * 3_600_000; // Europe/Istanbul, 2016'dan beri sabit UTC+3
@@ -278,7 +278,7 @@ export async function collectStats({ now = Date.now() } = {}) {
   };
 }
 
-export default async function handler(req, res) {
+export async function adminStatsHandler(req, res) {
   const secret = process.env.ADMIN_STATS_KEY;
   if (!secret || secret.length < 24 || !authorized(req, secret)) {
     res.status(401).json({ error: "Yetkisiz." });
