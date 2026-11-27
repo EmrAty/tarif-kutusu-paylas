@@ -48,7 +48,7 @@ Kullanıcı TikTok/Instagram/YouTube yemek videosunun linkini/açıklamasını v
 
 **Vercel fonksiyonları**
 - `export const config = { maxDuration }` değerini plan sınırının altına çekme: süre aşılınca `waitUntil` iptal olur, `catch` hiç çalışmaz, job sonsuza dek `processing` kalır (17 Eylül'deki hatanın kök sebebi). Uzun işlerde `getDeadline()` ile kalan süreyi okuyup alt çağrılara zaman aşımı ver.
-- Tarif çıkarma `claude-haiku-5-5` (yayın adayında; main'de hâlâ `claude-sonnet-5`), adaptive thinking; düşünme token'ları `max_tokens`'tan düşer → sunucu çıkarmasında `max_tokens: 16000`, json_schema ve `stop_reason` kontrolü. Anthropic kredi/anahtar hatası `ai_unavailable` olarak ayrı raporlanır (log tag `ai-provider-unavailable`).
+- Tarif çıkarma `claude-haiku-5-5` (her ortamda; tek kaynak `app/shared/extractModel.js`), adaptive thinking; düşünme token'ları `max_tokens`'tan düşer → sunucu çıkarmasında `max_tokens: 16000`, json_schema ve `stop_reason` kontrolü. Anthropic kredi/anahtar hatası `ai_unavailable` olarak ayrı raporlanır (log tag `ai-provider-unavailable`).
 - Hobby planda log aralığı en fazla "Last hour"; Request Logs için URL'ye `&datasource=legacy-logs`.
 
 **Veri ve sürümlü kovalar** (main'de, `049df70` → merge `52e04fd`) **[repo]**
@@ -92,7 +92,7 @@ Kullanıcı TikTok/Instagram/YouTube yemek videosunun linkini/açıklamasını v
 - Canlı API testi: Firebase Identity Toolkit `accounts:signUp` ile geçici anonim hesap → `Authorization: Bearer` → test sonunda veriyi temizle ve `accounts:delete` (silme token'ını çıktıdan filtreleme; eski testlerden 3 anonim hesap Firebase'de kaldı, uid'ler `docs/history/04-…`).
 - Fable denetler, düzeltmeleri Opus yapar (hafıza notu).
 
-## 📌 Güncel durum (13 Kasım 2026)
+## 📌 Güncel durum (27 Kasım 2026)
 
 **Google Play** **[kullanıcı]**
 - Uygulama `com.tarifkutusu.app`; mağaza kurulumu büyük ölçüde tamam (privacy, hesap silme URL'si, Data Safety, içerik derecelendirmesi, store listing, görseller — AI görseller beyanlı).
@@ -103,16 +103,19 @@ Kullanıcı TikTok/Instagram/YouTube yemek videosunun linkini/açıklamasını v
 - TikTok açıklama regresyonu (`822af0e`, `1a77939`) ve hızlı hata bildirimi gecikmesi (`3fbd312`) canlıda. `ANTHROPIC_API_KEY` 10 Kasım'da yenilendi, tarif oluşturma telefonda çalışıyor. **[kullanıcı]**
 - Kilitli kart örtüsü (`LockedOverlay`) ve yeni `PlusModal` (alt sheet, sürükleyerek kapatma) main'de (`c733130` … `f7b6646`). Ayrıntı: `docs/history/01-…`.
 
-**Dallar (Grup çalışması)** **[repo]**
-- main `52e04fd` = Grup 1 (sürümlü veri) + Grup 2 (AI güvenlikleri). Grup 3 (`group-3-legacy-fcm`), Grup 4 (`group-4-family`, canlı aile yenileme `071fec2`) ve Grup 5 (`group-5-ci-release`: testler, CI, yayın araçları, dayanıklı misafir→hesap taşıma, kova boyut/hız sınırları; Fable denetim turları B1–B6, K1–K3 ve telefon öncesi hazırlık) main'de **değil**. Grup 5 dalı Grup 4'ün üstünde ve Grup 3'ü de içeriyor.
-- **Yayın adayı `rc/haiku-group5` (15 Kasım):** Grup 5 (+ sağlayıcı hata düzeltmesi `baa0b81`) + Haiku denemesi. `preview.tarifkutusu.app` Git Branch = `rc/haiku-group5` (dalın son derlemesi; `05bbbee` öneri tabanı `verify:deploy` 15/15). Tarif çıkarma modeli **her ortamda Claude Haiku 5.5** (`app/shared/extractModel.js`, tek kaynak; çeviri ve kiler Sonnet 5'te kalır); `verify:deploy` `/version.json` → `extractModel`'i kontrol eder. Telefonda geçenler (15 Kasım, [kullanıcı]): misafir→hesap taşıma (Google + e-posta), aile sahibi misafirin geçişi, Haiku paylaşımı + Android bildirimi; yarıda kesilen taşıma kanıtlanmadı. Son Fable denetimi yapıldı (15 Kasım, F1–F5 düzeltildi; `GROUP5_NOTES.md` §12; 511 test). Sıradaki: kalan telefon testleri (`GROUP5_NOTES.md` §11 "Kalanlar" + "Elimde Bunlar Var" önerisi), sonra `RELEASE.md` akışı. Main'e push/merge yapılmadı. Deneme kaydı `docs/history/08-haiku-denemesi.md`; deney ucu/betikleri yalnız `experiment/cheap-extraction` dalında.
+**Ana dal ve yayın** **[repo]**
+- **main `9d97c8f` (17 Kasım 2026) = Grup 1–5 + Haiku yayın adayı + aile "canı çekti" ön plan bildirimi.** Yayın adayı `rc/haiku-group5` (`7c54eae`) main'e fast-forward ile alındı; ardından `4efd730` (uygulama açıkken "canı çekti" bildirimi uygulama içi bant olarak görünür, yalnızca JS → yeni APK gerekmez) ve `9d97c8f` (yalnızca notlar). `group-3-legacy-fcm`, `group-4-family`, `group-5-ci-release`, `rc/haiku-group5`, `fix/crave-foreground-notify` dallarında main'de olmayan commit kalmadı; bu dallar artık yalnızca geçmiş kaydıdır.
+- İçerik: sürümlü veri (Grup 1), AI güvenlikleri (Grup 2), eski uçlar/FCM (Grup 3), canlı aile yenileme (Grup 4), testler + CI + yayın araçları + dayanıklı misafir→hesap taşıma + kova boyut/hız sınırları (Grup 5), Fable denetimleri B1–B6, K1–K3, F1–F5 (511 test). Tarif çıkarma modeli **her ortamda Claude Haiku 5.5** (`app/shared/extractModel.js`; çeviri ve kiler Sonnet 5'te kalır); `verify:deploy` `/version.json` → `extractModel`'i kontrol eder. Ayrıntı: `GROUP5_NOTES.md` §11–§12, deneme kaydı `docs/history/08-haiku-denemesi.md` (deney ucu/betikleri yalnız `experiment/cheap-extraction` dalında).
+- Production: `4efd730` mesajı 17 Kasım'da production'da aile bildiriminin denendiğini söylüyor; Vercel main'i otomatik yayınlar. Canlı sitenin hangi commit'i yayınladığı bu notta doğrulanmadı — emin olmak için `npm run verify:deploy -- --url https://tarifkutusu.app --commit 9d97c8f`.
+- **main koruması açık (17 Kasım, GitHub ruleset):** CI `check` yeşil değilse main'e push reddedilir; force-push ve silme yasak. Ayrıntı `RELEASE.md`.
+- Telefonda geçenler (15 Kasım, [kullanıcı]): misafir→hesap taşıma (Google + e-posta), aile sahibi misafirin geçişi, Haiku paylaşımı + Android bildirimi; yarıda kesilen taşıma kanıtlanmadı. `preview.tarifkutusu.app` en son `rc/haiku-group5`'e bağlıydı; yeni bir aday için Vercel'de Git Branch'i değiştir.
 - Redis (17 Kasım doğrulandı **[canlı]**): Production = Vercel deposu **`upstash-kv-cyclamen-island`** (Vercel'e bağlı tek depo, yalnız Üretim; KV env'leri 11 Kasım). Aynı veritabanının REST uç adresi **`tough-stork-73267.upstash.io`** — Vercel log'larında bu ad görünür, ayrı bir veritabanı değildir. Preview = **`tk-preview-test`** (Upstash Free, kişisel hesap, uç adresi `arriving-mammal-189563`; Vercel deposu olarak bağlı değil, Preview KV env'leri 14 Kasım elle). Preview'da production verisi yok: aile/Plus testleri için Preview'da ayrıca aile kurulmalı.
 - Misafir→hesap taşıma: aynı hedefe 30 günde en çok **5** farklı misafirin taşıması başlar (`GUEST_MERGE_LIMIT`; fazlası silinmez, sıraya girer, sırada en çok 10). Bağlanan misafir donar; misafirken başlamış paylaşım job'unun tarifi hedefe yazılır (`guest-merge:moved:`); bağlı misafir kendini silemez (409). Ayrıntı ve geri dönüş: `GROUP5_NOTES.md` §7–§9, `RELEASE.md`.
 
 **iOS:** Tamamlanmadı. Proje + `GoogleService-Info.plist` repoda; Apple Developer, Xcode imzalama, Push capability, Google URL scheme, APNs↔FCM, Share Extension, TestFlight yapılacak. Ayrıntı: `docs/history/03-ios.md`.
 
 ## Açık işler — öncelik sırası
-0. Yayın adayı `rc/haiku-group5`'i (Grup 3–5 + Haiku) Preview'da telefonla test et (`GROUP5_NOTES.md` §11 + §9), bağımsız Fable denetimi, sonra `RELEASE.md` akışıyla main'e al.
+0. ~~Yayın adayını main'e al~~ — 17 Kasım'da yapıldı (main `9d97c8f`). Kalan: `GROUP5_NOTES.md` §11 "Kalanlar" telefon testleri ("Elimde Bunlar Var" önerisi dahil) artık production'da denenir; production'ın `9d97c8f`'yi yayınladığını `verify:deploy` ile doğrula.
 1. Telefonda Plus modalı: görünüm, tutamaçla sürükleyerek kapatma, Android geri tuşu, alt güvenli alan, test CTA ile Plus aç/kapat → kilitler açılıp kapanıyor mu.
 2. Telefonda TikTok → Paylaş → Tarif Kutusu: başarı ve (hatalı linkle) hata bildirimi görünüyor mu; job kaydındaki `notify` alanıyla karşılaştır.
 3. ⚠️ **Play App Signing SHA-1/SHA-256'sını Firebase Android app'ine ekle** (upload SHA'sıyla karıştırma; debug SHA `12:A0:B0…` ayrı), yeni `google-services.json`'ı `app/android/app/`'e koy, Play sürümünde Google Sign-In'i dene. Yapılmadı.
