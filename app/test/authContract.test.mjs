@@ -12,6 +12,9 @@ import fs from "node:fs";
 import { invoke, resetDb, setRoutes, calls, redisLog, db, idToken, signedToken } from "./helpers/fakeServices.mjs";
 
 const ENDPOINTS = {
+  // Yönetim paneli ucu: Firebase token'ı değil ADMIN_STATS_KEY ister; her
+  // kullanıcı token'ı (geçerli olsa da) 401 almalı.
+  "admin-stats": ["GET"],
   account: ["DELETE", "POST"],
   data: ["GET", "POST"],
   extract: ["POST"],
